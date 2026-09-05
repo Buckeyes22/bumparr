@@ -214,10 +214,30 @@ timeline or write play history.
 
 ```json
 {"ffmpeg": true, "conformed": 12, "eligible": 14, "pending": 2,
+ "last_conform": {"at": 1710000000.0, "conformed": 2, "failed": 0, "pruned": 1,
+                   "skipped": 0, "ffmpeg": true},
  "urls": {"channel_m3u": "…/station/channel.m3u", "guide_xml": "…/station/guide.xml",
           "live": "…/station/live/index.m3u8", "standby": "…/station/standby/index.m3u8"},
- "channels": {"live": {"now": {}, "next": {}}, "standby": {"now": {}, "next": {}}}}
+ "channels": {"live": {"now": {}, "next": {}, "state": "active", "reason": "playing",
+                        "last_playlist_request": 1710000005.2, "lookahead_seconds": 24},
+              "standby": {"now": {}, "next": {}, "state": "idle", "reason": "no_recent_client",
+                          "last_playlist_request": null, "lookahead_seconds": 24}}}
 ```
+
+Each channel adds `state` (`active` \| `idle` \| `unavailable`) and `reason`:
+
+| `state` | `reason` | Meaning |
+|---|---|---|
+| `active` | `playing` | `now` is a real, conformed item. |
+| `active` | `slate` | `now` is the built-in brand slate — playable, but not real content. |
+| `idle` | `no_recent_client` | Nothing is current, but the pool has conformed items; no playlist client has asked for this channel recently. |
+| `unavailable` | `nothing_conformed` | Nothing has been conformed yet at all — the playlist route would 503. |
+
+`last_playlist_request` (epoch seconds, or `null`) and `lookahead_seconds` come
+straight from the channel; reading `/api/station` never sets or advances
+either. Top-level `last_conform` is `null` until a conform sweep has completed
+at least once in this process, then holds that sweep's stats — `ffmpeg absent`
+needs no dedicated key beyond the existing top-level `ffmpeg: false`.
 
 A playlist returns 503 when nothing has been conformed yet; run the conform action and try again.
 Set `PUBLIC_URL` to an address reachable by the consumer, since playlists and
@@ -376,6 +396,27 @@ GET /api/request/a3f…
 The same registry handles starter/render/generate/source actions. `status` is
 `working` | `done` | `error`. Jobs are in-memory, capped at 100, retain finished
 results for at least an hour, and run at most two blocking actions concurrently.
+
+### `GET /api/jobs?limit=20`
+
+Read-only list of the same in-memory job registry, newest first, for an
+operator overview (`limit`: 1–50, default 20). Pure: it never starts, cancels,
+or otherwise changes a job.
+
+```json
+{"jobs": [{"id": "a3f1c9d4e7b2", "request": "more space ambient", "status": "done",
+           "created_at": 1710000000.1, "updated_at": 1710000004.7,
+           "result": "pulled 3 clip(s) into 'ambient': …"}],
+ "count": 1}
+```
+
+Each entry's `request` (the job label) is truncated to 120 characters with a
+trailing `…` when cut; `result` is truncated to 2000 characters if a string,
+or — if a dict — kept as a dict with its string values (including one level
+of nesting) truncated the same way; any other type is stringified and then
+truncated. `null` results (a job still `working`) stay `null`. Truncation
+happens only in this response; the registry itself is untouched. Internal
+bookkeeping fields (such as `worker_active`) never appear here.
 
 ### `POST /api/sources/{action}`
 

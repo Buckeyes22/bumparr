@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+**API: read-only jobs list and station diagnostics**
+- `GET /api/jobs?limit=20` (1–50) is a pure, read-only view of the same
+  in-memory job registry `/api/request/{job_id}` polls: `{jobs: [{id,
+  request, status, created_at, updated_at, result}], count}`, newest first.
+  `request` is clipped to 120 characters (trailing `…` when cut); `result` is
+  clipped to 2000 characters as a string, or has its string values (including
+  one level of nesting) clipped the same way as a dict, or is stringified and
+  clipped for any other type — `null` stays `null` for a job still `working`.
+  Clipping happens only in the response; the registry keeps full values, and
+  internal fields such as `worker_active` never appear.
+- `GET /api/station` adds, per channel, explicit `state` (`active` \| `idle`
+  \| `unavailable`) and `reason` (`playing`, `slate`, `no_recent_client`, or
+  `nothing_conformed`), plus read-only `last_playlist_request` and
+  `lookahead_seconds`; and, at the top level, `last_conform` — null until a
+  conform sweep has completed once in this process, then that sweep's `{at,
+  conformed, failed, pruned, skipped, ffmpeg}`. All additions are additive;
+  `/api/station` remains pure and never extends a timeline or writes play
+  history.
+
 **API: status counts, library state filter, reversible disable, single-card render**
 - `GET /api/status` adds `parked`, `dead`, and `unrendered` counts, computed
   with the exact same SQL definitions `GET /api/bumpers?state=` uses, so the

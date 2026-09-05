@@ -25,6 +25,8 @@ SLATE_KEY = "slate"
 CONFORM_PROFILE_VERSION = 1
 SLATE_RENDER_VERSION = 1
 _LOCK = threading.Lock()
+_LAST_SWEEP_LOCK = threading.Lock()
+_LAST_SWEEP = None  # set at the end of every completed sweep; see last_sweep()
 
 
 def cache_dir():
@@ -325,6 +327,19 @@ def sweep(limit=None, keep=frozenset()):
                     continue
                 shutil.rmtree(d, ignore_errors=True)
                 stats["pruned"] += 1
+        with _LAST_SWEEP_LOCK:
+            global _LAST_SWEEP
+            _LAST_SWEEP = {"at": time.time(), "conformed": stats["conformed"],
+                           "failed": stats["failed"], "pruned": stats["pruned"],
+                           "skipped": stats["skipped"], "ffmpeg": stats["ffmpeg"]}
         return stats
     finally:
         _LOCK.release()
+
+
+def last_sweep():
+    """The most recently completed sweep's stats, or None before the first
+    one in this process. The busy early-return (another sweep already
+    running) never overwrites this."""
+    with _LAST_SWEEP_LOCK:
+        return dict(_LAST_SWEEP) if _LAST_SWEEP is not None else None

@@ -565,6 +565,8 @@ class HttpValidation(unittest.TestCase):
             ("/api/starter?limit=0", "POST"),
             ("/api/render/cards?limit=1001", "POST"),
             ("/api/generate/trivia?n=101", "POST"),
+            ("/api/jobs?limit=0", "GET"),
+            ("/api/jobs?limit=51", "GET"),
         ]
         for path, method in cases:
             with self.subTest(path=path):
@@ -597,6 +599,12 @@ class HttpValidation(unittest.TestCase):
         result = self._json("/api/bumpers/random")
         self.assertLessEqual(result["count"], 5)
         self.assertEqual(result["count"], len(result["bumpers"]))
+
+    def test_jobs_list_shape_over_http(self):
+        result = self._json("/api/jobs")
+        self.assertEqual(set(result), {"jobs", "count"})
+        self.assertEqual(result["count"], len(result["jobs"]))
+        self.assertLessEqual(len(result["jobs"]), 20)
 
 
 if __name__ == "__main__":

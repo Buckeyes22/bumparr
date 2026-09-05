@@ -7,18 +7,32 @@
   <link rel="stylesheet" href="/web/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to the dashboard</a>
+
   <header>
-    <div class="brand">▮ Bumparr</div>
-    <div class="tag">bumper generator for the *arr stack</div>
+    <h1 class="brand">▮ Bumparr</h1>
+    <p class="tag">bumper generator for the *arr stack</p>
+    <nav class="panelnav" aria-label="Dashboard panels">
+      <a href="#panel-pool">Pool</a>
+      <a href="#panel-station">Station</a>
+      <a href="#panel-actions">Actions</a>
+      <a href="#panel-preview">Preview</a>
+      <a href="#panel-browse">Browse</a>
+    </nav>
     <div id="status-pill" class="pill">…</div>
   </header>
 
-  <main>
+  <main id="main" tabindex="-1">
+    <!-- Primary short feedback. Panels keep their own explicit state region. -->
+    <p id="live-region" class="live-region" role="status" aria-live="polite"></p>
+
     <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
-    <section class="panel wide askbar">
+    <section class="panel wide askbar" id="panel-ask" aria-labelledby="h-ask">
+      <h2 id="h-ask">Add to the rotation</h2>
+      <label class="ask-label" for="ask">Describe what to pull in</label>
       <div class="ask-row">
         <input id="ask" class="ask" autocomplete="off"
-          placeholder="pull something into the rotation…  e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
+          placeholder="e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
         <button id="ask-go">＋ Add</button>
       </div>
       <div id="ask-result" class="ask-result"></div>
@@ -26,23 +40,25 @@
     </section>
 
     <!-- top row: pool stats + actions -->
-    <section class="panel">
-      <h2>Pool</h2>
+    <section class="panel" id="panel-pool" aria-labelledby="h-pool">
+      <h2 id="h-pool">Pool</h2>
+      <div id="pool-state" class="panel-state"></div>
       <div id="totals" class="totals"></div>
       <div id="by-type" class="bars"></div>
       <div id="memory-status" class="memory-status"></div>
     </section>
 
-    <section class="panel">
-      <h2>Station</h2>
+    <section class="panel" id="panel-station" aria-labelledby="h-station">
+      <h2 id="h-station">Station</h2>
+      <div id="station-state" class="panel-state"></div>
       <div id="station" class="station"></div>
       <div class="action-group">
         <button data-station="conform">Conform now <em>(prepare the pool for the live channels)</em></button>
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Actions</h2>
+    <section class="panel" id="panel-actions" aria-labelledby="h-actions">
+      <h2 id="h-actions">Actions</h2>
       <div class="actions">
         <div class="action-group">
           <span class="lbl">Generate cards</span>
@@ -72,31 +88,41 @@
           <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
         </div>
       </div>
-      <pre id="log" class="log">ready.</pre>
+      <h3 id="h-log">Action output</h3>
+      <pre id="log" class="log" aria-labelledby="h-log" tabindex="0">ready.</pre>
     </section>
 
     <!-- read-only preview: one item or a duration pack. Never advances playout. -->
-    <section class="panel wide">
-      <h2>Preview
-        <button id="preview-one" class="mini">one item</button>
-        <button data-pack="15" class="mini">15s</button>
-        <button data-pack="30" class="mini">30s</button>
-        <button data-pack="60" class="mini">60s</button>
-        <button data-pack="90" class="mini">90s</button>
-      </h2>
+    <section class="panel wide" id="panel-preview" aria-labelledby="h-preview">
+      <div class="panel-head">
+        <h2 id="h-preview">Preview</h2>
+        <div class="panel-tools">
+          <button id="preview-one" class="mini">one item</button>
+          <button data-pack="15" class="mini">15s</button>
+          <button data-pack="30" class="mini">30s</button>
+          <button data-pack="60" class="mini">60s</button>
+          <button data-pack="90" class="mini">90s</button>
+        </div>
+      </div>
+      <div id="preview-state" class="panel-state"></div>
       <div id="preview-summary"></div>
       <div id="preview-grid" class="grid"></div>
     </section>
 
     <!-- browser: filter by category, see everything -->
-    <section class="panel wide">
-      <h2>Browse the pool
-        <input id="search" class="search" placeholder="filter by title…" />
-        <button id="shuffle" class="mini">⟳ shuffle preview</button>
-      </h2>
+    <section class="panel wide" id="panel-browse" aria-labelledby="h-browse">
+      <div class="panel-head">
+        <h2 id="h-browse">Browse the pool</h2>
+        <div class="panel-tools">
+          <label class="search-label" for="search">Filter by title</label>
+          <input id="search" class="search" placeholder="e.g. harbour" />
+          <button id="shuffle" class="mini">⟳ shuffle preview</button>
+        </div>
+      </div>
       <div id="filters" class="filters"></div>
+      <div id="browse-state" class="panel-state"></div>
       <div id="grid" class="grid"></div>
-      <div id="more-row"><button id="more" class="mini hidden">load more</button></div>
+      <div id="more-row"><button id="more" class="mini" hidden>load more</button></div>
     </section>
   </main>
 

@@ -297,6 +297,18 @@ class AppApi(unittest.TestCase):
         self.assertNotIn("\\", music["source"])
         self.assertIsInstance(music["enabled_beds"], int)
         self.assertIsInstance(music["compatibility"], bool)
+        memory = out["memory"]
+        self.assertEqual(set(memory), {"refresh_seconds", "enabled_kinds",
+                                       "channel", "messages"})
+        self.assertEqual(memory["channel"], "station:live")
+        self.assertIsInstance(memory["refresh_seconds"], int)
+        self.assertIsInstance(memory["enabled_kinds"], list)
+        msgs = memory["messages"]
+        self.assertEqual(set(msgs), {"version", "valid", "source", "enabled", "total"})
+        self.assertIn(msgs["source"],
+                      ("shipped-default", "custom", "fallback-after-error"))
+        self.assertNotIn("/", msgs["source"])
+        self.assertNotIn("\\", msgs["source"])
 
     def test_get_and_list_include_music_credits_snapshot(self):
         payload = json.dumps({

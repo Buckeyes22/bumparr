@@ -67,9 +67,9 @@ async def lifespan(app: FastAPI):
 
     Everything here is additive and idempotent, so a restart never loses or
     duplicates content: seeding registers what is on disk, baselines register
-    the model-free card floor, cams upsert from config. The three loops are the
-    self-maintenance: perishable cards re-render, live windows re-capture, and
-    dated cards / seasonal weights re-evaluate.
+    the model-free card floor, cams upsert from config. Background loops
+    re-render perishable cards, recapture live windows, rotate dated cards,
+    conform the station cache, and refresh truthful channel-memory cards.
     """
     import asyncio
     db.init_db()
@@ -85,7 +85,8 @@ async def lifespan(app: FastAPI):
     tasks = [asyncio.create_task(_volatile_refresh_loop()),
              asyncio.create_task(jobs.window_refresh_loop()),
              asyncio.create_task(jobs.dated_card_loop()),
-             asyncio.create_task(jobs.station_conform_loop())]
+             asyncio.create_task(jobs.station_conform_loop()),
+             asyncio.create_task(jobs.channel_memory_loop())]
     try:
         yield
     finally:
@@ -132,10 +133,12 @@ def status():
         by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + r["n"]
         total += r["n"]
         live += r["live"]
+    from bumparr.generators import channel_memory
     return {"brand": config.BRAND, "total": total, "playable_now": live,
             "by_type": by_type, "by_kind": by_kind,
             "profile": channel_profile.profile_status(),
-            "music": music.manifest_status()}
+            "music": music.manifest_status(),
+            "memory": channel_memory.memory_status()}
 
 
 @app.get("/api/bumpers")

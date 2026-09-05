@@ -243,3 +243,45 @@ async def station_conform_loop():
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             raise
+
+
+def _refresh_channel_memory():
+    """Upsert station:live memory cards and re-render outside playback."""
+    from bumparr.generators import channel_memory
+    channel_memory.refresh(render=True)
+
+
+async def _memory_once():
+    """One channel-memory pass. Errors are logged; only CancelledError exits."""
+    try:
+        await asyncio.to_thread(_refresh_channel_memory)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        print("[bumparr] channel memory error: %s" % e)
+
+
+async def channel_memory_loop():
+    """Refresh truthful channel-memory cards on a configurable interval.
+
+    CHANNEL_MEMORY_REFRESH is seconds between passes; 0 disables the loop
+    entirely, including the initial pass. Kind failures are isolated inside
+    the generator. Nothing here is on the playback path.
+    """
+    from bumparr import config
+    try:
+        interval = int(getattr(config, "CHANNEL_MEMORY_REFRESH", 3600) or 0)
+    except (TypeError, ValueError):
+        interval = 3600
+    if interval <= 0:
+        print("[bumparr] channel memory refresh disabled")
+        return
+    await _memory_once()
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await _memory_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print("[bumparr] channel memory loop error: %s" % e)

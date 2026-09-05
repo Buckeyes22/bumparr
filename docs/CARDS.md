@@ -56,6 +56,8 @@ curl -X POST http://localhost:8780/api/render/cards   # re-render to video
 | `trivia` | `{"lines": ["question", "A ...", "B ..."], "answer": "B"}` | Unlabelled options are auto-labelled A–F; mixed/inconsistent labels are rejected; the answer maps to a letter. |
 | `number` | `{"number": "8,848.86 m", "meaning": "Height of Mount Everest"}` | Must be a real, checkable figure. |
 | `technical_difficulties` | `{"text": "PLEASE STAND BY", "variant": "bars"}` | `variant` is `bars`, `static`, or `nosignal`. |
+| `channel_statistics`, `previously_on`, `viewer_achievement` | `{"lines": [...], "channel", "history_ids", "window_start", "window_end", "generated_at", "valid_until"}` | Built from `station:live` history. Empty history yields no `previously_on` card. |
+| `operator_message` | `{"lines": [...]}` plus the same evidence keys | Local YAML; 1–3 lines. Parked when disabled, removed, or expired. |
 
 `{BRAND}` in any text is replaced with your brand, so
 `"{BRAND} WILL RETURN"` renders as your station name.
@@ -76,8 +78,11 @@ because the *contract with the viewer* differs:
   `coming_up`, `achievements` are *supposed* to make no sense. Nothing will
   "correct" them. Shipped `coming_up` cards are fake teasers for programmes
   that will never air — they are not a preview of a downstream episode or
-  film schedule. Channel-memory kinds (statistics, previously-on, viewer
-  history) are proposed for a later phase and are not generated today.
+  film schedule. Channel-memory kinds (`channel_statistics`,
+  `previously_on`, `viewer_achievement`) are generated from `station:live`
+  `play_history` and say “this channel has aired,” never “you watched.”
+  Operator messages are a local YAML file (`operator_messages.yaml`);
+  config owns enable. There is no public form, upload, or write API.
 
 A card that fails validation is rejected with a reason rather than aired, so if
 something you added doesn't appear, check the logs.
@@ -154,6 +159,12 @@ sqlite3 data/bumparr.db "UPDATE playables SET enabled=0 WHERE id='card:psa:...';
 # drop an entire kind
 sqlite3 data/bumparr.db "UPDATE playables SET enabled=0 WHERE kind='numbers_station';"
 ```
+
+Channel-memory cards are parked rather than deleted when a kind is disabled,
+history disappears, or an operator message is removed, disabled, or expired.
+YAML `enabled` plus `starts_at`/`ends_at` own operator-message eligibility;
+a dashboard park of those rows is overridden on the next refresh if the file
+still enables them.
 
 Disabling rather than deleting keeps the card out of rotation without losing it.
 On startup, the asset scan parks missing local media and clears stale rendered-

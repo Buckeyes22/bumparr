@@ -33,7 +33,7 @@ global.document = {
 };
 
 const { cardEl, pollJob, enableBumper, stationEl, previewPack, previewOne,
-        packSummaryEl } = require("./app.js");
+        packSummaryEl, freshnessLine } = require("./app.js");
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -230,6 +230,29 @@ test("preview cards keep hostile creative strings as text", () => {
   assert.ok(text.includes(family));
   assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
   assert.equal(globalThis.pwned, undefined);
+});
+
+test("memory freshness stays text and does not invent missing fields", () => {
+  const channel = '<img src=x onerror="globalThis.pwned=12">';
+  const card = cardEl({
+    type: "card", kind: "channel_statistics", title: "x", enabled: 0,
+    payload: { lines: ["This channel has aired 25 bumpers."],
+               channel, generated_at: 1700000000, valid_until: 1700003600 },
+  });
+  const node = descendants(card).find((n) => n.className === "pv-freshness");
+  assert.ok(node);
+  assert.ok(node.textContent.includes(channel));
+  assert.ok(node.textContent.includes("valid until 1700003600"));
+  assert.ok(node.textContent.includes("parked"));
+  assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+  const empty = freshnessLine({ type: "card", payload: { lines: ["Stay."] } });
+  assert.equal(empty, "");
+  const noExpiry = freshnessLine({
+    payload: { channel: "station:live", generated_at: 1 },
+  });
+  assert.ok(noExpiry.includes("no expiry"));
+  assert.ok(!noExpiry.includes("valid until"));
 });
 
 test("music credits stay text and do not invent missing fields", () => {

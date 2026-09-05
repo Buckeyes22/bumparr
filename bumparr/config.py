@@ -158,3 +158,20 @@ MUSIC_MANIFEST = env("MUSIC_MANIFEST", "").strip()
 # Legacy directory-scan / payload.music compatibility. Exact value "1" enables
 # it; any other value (including empty, true, yes) stays off. Default off.
 ALLOW_UNMANIFESTED_MUSIC = env("ALLOW_UNMANIFESTED_MUSIC", "")
+
+# Channel-memory cards from station:live history and local operator messages.
+# Refresh interval in seconds; 0 disables the background loop (startup
+# baselines still register once). Kinds is a comma list; empty disables every
+# kind (existing rows are parked, not deleted).
+try:
+    CHANNEL_MEMORY_REFRESH = int(env("CHANNEL_MEMORY_REFRESH", "3600") or 0)
+except ValueError:
+    CHANNEL_MEMORY_REFRESH = 3600
+CHANNEL_MEMORY_KINDS = env(
+    "CHANNEL_MEMORY_KINDS",
+    "channel_statistics,previously_on,viewer_achievement,operator_message",
+)
+# Optional operator-message YAML. Empty uses the shipped file at
+# bumparr/config_files/operator_messages.yaml. Config `enabled` plus
+# starts_at/ends_at own eligibility; the refresh job parks ineligible rows.
+OPERATOR_MESSAGES = env("OPERATOR_MESSAGES", "").strip()

@@ -69,6 +69,7 @@ rows at the files. Offline and idempotent. Details in [RENDERING.md](RENDERING.m
 | `bumparr.generators.cards` | model-invented kinds: `psa`, `corrections`, `achievements`, `coming_up`, `tiny_games`. Needs `LLM_BASE`/`LLM_MODEL` | `--kind`, `--n` (default 20) |
 | `bumparr.generators.on_this_day` | Wikipedia on-this-day, tone-filtered, date-bound (self-rotating) | `--n` (default 20) |
 | `bumparr.generators.weather` | live conditions card for a place (Open-Meteo). One card per location, upserted | `--location "City, Region"` (defaults to `HOME_LOCATION`) |
+| `bumparr.generators.channel_memory` | truthful `station:live` memory cards and local operator messages. Does not run from preview/status/simulation | `--check` (strict YAML), `--refresh` (upsert, no render) |
 | `bumparr.generators.enrich_bg` | attach CC0/public-domain backgrounds (Openverse) with source/license metadata; idempotent, grim-aware, 10-min deadline | none |
 
 The API's `POST /api/generate/{kind}` routes to these same modules.

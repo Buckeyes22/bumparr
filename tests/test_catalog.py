@@ -11,9 +11,8 @@ CONTENT_SECTIONS = ("streams", "video", "image", "data_cards", "model_cards", "i
 ALLOWED_STATES = frozenset({"shipped", "partial", "proposed", "blocked", "deferred"})
 SHIPPED_LIKE = frozenset({"shipped", "partial"})
 GAP_STATES = frozenset({"proposed", "blocked", "deferred"})
-# Keep every real content row. The alignment plan's "55" was a snapshot; this
-# file currently has 54 content entries (treatments and modifiers are not content).
-CONTENT_COUNT = 54
+# Keep every real content row. Treatments and modifiers are not content.
+CONTENT_COUNT = 55
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 

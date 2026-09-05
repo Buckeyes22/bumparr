@@ -170,5 +170,26 @@ class ActionJobs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(webapp._JOBS[second["job_id"]]["status"], "done")
 
 
+class ChannelMemoryLoop(unittest.TestCase):
+    """Channel-memory refresh isolates failures and honours 0-disable."""
+
+    def test_zero_refresh_disables_the_loop(self):
+        with mock.patch("bumparr.config.CHANNEL_MEMORY_REFRESH", 0), \
+                mock.patch.object(jobs, "_refresh_channel_memory") as refresh:
+            asyncio.run(jobs.channel_memory_loop())
+            refresh.assert_not_called()
+
+    def test_failing_refresh_does_not_raise(self):
+        with mock.patch.object(jobs, "_refresh_channel_memory",
+                               side_effect=RuntimeError("boom")):
+            asyncio.run(jobs._memory_once())
+
+    def test_cancelled_error_reraised(self):
+        with mock.patch.object(jobs, "_refresh_channel_memory",
+                               side_effect=asyncio.CancelledError):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(jobs._memory_once())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

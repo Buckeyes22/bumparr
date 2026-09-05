@@ -123,6 +123,9 @@ complaint, and change one at a time.
 | `VOLATILE_INTERVAL` | `60` | Seconds between checks for perishable cards (clock, weather) whose rendered file has expired. |
 | `TTL_LOCAL_TIME` | `60` | Seconds a rendered clock card stays truthful before re-render. |
 | `TTL_WEATHER` | `1800` | Seconds a rendered weather card stays truthful before re-render. |
+| `CHANNEL_MEMORY_REFRESH` | `3600` | Seconds between channel-memory rebuilds from `station:live` history. `0` disables the background loop (startup baselines still register once). |
+| `CHANNEL_MEMORY_KINDS` | `channel_statistics,previously_on,viewer_achievement,operator_message` | Comma list of memory kinds to generate. Empty parks every memory kind rather than deleting it. |
+| `OPERATOR_MESSAGES` | shipped `bumparr/config_files/operator_messages.yaml` | Local operator-authored cards. Empty uses the shipped file (one disabled example). Config `enabled` plus `starts_at`/`ends_at` own eligibility; the refresh job parks ineligible, removed, or expired rows. Dashboard park of an `operator_message` is overridden on the next refresh if YAML still enables it. Strict-validate with `python -m bumparr.generators.channel_memory --check`. `/api/status` `memory.messages.source` is never a filesystem path. No public form, upload, or write API. |
 
 ## Production (produce.py)
 

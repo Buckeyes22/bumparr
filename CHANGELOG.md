@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+**Truthful channel memory and local operator messages**
+- `bumparr/generators/channel_memory.py` builds `channel_statistics`,
+  `previously_on`, `viewer_achievement`, and `operator_message` cards from
+  `station:live` `play_history` and a local YAML file. Claims are evidence-
+  and freshness-backed (`channel`, `history_ids` or aggregate window,
+  `generated_at`, `valid_until`). Language is “this channel has aired,” never
+  “you watched.” Preview, status, and simulation never write history or
+  memory cards. Playback does not generate them.
+- Stable/content-derived ids and idempotent upserts. Expiring aggregates
+  update in place, clear `uri` when factual content changes, and re-render
+  outside playback. `CHANNEL_MEMORY_REFRESH` (default 3600s, `0` disables the
+  loop) isolates kind failures and cancellation like other jobs. Empty
+  `CHANNEL_MEMORY_KINDS` parks every memory kind rather than deleting it.
+- Operator messages are local YAML (`OPERATOR_MESSAGES`, shipped disabled
+  example). Unique bounded ids, 1–3 validated lines, parseable timestamps
+  with start before end, allowed roles, no fetch. Config `enabled` plus the
+  time window own eligibility; removed/disabled/expired rows are parked.
+  No public form, upload, write API, authentication, or user model.
+- `/api/status` adds `memory: {refresh_seconds, enabled_kinds, channel,
+  messages}` (`messages.source` is never a filesystem path). Dashboard shows
+  provenance, freshness, and parked state.
+
 **Music manifest, credits, and offline loudness**
 - `bumparr/music.py` plus shipped empty-valid `config_files/music_beds.yaml`.
   Manifest ids, contained regular readable paths, energy/families, and

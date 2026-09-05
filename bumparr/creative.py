@@ -59,6 +59,10 @@ KIND_FAMILY = {
     "achievements": "text",
     "coming_up": "text",
     "tiny_games": "text",
+    "channel_statistics": "data",
+    "previously_on": "data",
+    "viewer_achievement": "data",
+    "operator_message": "authored",
     "webcam": "window",
     "window": "window",
 }

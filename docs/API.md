@@ -27,7 +27,13 @@ Pool overview.
  "by_kind": {"ambient": 40, "trivia": 60, ...},
  "profile": {"version": 1, "valid": true, "source": "shipped-default"},
  "music": {"version": 1, "valid": true, "source": "shipped-default",
-           "enabled_beds": 0, "compatibility": false}}
+           "enabled_beds": 0, "compatibility": false},
+ "memory": {"refresh_seconds": 3600,
+            "enabled_kinds": ["channel_statistics", "previously_on",
+                              "viewer_achievement", "operator_message"],
+            "channel": "station:live",
+            "messages": {"version": 1, "valid": true,
+                         "source": "shipped-default", "enabled": 0, "total": 1}}}
 ```
 
 `playable_now` is the enabled-and-healthy count before dynamic seasonal and
@@ -41,6 +47,13 @@ invalid or missing operator file.
 `music` is the loaded music-bed manifest's health, never a filesystem path.
 `source` uses the same three tokens. `enabled_beds` is the count of enabled
 manifest rows. `compatibility` is true only when `ALLOW_UNMANIFESTED_MUSIC=1`.
+
+`memory` is channel-memory health, never a filesystem path. `channel` is the
+only history source (`station:live`). `refresh_seconds` is `0` when the
+background loop is disabled. `enabled_kinds` is the configured kind list
+(empty means every memory kind is parked). `messages.source` uses the same
+three tokens as `profile`/`music`. Status does not generate memory cards or
+write `play_history`.
 
 ### `GET /api/bumpers`
 
@@ -355,7 +368,8 @@ here when the cam isn't CORS-direct.
   key, so no card there carries the button.
 - **Preview** — one item (`GET /api/bumpers/random?count=1&explain=true`) and
   15/30/60/90-second packs (`GET /api/bumpers/fill?seconds=N&explain=true`).
-  Cards show creative data, provenance, factors, media, and pack relaxations.
+  Cards show creative data, provenance, freshness (channel / generated /
+  valid-until / parked), factors, media, and pack relaxations.
   Enable/delete are reused. Preview is GET-only: it does not call station
   `advance()`, write play history, or mutate `play_count`/`last_played`.
   DOM is created with text/property assignment, never HTML interpolation.

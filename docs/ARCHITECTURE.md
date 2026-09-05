@@ -170,7 +170,10 @@ content covers every kind with no model at all (CI asserts this).
 - **`jobs.py`** — in-container background loops, no host cron: window
   re-capture on `WINDOW_REFRESH_HOURS`, fetch-queue passes, volatile-card
   re-render on `VOLATILE_INTERVAL`, dated-card rotation and seasonal healing
-  hourly (so midnight rollover is caught).
+  hourly (so midnight rollover is caught), and channel-memory refresh on
+  `CHANNEL_MEMORY_REFRESH` (`0` disables). Memory cards are built from
+  `station:live` `play_history` plus local operator YAML, never from
+  preview/status/simulation.
 - **`stream_proxy.py`** — same-origin HLS relay for live feeds without CORS.
 
 ### 6. Station
@@ -238,14 +241,14 @@ preview reads never extend a timeline or write history.
 | `bumparr/simulate.py` | read-only seeded selection mix report |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |
-| `bumparr/jobs.py` | background loops (capture, queue, volatile, dated) |
+| `bumparr/jobs.py` | background loops (capture, queue, volatile, dated, channel memory) |
 | `bumparr/stream_proxy.py` | same-origin HLS relay |
 | `bumparr/station/conform.py` | pre-conform registry items into splice-safe HLS segments |
 | `bumparr/station/playout.py` | virtual channel clocks, selection, playlists, and play history |
 | `bumparr/station/guide.py` | XMLTV guide for the live and standby channels |
 | `bumparr/station/routes.py` | HLS, channel M3U, guide, status, and conform routes |
-| `bumparr/generators/` | card production: model, grounded, dated, weather, bg |
+| `bumparr/generators/` | card production: model, grounded, dated, weather, channel memory, bg |
 | `bumparr/sources/` | self-maintaining sources: window capture, fetch queue |
-| `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog, channel profile, music beds) |
+| `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog, channel profile, music beds, operator messages) |
 | `bumparr/web/` | dashboard (vanilla JS over the API) |
 | `bumparr/tools/overnight.sh` | scheduled batch: generate cards, then quarry |

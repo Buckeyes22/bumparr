@@ -354,7 +354,9 @@ here when the cam isn't CORS-direct.
 
 ## Dashboard
 
-`/` is a single-page dashboard over the API above:
+`/` is a single-page dashboard over the API above. Its structure, panel states,
+accessibility rules, and visual tokens are specified in
+[FRONTEND_PLAN.md](FRONTEND_PLAN.md).
 
 - **Ask bar** — the `POST /api/request` flow with polling; the way to pull in
   URLs, request card kinds, or search by vibe without touching the API.
@@ -376,7 +378,12 @@ here when the cam isn't CORS-direct.
 - **Actions** — one click per management endpoint: generate the card kinds,
   recapture live cams / run the fetch queue (`/api/sources/*`), preview or run
   the starter seeds, tidy, and revive.
-- **Log** — the tail of the last action's output.
+- **Status** — short results are announced in an `aria-live` region at the top
+  of the page; the **Log** keeps the tail of the last action's output. Every
+  panel renders one explicit state: loading, populated, useful empty, error with
+  Retry, or last-known content marked stale with its update time. A failed read
+  never clears known-good content.
 
-The dashboard has no state of its own; it is a thin client over the endpoints
-in this file, so anything the UI can do, curl can do.
+The dashboard persists nothing of its own — no accounts, no stored responses —
+and is a thin client over the endpoints in this file, so anything the UI can do,
+curl can do.

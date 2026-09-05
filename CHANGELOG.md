@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+**Operator dashboard: truthful states and accessible foundations**
+- Every panel (Pool, Station, Preview, Browse) now renders exactly one explicit
+  state: loading, populated, useful empty, error with Retry, or last-known
+  content marked stale with its update time. A failed read no longer clears
+  known-good content or leaves a blank panel looking healthy. Status is shown
+  as icon plus word plus colour, never colour alone.
+- One `api()` wrapper normalizes every request: it checks the response, parses
+  JSON safely, extracts the server's `error`, and throws a bounded single-line
+  message with a status. Ordinary reads time out after 15 s; job POSTs opt out,
+  because the job id returns immediately and polling owns the long wait. Job
+  polling reports `status unknown` and backs off instead of inventing a
+  five-minute success.
+- Library search is debounced 250 ms, superseded reads are aborted, and answers
+  older than the current filter generation are discarded. The periodic
+  20-second overview/station refresh does nothing while the tab is hidden and
+  refreshes immediately when it becomes visible again.
+- Accessibility: a skip link, `<main>`/`<nav>`/`<header>`/`<footer>` landmarks
+  with one `<h1>`, visible labels on the ask and filter inputs, an
+  `aria-live="polite"` status region as the primary short-result surface,
+  visible `:focus-visible` rings, reduced-motion support, and per-card
+  delete/enable controls that are always visible, named, and 44px targets
+  instead of hover-only glyphs.
+- Client state is one explicit object divided by concern; rendering is safe to
+  repeat and containers are cleared with `replaceChildren()`. Styling moved to
+  the documented token set (`--bg`/`--surface-*`/`--accent`/`--focus`/spacing)
+  with system sans and monospace faces and no remote assets.
+- `docs/FRONTEND_PLAN.md` is linked from the docs index, the alignment plan,
+  and the API dashboard section.
+
 **Truthful channel memory and local operator messages**
 - `bumparr/generators/channel_memory.py` builds `channel_statistics`,
   `previously_on`, `viewer_achievement`, and `operator_message` cards from

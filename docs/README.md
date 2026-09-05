@@ -12,6 +12,7 @@ Phase 0 docs/catalog slice.
 | [PRODUCT_VISION.md](PRODUCT_VISION.md) | What Bumparr is trying to make, its three product modes, creative principles, and non-goals. |
 | [CREATIVE_REFERENCE.md](CREATIVE_REFERENCE.md) | The sourced Adult Swim bumper reference, portable design lessons, and originality/rights boundary. |
 | [ALIGNMENT_PLAN.md](ALIGNMENT_PLAN.md) | Self-contained execution specification for closing the product and creative gaps. |
+| [FRONTEND_PLAN.md](FRONTEND_PLAN.md) | Self-contained execution specification for the operator dashboard: structure, states, accessibility, and visual tokens. |
 | [INTEGRATION.md](INTEGRATION.md) | Wiring Bumparr into your channel: ErsatzTV, Tunarr, Dispatcharr, anything else. |
 | [CARDS.md](CARDS.md) | Making the cards yours: the shapes per kind, the model prompts, adding a whole new kind. |
 | [API.md](API.md) | The full HTTP API: status, the output contract (random/fill/m3u), management actions, stream proxy, dashboard. |

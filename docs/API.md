@@ -472,14 +472,16 @@ entries) on every change; `state` and `type` are checked against the values
 Leaving a view stops its refresh clock, aborts the reads it left in flight,
 closes any modal it had open, and pauses and detaches its media.
 
-- **Overview** (`#/overview`) — triage. Reads `GET /api/status` and
-  `GET /api/station`, and nothing else, so opening it never creates or advances
-  a station timeline. Actionable warnings come first, each derived from an
+- **Overview** (`#/overview`) — triage. Reads `GET /api/status`,
+  `GET /api/station` and `GET /api/jobs`, and nothing else; all three are pure,
+  so opening it never creates or advances a station timeline. Actionable
+  warnings come first, each derived from an
   explicit field — never from a parsed human string — and each linking to the
   view that can fix it: no playable items (`playable_now == 0`), unrendered
   cards (`unrendered > 0`), a conform backlog (`station.pending > 0`), missing
   ffmpeg (`station.ffmpeg === false`), a channel profile or music manifest that
-  is invalid or fell back, and a job started from this page that failed. A
+  is invalid or fell back, and a failed job among the five the panel below is
+  showing — from the whole registry, not only this tab's own work. A
   field this build of the server does not send raises no warning and is shown as
   "Not available in this version." rather than as a zero. Then the healthy
   detail: service (brand, version, last refresh), pool counts (total, playable,
@@ -591,20 +593,35 @@ closes any modal it had open, and pauses and detaches its media.
   `bumparr.prune --apply` / `--drop-category` are named as CLI-only. Starting a
   job disables only the duplicate of that action — every button that starts the
   same work carries the same job key, so the Station's **Conform now** and this
-  view's **Conform station** lock together and nothing else does — so unrelated
-  controls stay usable within the server's own concurrency. A `429`
+  view's **Conform station** (and any **Retry** for it) lock together and
+  nothing else does — so unrelated
+  controls stay usable within the server's own concurrency. Which panel reports
+  a run is decided by the view the operator started it from, not by the action:
+  a conform started on the Station reports in the Station's own conform panel,
+  and the same conform started from a Retry on Operations reports in the
+  Operations panel, rather than into a region inside a view that is hidden. A `429`
   (`{"error": "job capacity reached"}`) is reported as the server declining to
   start, not as the work failing, and never costs the operator the text they
   typed.
 - **Recent jobs** — one list from two registries, shown five-deep on the
   Overview and in full on Operations: `GET /api/jobs?limit=20` merged by job id
   with the jobs this page started (which knows a label before the POST answers
-  and covers the synchronous actions the registry never sees). The server wins
+  and covers the synchronous actions the registry never sees). Both views read
+  the list, so both show the whole registry. The server wins
   on status and result. Each row carries the action, its created and updated
   ages, an icon-word-colour status, and — on Operations — the bounded raw
   result or error in an expandable block, plus **Retry** only where repeating
   is safe (source refreshes, render, conform, tidy, revive, generate) and never
-  for the starter, an ingest of arbitrary text, or anything that deletes. Every
+  for the starter, an ingest of arbitrary text, or anything that deletes. Retry
+  is also withheld while a job is still `working` — a second copy of work
+  already in flight is not an escape hatch — and it carries the same job key as
+  the panel button for that action, so one lock covers both. The lock counts
+  holders rather than being a flag, because the server runs two blocking actions
+  at a time and the first to finish must not hand back a control the second is
+  still holding. Where a *poll* has been lost the row offers **Check now**
+  instead, which asks again rather than starting a second run. A list that could
+  not be refreshed after a good read is marked stale, with its age and a Retry
+  for the read, and never silently shown as current. Every
   working job in the list is polled at `GET /api/request/{id}` every three
   seconds until `done` or `error`, whoever started it; a lost read keeps the
   row `status unknown` and backs off to ten seconds rather than inventing a

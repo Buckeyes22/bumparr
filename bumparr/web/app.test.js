@@ -1475,13 +1475,17 @@ test("a hostile hash query cannot invent a filter the API does not have", async 
   assert.equal(globalThis.pwned, undefined);
 });
 
-test("the overview reads nothing but the pool and the station", async () => {
+test("the overview reads nothing but the pool, the station and the job list",
+     async () => {
   const calls = stubRoutes();
   await applyHash("#/overview");
   assert.ok(calls.length >= 2);
   assert.ok(calls.every((c) => c.method === "GET"), "the overview never writes");
-  assert.ok(calls.every((c) => /^\/api\/(status|station)($|\?)/.test(c.url)),
-            "the overview reads only /api/status and /api/station: " + JSON.stringify(calls));
+  // /api/jobs is documented pure — it never starts, cancels or changes a job —
+  // so listing the registry cannot create or advance a station timeline either.
+  assert.ok(calls.every((c) => /^\/api\/(status|station|jobs)($|\?)/.test(c.url)),
+            "the overview reads only /api/status, /api/station and /api/jobs: " +
+            JSON.stringify(calls));
   assert.ok(calls.every((c) => !c.url.includes("advance")));
 });
 
@@ -3495,8 +3499,10 @@ test("a lost status read keeps a listed job unknown and backs off to ten seconds
   assert.match(textOf($("#ops-jobs-list")), /status unknown/);
   assert.match(textOf($("#ops-jobs-list")), /Working/,
                "a lost read is doubt about the status, not a finished job");
-  assert.ok(buttonIn($("#ops-jobs-list"), "Retry"),
-            "and the operator is offered a way to run it again");
+  assert.ok(buttonIn($("#ops-jobs-list"), "Check now"),
+            "and the operator can ask again without waiting out the backoff");
+  assert.equal(buttonIn($("#ops-jobs-list"), "Retry"), undefined,
+               "the escape from a lost poll is another poll, not a second run");
 
   t.mock.timers.tick(3000);
   await flush();
@@ -3695,4 +3701,290 @@ test("a terminal refresh of the list clears a warning the server has moved past"
   for (let i = 0; i < RECENT_JOBS; i++) finishJob(recordJob("job " + i), "done", "ok");
   renderOverview();
   assert.equal($("#warnings-state").dataset.state, "empty");
+});
+
+// ---------------------------------------------------------------------------
+// F4 review round 1: overview jobs read, Retry under the lock, stale jobs,
+// and the report region of the view the action was started from
+// ---------------------------------------------------------------------------
+
+// Answers every read a view makes, with a real /api/jobs body — stubRoutes()
+// predates the job list and answers `{}` for it.
+function stubWithJobs(jobs, over) {
+  const o = over || {};
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    calls.push({ url: u, method: (opts && opts.method) || "GET" });
+    if (u.startsWith("/api/jobs")) {
+      if (o.jobsFail) throw new TypeError("Failed to fetch");
+      return jsonReply({ jobs, count: jobs.length });
+    }
+    if (u.startsWith("/api/status")) return jsonReply(OK_STATUS);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply({ status: "done", result: "ok" });
+  };
+  return calls;
+}
+
+// --- finding 1: the Overview's five recent are the merged list ---------------
+
+test("the Overview lists the server's jobs, not only the ones this page started",
+     async () => {
+  const calls = stubWithJobs([serverJob({ id: "srv", request: "capture-windows",
+                                          status: "done", result: "3 cams" })]);
+  await applyHash("#/overview");
+  await flush();
+  assert.ok(calls.some((c) => c.url.startsWith("/api/jobs")),
+            "the panel reads the registry it claims to be showing: " +
+            JSON.stringify(calls.map((c) => c.url)));
+  assert.match(textOf($("#jobs-list")), /capture-windows/,
+               "a job this tab never started is still an operator's job");
+  assert.match(textOf($("#jobs-list")), /3 cams/);
+  assert.equal($("#jobs-state").dataset.state, "populated");
+});
+
+test("a server-side failure the Overview can see becomes a warning it can act on",
+     async () => {
+  stubWithJobs([serverJob({ id: "srv", request: "fetch-queue", status: "error",
+                            result: "no network" })]);
+  await applyHash("#/overview");
+  await flush();
+  const warnings = descendants($("#warnings"));
+  assert.match(textOf($("#warnings")), /fetch-queue/,
+               "the failed-job warning now covers the whole registry");
+  assert.ok(warnings.some((n) => n.tagName === "A" && n.href === "#/operations"),
+            "and points at the view that can retry it");
+  // It no longer claims to know where the job came from, because it does not.
+  assert.doesNotMatch(textOf($("#warnings")), /started from this page/);
+});
+
+test("the overview's own clock keeps the job list current too", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const calls = stubWithJobs([]);
+  await applyHash("#/overview");
+  await flush();
+  const before = calls.filter((c) => c.url.startsWith("/api/jobs")).length;
+  assert.equal(before, 1);
+  t.mock.timers.tick(REFRESH_MS);
+  await flush();
+  assert.ok(calls.filter((c) => c.url.startsWith("/api/jobs")).length > before,
+            "a job that finished elsewhere shows up without a reload");
+});
+
+// --- finding 2: Retry is one of the buttons the action's lock covers ---------
+
+test("a job that is still running is offered no Retry", () => {
+  STATE.jobs.server = [serverJob({ id: "w", request: "fetch-queue",
+                                   status: "working", result: null })];
+  renderOpsJobs();
+  assert.match(textOf($("#ops-jobs-list")), /Working/);
+  assert.equal(buttonIn($("#ops-jobs-list"), "Retry"), undefined,
+               "a second copy of work already in flight is not an escape hatch");
+});
+
+test("Retry carries the action's job key, so the lock covers it too", () => {
+  STATE.jobs.server = [serverJob({ id: "e", request: "fetch-queue",
+                                   status: "error", result: "no network" })];
+  renderOpsJobs();
+  const retry = buttonIn($("#ops-jobs-list"), "Retry");
+  assert.equal(retry.dataset.jobKey, "fetch-queue");
+  assert.equal(retry.disabled, false);
+
+  lockAction("fetch-queue", true);
+  assert.equal(retry.disabled, true,
+               "Retry is held while that same action is running");
+  renderOpsJobs();
+  assert.equal(buttonIn($("#ops-jobs-list"), "Retry").disabled, true,
+               "and a redraw mid-run does not hand back an enabled one");
+  assert.ok(keyed("fetch-queue").length > 1,
+            "the panel button and the Retry answer to one key");
+  lockAction("fetch-queue", false);
+  renderOpsJobs();
+  assert.equal(buttonIn($("#ops-jobs-list"), "Retry").disabled, false);
+});
+
+test("the lock counts holders, so one finishing does not release the other", () => {
+  const button = keyed("fetch-queue")[0];
+  lockAction("fetch-queue", true);
+  lockAction("fetch-queue", true);
+  assert.equal(button.disabled, true);
+  lockAction("fetch-queue", false);
+  assert.equal(button.disabled, true,
+               "the server runs two at a time; the first to finish holds nothing back");
+  lockAction("fetch-queue", false);
+  assert.equal(button.disabled, false);
+  lockAction("fetch-queue", false);
+  assert.equal(button.disabled, false, "and a release with nothing held is harmless");
+});
+
+test("two concurrent runs of one action hold its buttons until both end",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const answers = { j1: { status: "working" }, j2: { status: "working" } };
+  let posts = 0;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      return jsonReply({ job_id: "j" + (++posts), status: "working" });
+    }
+    const waiting = Object.keys(answers).find((id) => u.endsWith("/" + id));
+    if (waiting) return jsonReply(answers[waiting]);
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  const button = keyed("fetch-queue")[0];
+  const first = doAction("/api/sources/fetch-queue", "fetch-queue");
+  await flush();
+  const second = doAction("/api/sources/fetch-queue", "fetch-queue");
+  await flush();
+  assert.equal(button.disabled, true);
+
+  answers.j1 = { status: "done", result: "one" };
+  t.mock.timers.tick(3000);
+  await first;
+  // Let the second run's next poll actually schedule itself before the clock
+  // moves again, or the tick below fires against a timer that does not exist.
+  await flush();
+  assert.equal(button.disabled, true,
+               "the first run finishing does not unlock work the second still holds");
+
+  answers.j2 = { status: "done", result: "two" };
+  t.mock.timers.tick(3000);
+  await second;
+  assert.equal(button.disabled, false, "and the last one out releases it");
+});
+
+test("a run that hands its control back early releases the lock exactly once",
+     async (t) => {
+  // A lost poll releases the button so the operator is not stuck; the run's own
+  // release at the end must not then decrement a lock it no longer holds.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = [];
+  const statusReads = stubFailingJob(urls);
+  const button = keyed("fetch-queue")[0];
+  const running = doAction("/api/sources/fetch-queue", "fetch-queue");
+  await flush();
+  assert.equal(button.disabled, true);
+
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(statusReads(), 1);
+  assert.equal(button.disabled, false, "a lost read hands the control back");
+
+  // A second run now takes the lock; the first run ending must not release it.
+  lockAction("fetch-queue", true);
+  assert.equal(button.disabled, true);
+  escapeButton("#actions-state", "Stop checking").click();
+  await running;
+  assert.equal(button.disabled, true,
+               "the finished run gives back only the hold it still had");
+  lockAction("fetch-queue", false);
+  assert.equal(button.disabled, false);
+});
+
+// --- finding 3: a failed refresh marks the rows stale ------------------------
+
+test("a jobs read that fails after a good one marks the rows stale, with Retry",
+     async () => {
+  stubWithJobs([serverJob({ id: "a", request: "generate trivia" })]);
+  await loadJobs();
+  assert.equal($("#ops-jobs-state").dataset.state, "populated");
+  assert.equal($("#ops-jobs-list").children.length, 1);
+
+  stubWithJobs([], { jobsFail: true });
+  await loadJobs();
+  assert.equal($("#ops-jobs-state").dataset.state, "stale",
+               "rows that could not be refreshed are marked, not left looking current");
+  assert.match(textOf($("#ops-jobs-state")), /last known data/i,
+               "and it says how old what is on screen is");
+  assert.match(textOf($("#ops-jobs-state")), /could not be reached/i,
+               "the read failure itself is shown, not swallowed");
+  assert.equal($("#ops-jobs-list").children.length, 1,
+               "a failed refresh never clears known-good rows");
+  assert.ok(descendants($("#ops-jobs-state")).some(
+    (n) => n.tagName === "BUTTON" && n.textContent === "Retry"),
+    "with a way to try the read again");
+  assert.equal($("#jobs-state").dataset.state, "stale", "on both lists");
+});
+
+test("a jobs read that fails before any good one is an error, not staleness",
+     async () => {
+  stubWithJobs([], { jobsFail: true });
+  await loadJobs();
+  assert.equal($("#ops-jobs-state").dataset.state, "error",
+               "nothing was ever read, so there is nothing to call stale");
+  assert.ok(descendants($("#ops-jobs-state")).some(
+    (n) => n.tagName === "BUTTON" && n.textContent === "Retry"));
+});
+
+test("an empty registry and an unread one stay different answers", async () => {
+  renderJobs();
+  assert.match(textOf($("#ops-jobs-state")), /has not been read yet/);
+  stubWithJobs([]);
+  await loadJobs();
+  assert.equal($("#ops-jobs-state").dataset.state, "empty");
+  assert.match(textOf($("#ops-jobs-state")), /the server's registry is empty/);
+});
+
+// --- finding 4: the report region belongs to the view, not the action --------
+
+test("a retry reports into the panel of the view it was pressed from", async () => {
+  const posts = [];
+  let finish = null;
+  const held = new Promise((resolve) => { finish = resolve; });
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      posts.push(u);
+      await held;
+      return jsonReply({ status: "done", result: "conformed 2" });
+    }
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  STATE.route = "operations";
+  STATE.jobs.server = [serverJob({ id: "c", request: "station conform",
+                                   status: "error", result: "ffmpeg died" })];
+  renderOpsJobs();
+
+  buttonIn($("#ops-jobs-list"), "Retry").click();
+  await flush();
+  assert.deepEqual(posts, ["/api/station/conform"]);
+  assert.match(textOf($("#actions-state")), /station conform/,
+               "the run reports where the operator pressed Retry");
+  assert.equal(textOf($("#conform-state")), "",
+               "not into a region inside the view that is currently hidden");
+
+  finish();
+  await flush();
+  await flush();
+});
+
+test("the same action started from the Station reports in the Station's panel",
+     async () => {
+  let finish = null;
+  const held = new Promise((resolve) => { finish = resolve; });
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      await held;
+      return jsonReply({ status: "done", result: "conformed 2" });
+    }
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  STATE.route = "station";
+  const running = doAction("/api/station/conform", "station conform");
+  await flush();
+  assert.match(textOf($("#conform-state")), /station conform/,
+               "one action, reported wherever the operator actually is");
+  assert.equal(textOf($("#actions-state")), "");
+
+  finish();
+  await running;
 });

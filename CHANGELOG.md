@@ -61,6 +61,24 @@
 - Fixed: the failed-job warning on the Overview scanned all twenty registry
   entries and could not be cleared. It is now bounded to the same five rows the
   panel below it shows, so refreshing the list clears it.
+- The Overview reads the job list too, so its "recent jobs" really is the whole
+  registry rather than only this tab's work, and a job that failed elsewhere —
+  in another tab, or on the schedule — raises the warning that points at
+  Operations. Its 20-second clock keeps that list current.
+- Retry is no longer a way around the action lock: a job that is still running
+  is offered none at all, and the button that is offered answers to the same
+  lock as the panel button for that action. The lock counts holders rather than
+  being a flag, so with two runs of one action in flight — the server allows
+  two — the first to finish no longer hands back a control the second is still
+  holding. Where a status *poll* has been lost, the row offers **Check now**,
+  which asks the server again instead of starting a second copy of the work.
+- A jobs list that could not be refreshed after a good read is now marked stale
+  with its age and a Retry, like every other read-backed region, instead of
+  showing rows that look current with the read failure nowhere on screen.
+- Which panel reports a running action is decided by the view it was started
+  from rather than by the action: a conform retried from Operations reported
+  into the Station's panel, which is hidden at the time, so the operator watched
+  a blank region for the whole run.
 
 **Operator dashboard: a library inspector and reversible curation**
 - The Library toolbar is now labelled controls instead of chips: search, type,

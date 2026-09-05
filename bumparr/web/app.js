@@ -570,12 +570,15 @@ function ensureStatus() {
   return loadStatus();
 }
 
-// Overview reads GET /api/status and GET /api/station and nothing else: no
-// station timeline is created or advanced by opening it.
+// Overview reads GET /api/status, GET /api/station and GET /api/jobs, and
+// nothing else. All three are pure — /api/jobs is documented as never starting,
+// cancelling or changing a job — so no station timeline is created or advanced
+// by opening it. The jobs read is what makes the recent list and the failed-job
+// warning cover the whole registry rather than only this tab's own work.
 function enterOverview() {
   renderOverview();
   startRefresh();
-  return Promise.all([loadStatus(), loadStation()]);
+  return Promise.all([loadStatus(), loadStation(), loadJobs()]);
 }
 
 function exitOverview() { return null; }
@@ -1398,7 +1401,9 @@ function overviewWarnings(status, station, jobs) {
     .find((job) => job && job.status === "error");
   if (failed) {
     add("failed-job", "#/operations",
-        "A job started from this page failed: " + String(failed.label) + ".",
+        // The list is the whole registry now, not only this tab's work, so the
+        // warning no longer claims to know where the job came from.
+        "A job failed: " + String(failed.label) + ".",
         "Open operations");
   }
   return list;
@@ -3055,7 +3060,7 @@ const JOB_STATUSES = ["working", "done", "error", "unknown"];
 // operator's own API keys), never for an ingest of arbitrary text (it would
 // pull the material a second time), and never for anything that deletes.
 const RETRY_ACTIONS = {
-  "station conform": { url: "/api/station/conform", region: "#conform-state" },
+  "station conform": { url: "/api/station/conform" },
   "capture-windows": { url: "/api/sources/capture-windows" },
   "fetch-queue": { url: "/api/sources/fetch-queue" },
   "render cards": { url: "/api/render/cards" },
@@ -3205,28 +3210,52 @@ function jobRowEl(job, opts) {
   // Keyed by a server-supplied id, so it is read as a map and not as an object
   // whose prototype would answer for "constructor" or "__proto__".
   const note = own(STATE.ops.jobNotes, job.id);
-  if (note) li.append(statusBadge("attention", String(note)));
-  if (options.retry) {
+  if (note) {
+    li.append(statusBadge("attention", String(note)));
+    // The escape from a lost poll is another poll, not another run of the job:
+    // the work is very likely still going, and starting a second copy of it is
+    // the one thing that would make the situation worse.
+    const watch = JOB_WATCH.get(job.id);
+    if (watch && watch.check) {
+      li.append(makeButton("Check now", "jobrow-check mini", () => { watch.check(); },
+                           "Check the status of " + job.label + " now"));
+    }
+  }
+  // Retry is a second way to start the same action, so it is one of the buttons
+  // that action's lock covers — and a job that is still running is not offered
+  // a copy of itself at all.
+  if (options.retry && job.status !== "working") {
     const again = jobRetry(job);
     if (again) {
-      li.append(makeButton("Retry", "jobrow-retry mini", () => {
-        doAction(again.url, again.label,
-                 { region: again.region, say: again.say, retry: again });
-      }, "Run " + again.label + " again"));
+      const button = makeButton("Retry", "jobrow-retry mini", () => {
+        doAction(again.url, again.label, { say: again.say, retry: again });
+      }, "Run " + again.label + " again");
+      button.dataset.jobKey = again.label;
+      button.disabled = Boolean(own(STATE.ops.running, again.label));
+      li.append(button);
     }
   }
   return li;
 }
 
-// One region, one state, for either list.
+/**
+ * One region, one state, for either list — on the same ladder as every other
+ * read-backed region, so a refresh that fails marks the rows stale with their
+ * age and a Retry instead of leaving them looking current.
+ *
+ * "Has a value" for this region means the server list has been read at least
+ * once. Before that the page's own registry is the whole truth and says so;
+ * after it, a failed read is staleness rather than emptiness.
+ */
 function renderJobsState(el, count) {
   if (!el) return null;
-  if (count) return renderPanelState(el, { state: "populated" });
   const j = STATE.jobs;
-  if (j.error && !j.updatedAt) {
-    return renderPanelState(el, { state: "error", message: j.error,
-                                  onAction: () => { loadJobs(); } });
+  const opts = readState({ value: j.updatedAt ? j.server : null, error: j.error,
+                           updatedAt: j.updatedAt }, () => { loadJobs(); });
+  if (opts.state === "stale" || opts.state === "error") {
+    return renderPanelState(el, opts);
   }
+  if (count) return renderPanelState(el, { state: "populated" });
   return renderPanelState(el, { state: "empty", message: j.updatedAt
     ? "No jobs — the server's registry is empty."
     : "No jobs started from this page, and the server's list has not been read yet." });
@@ -3268,6 +3297,7 @@ async function loadJobs() {
     if (isApiAbort(err)) return null;
     STATE.jobs.error = err.message;
     renderJobs();
+    renderChrome();
     return null;
   }
   if (jobsAbort === controller) jobsAbort = null;
@@ -3276,6 +3306,10 @@ async function loadJobs() {
   STATE.jobs.server = body && Array.isArray(body.jobs) ? body.jobs : [];
   STATE.jobs.updatedAt = now();
   renderJobs();
+  // The failed-job warning is derived from this list, so a read that changes
+  // the list has to redraw it — otherwise a failure the panel is showing has
+  // no warning above it until the next status read happens to repaint.
+  renderWarnings();
   renderChrome();
   syncJobWatches();
   return body;
@@ -3316,6 +3350,7 @@ function applyJobResult(id, final) {
     row.updated_at = now() / 1000;
   }
   renderJobs();
+  renderWarnings();
   renderChrome();
   refreshAfterJob();
   return null;
@@ -3325,7 +3360,12 @@ function watchListedJob(id) {
   if (JOB_WATCH.has(id)) return null;
   let wake = null;
   let stopped = false;
-  const entry = { stop: () => { stopped = true; if (wake) wake(); } };
+  const entry = {
+    stop: () => { stopped = true; if (wake) wake(); },
+    // Cuts the current pause short, so an operator who can see the server is
+    // back does not sit out the ten-second backoff.
+    check: () => { if (wake) wake(); },
+  };
   JOB_WATCH.set(id, entry);
   const pause = (ms) => new Promise((resolve) => {
     const timer = setTimeout(() => { wake = null; resolve(); }, ms);
@@ -3381,6 +3421,14 @@ function stopJobWatch(id) {
 // same work carries the same data-job-key, so the Station's Conform now and the
 // Operations copy of it lock together, and nothing else does.
 
+// Which panel reports an action depends on where the operator started it, not
+// on what the action is: the same conform can be started from the Station's own
+// panel or from a Retry on Operations, and reporting it into a region inside
+// the view that is currently hidden would leave the operator watching nothing.
+const ACTION_REGIONS = { station: "#conform-state" };
+const activeActionRegion = () =>
+  own(ACTION_REGIONS, STATE.route) || "#actions-state";
+
 function renderActionLocks() {
   $$("[data-job-key]").forEach((button) => {
     button.disabled = Boolean(own(STATE.ops.running, button.dataset.jobKey));
@@ -3388,10 +3436,16 @@ function renderActionLocks() {
   return null;
 }
 
+// A count, not a flag: the server runs two blocking actions at a time, so the
+// same action can genuinely be running twice, and the first one to finish must
+// not hand back a control the second is still holding. Never goes negative — a
+// release with nothing held simply leaves it unheld.
 function lockAction(label, held) {
   const key = String(label);
-  if (held) STATE.ops.running[key] = true;
-  else delete STATE.ops.running[key];
+  const at = own(STATE.ops.running, key) || 0;
+  if (held) STATE.ops.running[key] = at + 1;
+  else if (at <= 1) delete STATE.ops.running[key];
+  else STATE.ops.running[key] = at - 1;
   renderActionLocks();
   return STATE.ops.running;
 }
@@ -3496,10 +3550,11 @@ function wireMaintenance() {
 /**
  * Start one action and follow its job to a terminal state.
  *
- * `opts.region` is the panel-state element that reports it — the Station's
- * conform panel has its own — `opts.say` formats a synchronous body, and
- * `opts.retry` overrides what Retry would repeat (null where it must not be
- * offered at all).
+ * `opts.region` overrides the panel-state element that reports it; by default
+ * that is the region of the view the operator is on, so the same action started
+ * from the Station's own panel and from a Retry on Operations each reports
+ * somewhere visible. `opts.say` formats a synchronous body, and `opts.retry`
+ * overrides what Retry would repeat (null where it must not be offered at all).
  *
  * Only the duplicate action is disabled while the job runs; unrelated controls
  * stay available. The shared region still belongs to the newest action, which
@@ -3507,14 +3562,22 @@ function wireMaintenance() {
  */
 async function doAction(url, label, opts) {
   const options = opts || {};
-  const state = $(options.region || "#actions-state");
+  const state = $(options.region || activeActionRegion());
   const mine = ++actionGeneration;
   const record = recordJob(label, options.retry);
   const current = () => mine === actionGeneration;
   // The lock is held only while the operator is actually being made to wait.
   // The moment a status read is lost the button comes back, so the escape from
   // a silent server is a real control, not a page reload.
-  const release = () => lockAction(label, false);
+  // The lock counts holders, and a lost poll releases early, so this run's own
+  // release has to be idempotent: it took the lock once and gives it back once,
+  // however many times it is asked to.
+  let holding = true;
+  const release = () => {
+    if (!holding) return null;
+    holding = false;
+    return lockAction(label, false);
+  };
   lockAction(label, true);
   announce("→ " + label + " …");
   renderJobState(state, "working", label + "…", []);
@@ -3643,7 +3706,9 @@ const isVisible = () => typeof document === "undefined" ||
 // what it actually shows.
 async function refreshTick() {
   if (!isVisible()) return null;
-  if (STATE.route === "overview") return Promise.all([loadStatus(), loadStation()]);
+  if (STATE.route === "overview") {
+    return Promise.all([loadStatus(), loadStation(), loadJobs()]);
+  }
   if (STATE.route === "station") return loadStation();
   // Operations has no clock of its own: only the two views that show live
   // figures do. Its jobs list is kept current by one poll per working job,
@@ -3665,10 +3730,10 @@ function boot() {
     b.addEventListener("click", () => doAction("/api/generate/" + b.dataset.gen + "?n=20", "generate " + b.dataset.gen)));
   $$("[data-src]").forEach((b) =>
     b.addEventListener("click", () => doAction("/api/sources/" + b.dataset.src, b.dataset.src)));
-  // The Station view's own copy of the conform action, reported in its panel.
+  // The Station view's own copy of the conform action. Where it reports is
+  // decided by the view the operator is on, not hard-coded here.
   $$("[data-station]").forEach((b) =>
-    b.addEventListener("click", () => doAction(PREP.conform.url, PREP.conform.label,
-                                               { region: "#conform-state" })));
+    b.addEventListener("click", () => doAction(PREP.conform.url, PREP.conform.label)));
   $("#shuffle").addEventListener("click", shufflePreview);
   $("#more").addEventListener("click", () => loadGrid(false));
   $("#search").addEventListener("input", (e) => scheduleSearch(e.target.value));

@@ -117,7 +117,7 @@ h4 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
 
 /* Every primary or destructive target clears 44x44px, in one place. */
 .panel-retry, .pv-inspect, .pv-play, .danger-btn, .libbar #clear-filters,
-#more, .dlg-actions button, .insp-primary, .insp-secondary,
+#more, .dlg-actions button, .insp-primary, .insp-secondary, .insp-copy-btn,
 .search, .libbar select, .dlg input[type="text"] { min-height:44px; }
 
 .totals { display:flex; flex-wrap:wrap; gap:var(--space-4) var(--space-6);
@@ -324,6 +324,9 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
 .insp-block.danger-zone { border:1px solid var(--danger);
   border-radius:var(--radius-sm); padding:var(--space-3); }
 .insp-block input.url { width:100%; font-family:var(--font-mono); }
+/* Copy's outcome: reserved height, so saying it does not shift the block. */
+.insp-copy-btn { align-self:flex-start; }
+.insp-copy { min-height:1.4em; font-size:.8rem; }
 
 /* Natural-language ask bar */
 .askbar { border-color:var(--accent); }

@@ -414,6 +414,10 @@ test.beforeEach(() => {
   stored.clear();
   storageThrows = false;
   document.activeElement = null;
+  // Node ships a `navigator` with no `clipboard`, which is the shape a browser
+  // without permission presents. Tests that need one install it.
+  Object.defineProperty(globalThis, "navigator", {
+    value: {}, configurable: true, writable: true });
   if (resetStateForTests) resetStateForTests();
 });
 test.afterEach(() => { delete global.fetch; });
@@ -2359,6 +2363,94 @@ test("a mutation refreshes the row it changed without resetting filters or pagin
   assert.equal(STATE.library.items[1].enabled, 1);
   assert.match(badgeText($("#grid").children[0]), /parked/);
   assert.ok(calls.some((c) => c.url.startsWith("/api/status")), "the counts are refreshed");
+});
+
+// The Clipboard API, swapped per test. Node ships a `navigator` with no
+// `clipboard` on it, which is exactly the shape a browser without permission
+// presents, so the fallback path needs no stubbing at all.
+function stubClipboard(writeText) {
+  Object.defineProperty(globalThis, "navigator", {
+    value: writeText ? { clipboard: { writeText } } : {},
+    configurable: true, writable: true,
+  });
+}
+const urlField = () => descendants($("#inspector-body"))
+  .find((n) => n.tagName === "INPUT" && n.className === "url");
+const copyResult = () => textOf(descendants($("#inspector-body"))
+  .find((n) => String(n.className).split(" ").includes("insp-copy")) || new FakeNode("p"));
+
+test("the media URL is copyable, and says so when it worked", async () => {
+  const written = [];
+  stubClipboard(async (text) => { written.push(text); });
+  stubInspector();
+  await openInspector("card:psa:abc");
+  const copy = inspectorButton("Copy");
+  assert.ok(copy, "the inspector offers a copy control, not just a field");
+  assert.equal(urlField().value, "/media/bumpers/psa/abc.mp4");
+
+  await copy.click();
+  await flush();
+  assert.deepEqual(written, ["/media/bumpers/psa/abc.mp4"],
+                   "the whole URL reaches the clipboard, unaltered");
+  assert.match(copyResult(), /Healthy/, "the outcome is a state, not just colour");
+  assert.match(copyResult(), /copied/i, "and it is visible inside the dialog");
+  assert.match($("#live-region").textContent, /copied/i, "and announced");
+});
+
+test("a clipboard the browser refuses falls back to a selection and says so",
+     async () => {
+  stubClipboard(async () => { throw new Error("denied"); });
+  stubInspector();
+  await openInspector("card:psa:abc");
+  await inspectorButton("Copy").click();
+  await flush();
+  assert.equal(urlField().selected, true, "the URL is selected to copy by hand");
+  assert.match(copyResult(), /Attention/, "a refusal is not reported as a success");
+  assert.match(copyResult(), /keyboard/i, "and it says what to do instead");
+  assert.match($("#live-region").textContent, /keyboard/i);
+});
+
+test("a browser with no Clipboard API at all still offers a way to copy",
+     async () => {
+  stubClipboard(null);
+  stubInspector();
+  await openInspector("card:psa:abc");
+  await inspectorButton("Copy").click();
+  await flush();
+  assert.equal(urlField().selected, true);
+  assert.match(copyResult(), /Attention/);
+  assert.match(copyResult(), /keyboard/i);
+});
+
+test("a hostile media URL reaches the clipboard as a value, never as markup",
+     async () => {
+  const hostile = '/media/x.mp4"><img src=x onerror="globalThis.pwned=53">';
+  const written = [];
+  stubClipboard(async (text) => { written.push(text); });
+  stubInspector({ detail: { media_url: hostile } });
+  await openInspector("card:psa:abc");
+  assert.equal(urlField().value, hostile, "the URL is a property, not parsed markup");
+  assert.equal(descendants($("#inspector")).filter((n) => n.tagName === "IMG").length, 0);
+  await inspectorButton("Copy").click();
+  await flush();
+  assert.deepEqual(written, [hostile]);
+  assert.equal(descendants($("#inspector")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("the copy result belongs to the row it was copied from", async () => {
+  // It is drawn from STATE, so a redraw repeats it — but inspecting a second
+  // row must not inherit the first row's "copied".
+  stubClipboard(async () => {});
+  stubInspector();
+  await openInspector("card:psa:abc");
+  await inspectorButton("Copy").click();
+  await flush();
+  assert.match(copyResult(), /copied/i);
+  app.renderInspector();
+  assert.match(copyResult(), /copied/i, "a redraw repeats it rather than losing it");
+  await openInspector("card:psa:other");
+  assert.equal(copyResult(), "", "a different row starts with nothing copied");
 });
 
 test("the server's warning is shown inside the inspector, not only announced",

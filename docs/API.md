@@ -471,7 +471,10 @@ closes any modal it had open, and pauses and detaches its media.
   (eligible now, the ordered `reasons` with a plain reading of each, and every
   factor including `base` and `score`), provenance (registered and payload
   source, background attribution, music credits), history (created, last
-  played, play count) and a copyable media URL. The primary action is the
+  played, play count) and the media URL as a read-only field with a **Copy**
+  control — the Clipboard API where the browser grants it, a selection to copy
+  by hand where it does not, and a visible sentence either way, since a silent
+  Copy button cannot be told from a broken one. The primary action is the
   reversible one for the state: **Disable from rotation**
   (`POST /api/pool/disable`), **Enable** (`POST /api/pool/enable`) for a parked
   row, **Render card** (`POST /api/render/cards?bumper_id=`, a background job

@@ -51,6 +51,10 @@ const KEEP_FILE_LABEL = "Keep the media file on disk (delete the row only)";
 // Opening HLS in a video element makes this page a real client of the station.
 const LIVE_WARNING =
   "Playing this opens the live stream as a real client, which can advance playout.";
+// The Clipboard API is a permission a browser may simply refuse. Said out loud
+// rather than silently: a Copy that did nothing must not look like one that did.
+const COPY_BY_HAND = "this browser would not let Bumparr use the clipboard — " +
+  "the URL is selected, copy it with your keyboard";
 
 // The server's eligibility vocabulary plus a plain reading. A reason not listed
 // here is shown exactly as the server sent it.
@@ -92,7 +96,7 @@ function initialState() {
     // region alone will not do: it is outside the modal, and inert under it.
     inspector: {
       id: null, open: false, value: null, loading: false, error: null,
-      updatedAt: null, busy: "", notice: "",
+      updatedAt: null, busy: "", notice: "", copied: null,
     },
     composer: {
       seconds: 30, tolerance: 1.5, maxItems: 8,
@@ -2161,8 +2165,10 @@ function inspectorHistory(row) {
   ]));
 }
 
-// A read-only field that selects itself on focus — the same copy affordance the
-// station's handoff URLs use — rather than a link, which would open the media.
+// A read-only field, not a link — following a link would open the media when
+// what is wanted is the string — plus a Copy control. The Clipboard API is a
+// permission, so every path ends in a visible sentence: a silent Copy button is
+// indistinguishable from a broken one.
 function inspectorMediaUrl(row) {
   if (!hasMedia(row)) {
     return inspectorBlock("Media URL", [
@@ -2174,9 +2180,32 @@ function inspectorMediaUrl(row) {
   input.readOnly = true;
   input.className = "url";
   input.value = String(row.media_url);
-  input.addEventListener("focus", () => input.select && input.select());
+  const select = () => { if (input.select) input.select(); };
+  input.addEventListener("focus", select);
+
+  // The outcome lives in STATE, so a redraw repeats it rather than losing it,
+  // and it is written straight into `said` so pressing Copy does not rebuild
+  // the dialog out from under the button that was just pressed.
+  const said = makeEl("p", "insp-copy");
+  const show = () => {
+    const done = STATE.inspector.copied;
+    said.replaceChildren(...(done ? [statusBadge(done.level, done.message)] : []));
+  };
+  const report = (level, message) => {
+    STATE.inspector.copied = { level, message };
+    show();
+    announce(message);
+  };
+  const byHand = () => { select(); report("attention", COPY_BY_HAND); };
+  const copy = makeButton("Copy", "insp-copy-btn mini", () => {
+    const clip = typeof navigator !== "undefined" && navigator && navigator.clipboard;
+    if (!clip || !clip.writeText) return byHand();
+    return clip.writeText(input.value).then(
+      () => report("healthy", "media URL copied to the clipboard"), byHand);
+  }, "Copy the media URL");
+  show();
   return inspectorBlock("Media URL",
-    [labelledControl("inspector-media-url", "Media URL", input)]);
+    [labelledControl("inspector-media-url", "Media URL", input), copy, said]);
 }
 
 // The one reversible action this state deserves, plus any second control that
@@ -2346,6 +2375,7 @@ function openInspector(id, opts) {
   insp.error = null;
   insp.busy = "";
   insp.notice = "";
+  insp.copied = null;
   insp.loading = true;
   renderInspector();
   renderInspectorState();
@@ -2360,6 +2390,7 @@ function openInspector(id, opts) {
         insp.value = null;
         insp.busy = "";
         insp.notice = "";
+        insp.copied = null;
         insp.loading = false;
         inspectorOnMutate = null;
         if (inspectorAbort) { inspectorAbort.abort(); inspectorAbort = null; }
@@ -3012,7 +3043,8 @@ if (COMMONJS) {
     renderLibrary, applyLibraryQuery, libraryCounts, libraryHash, setFilter,
     setPageSize, setDensity, dropKind,
     // inspector and reversible curation
-    openInspector, closeInspector, enableBumper, disableBumper, deleteBumper,
+    openInspector, closeInspector, renderInspector,
+    enableBumper, disableBumper, deleteBumper,
     // behaviour
     loadStatus, loadStation, previewPack, previewOne,
     pollJob, doAction, announce, refreshTick,

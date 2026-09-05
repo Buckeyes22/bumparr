@@ -26,7 +26,9 @@
   carries 24 explanations). It shows the preview and card answer, identity,
   state, creative, the eligibility verdict with its ordered reasons and every
   selection factor, provenance and music credits, creation/play history, and a
-  copyable media URL. Anything this build of the server does not send reads
+  media URL with a **Copy** control that uses the Clipboard API where the
+  browser grants it, falls back to selecting the field where it does not, and
+  says which happened either way. Anything this build of the server does not send reads
   "Not available in this version." rather than as a blank or a zero.
 - The inspector's primary action is the reversible one for the row's state:
   **Disable from rotation**, **Enable** for a parked row (relaying the server's

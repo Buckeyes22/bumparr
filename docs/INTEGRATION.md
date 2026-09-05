@@ -30,7 +30,7 @@ PUBLIC_URL=https://bumpers.example.com
 
 | Endpoint | Gives you | Use it when |
 |---|---|---|
-| `GET /api/bumpers/fill?seconds=N` | An ordered bumper set that fits N seconds | You have a break to compose (not a programme schedule) |
+| `GET /api/bumpers/fill?seconds=N` | An ordered bumper set that fits N seconds with optional placement | You have a break to compose (not a programme schedule) |
 | `GET /api/bumpers/random` | Up to `count` bumpers (default 5), JSON | You want to pick some yourself |
 | `GET /playlist.m3u` | Unsequenced M3U of every playable bumper, absolute URLs | Your downstream scheduler ingests a pool listing |
 
@@ -48,13 +48,14 @@ curl 'http://bumparr:8780/api/bumpers/fill?seconds=47'
 ```
 
 ```text
-seconds=47&tolerance=1.5&max_items=8&types=video,card
+seconds=47&tolerance=1.5&max_items=8&types=video,card&placement=close
 ```
 
 - `seconds` — the gap you need to fill (required)
 - `tolerance` — acceptable over/under, default `1.5s`
 - `max_items` — cap on how many pieces, default `8`
 - `types` — restrict to `video`, `card`, `stream`, `image`
+- `placement` — `any` (default), `open`, `inside`, or `close`. Invalid values are 4xx, not fallback to `any`.
 
 It solves this as a small subset-sum with randomised restarts, not a greedy
 pass. That matters: greedy grabs the biggest clip that fits and leaves a

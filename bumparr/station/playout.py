@@ -4,9 +4,9 @@ There is no encoder loop and no thread. Each channel keeps a timeline of
 (start time, conformed item) that is extended whenever someone asks for the
 playlist, anchored to the wall clock, so serving the channel is arithmetic
 over a list plus a static file per segment. The choice of what comes next
-goes through the same scored_candidates helper as /api/bumpers/random, with
-the one rule that helper does not carry: avoid the same item twice in a row
-when another positive-score item is available.
+goes through the same scored_candidates helper as /api/bumpers/random, then
+sequence.choose_next for adjacency (repeat the previous item only when it is
+the last positive-score option).
 
 This is also the first thing in Bumparr that reports plays. When an entry's
 start time passes, it is written to play_history and the row's last_played
@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from bumparr import config, db, selection
+from bumparr import channel_profile, config, creative, db, selection, sequence
 from bumparr.station import conform
 
 SLATE_ID = "slate"
@@ -38,6 +38,12 @@ class Entry:
     duration: float
     title: str
     kind: str
+    family: str = ""
+    text_heavy: bool = False
+    energy: str = ""
+    audio: str = ""
+    template: str = None
+    music_id: str = None
 
     @property
     def end(self):
@@ -66,7 +72,8 @@ class Channel:
             return []
         with db.conn() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT id,kind,title,weight,last_played,play_count FROM playables "
+                "SELECT id,type,kind,source,title,payload,tags,weight,"
+                "last_played,play_count,duration FROM playables "
                 "WHERE enabled=1 AND health='ok'").fetchall()]
         pool = []
         for r in rows:
@@ -78,33 +85,29 @@ class Channel:
         return pool
 
     def _pick(self, now, prev_id):
+        # prev_id matches timeline[-1] at the call site; adjacency uses
+        # the last five in-memory entries (family/energy/text/music).
         index = conform.load_index()
         pool = self._pool(index)
         season, daypart = selection.live_factors()
-
-        def choose(candidates):
-            if not candidates:
-                return None
-            positive, _ = selection.scored_candidates(
-                candidates, season_factors=season, daypart_factors=daypart, now=now)
-            if not positive:
-                return None
-            rows, eligible_weights = zip(*positive)
-            return self.rng.choices(rows, weights=eligible_weights, k=1)[0]
-
-        # Prefer a different item, but never let that preference revive content
-        # whose editorial, seasonal, or daypart score explicitly removes it from
-        # air. If the previous item is the only eligible one, repeating it is
-        # safer than choosing gated content.
-        pick = choose([r for r in pool if r["id"] != prev_id])
-        if pick is None:
-            pick = choose(pool)
+        positive, _ = selection.scored_candidates(
+            pool, season_factors=season, daypart_factors=daypart, now=now)
+        candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))
+                      for row, score in positive]
+        pick, _relaxed = sequence.choose_next(
+            candidates, channel_profile.current(), self.timeline[-5:],
+            self.rng, mode="station")
         if pick is not None:
-            return pick
+            row = pick.row
+            if "_idx" not in row:
+                row["_idx"] = index.get(row["id"])
+            row["_creative"] = pick.creative
+            return row
         slate = index.get(SLATE_ID)
         if not slate:
             return None
-        return {"id": SLATE_ID, "kind": SLATE_ID, "title": config.BRAND, "_idx": slate}
+        return {"id": SLATE_ID, "kind": SLATE_ID, "title": config.BRAND, "_idx": slate,
+                "_creative": {}}
 
     def _drop(self, n):
         for e in self.timeline[:n]:
@@ -150,9 +153,17 @@ class Channel:
                 if pick is None:
                     break
                 i = pick["_idx"]
-                self.timeline.append(Entry(end, pick["id"], i["key"], list(i["segments"]),
-                                           float(i["duration"]), pick.get("title") or "",
-                                           pick.get("kind") or ""))
+                cr = pick.get("_creative") or {}
+                self.timeline.append(Entry(
+                    end, pick["id"], i["key"], list(i["segments"]),
+                    float(i["duration"]), pick.get("title") or "",
+                    pick.get("kind") or "",
+                    family=cr.get("family") or "",
+                    text_heavy=bool(cr.get("text_heavy")),
+                    energy=cr.get("energy") or "",
+                    audio=cr.get("audio") or "",
+                    template=cr.get("template"),
+                    music_id=cr.get("music_id")))
                 end, prev = self.timeline[-1].end, pick["id"]
             self._report(now)
             n = 0

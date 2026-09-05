@@ -23,12 +23,13 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from bumparr import channel_profile, config, creative, db, seed, live_cams, stream_proxy, ingest, paths, rotation, selection
+from bumparr import channel_profile, config, creative, db, seed, live_cams, stream_proxy, ingest, paths, rotation, selection, sequence
 from bumparr.urls import absolutize as _absolutize
 from bumparr.station import routes as station_routes
 
@@ -272,19 +273,25 @@ def fill(request: Request,
          seconds: float = Query(..., gt=0, le=86400, description="the gap to fill"),
          tolerance: float = Query(1.5, ge=0, le=3600, description="acceptable over/under, seconds"),
          max_items: int = Query(8, ge=1, le=40),
-         types: str = Query(None, description="comma list, e.g. video,card")):
+         types: str = Query(None, description="comma list, e.g. video,card"),
+         placement: Literal["any", "open", "inside", "close"] = Query("any")):
     """Hand back bumpers that add up to a requested gap.
 
     This is the contract a channel generator actually needs: "the next show
     starts in 47 seconds, give me something to run." Existing filler systems
     only play whole items that happen to fit and eat the remainder as dead air.
 
-    Solved as a small subset-sum with randomised restarts rather than a greedy
-    pass, because greedy leaves a stubborn remainder that no single clip covers
-    — which is exactly the gap the caller wanted closed. Short bumpers are the
-    change that makes an exact total reachable, so a pool without them will
-    report a wider gap here rather than silently return a bad fit.
+    Shared scoring runs first, then `sequence.compose_break` reuses the bounded
+    240-restart duration search and applies placement/family/text/exit policy.
+    A pool without short denominations reports a wider gap rather than a bad fit.
     """
+    # Direct Python callers see the Query default object; HTTP is Literal-validated.
+    if not isinstance(placement, str):
+        placement = "any"
+    else:
+        placement = placement.strip().lower()
+    if placement not in ("any", "open", "inside", "close"):
+        return JSONResponse({"error": "invalid placement"}, status_code=400)
     type_filter = set(t.strip() for t in types.split(",")) if types else None
     if type_filter and not type_filter.issubset(config.PLAYABLE_TYPES):
         return JSONResponse({"error": "invalid playable type"}, status_code=400)
@@ -301,54 +308,36 @@ def fill(request: Request,
     season, daypart = selection.live_factors()
     scored, _ = selection.scored_candidates(
         pool_rows, season_factors=season, daypart_factors=daypart)
-    pool = []
-    for r, _score in scored:
-        d = float(r["duration"] or 0)
-        if 0 < d <= seconds + tolerance:
-            pool.append((d, r))
-    if not pool:
+    profile = channel_profile.current()
+    candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))
+                  for row, score in scored]
+    composed = sequence.compose_break(
+        candidates, seconds, tolerance, max_items, placement,
+        profile, [], random.Random())
+    composition = {
+        "placement": placement,
+        "relaxed_rules": list(composed.relaxed_rules),
+        "profile_version": int(profile.get("version") or 1),
+    }
+    if not composed.candidates:
         return {"requested": seconds, "total": 0.0, "gap": seconds,
                 "exact": False, "count": 0, "bumpers": [],
-                "note": "no bumper is short enough for this gap"}
+                "note": "no bumper is short enough for this gap",
+                "composition": composition}
 
-    best, best_err = [], None
-    for attempt in range(240):
-        rng = random.Random(attempt)
-        picks, total, used = [], 0.0, set()
-        candidates = pool[:]
-        rng.shuffle(candidates)
-        while len(picks) < max_items:
-            remaining = seconds - total
-            # Prefer the largest clip that still fits; fall back to the closest.
-            fits = [(d, r) for d, r in candidates
-                    if r["id"] not in used and d <= remaining + tolerance]
-            if not fits:
-                break
-            fits.sort(key=lambda dr: abs(dr[0] - remaining))
-            window = fits[:4] if len(fits) > 4 else fits
-            d, r = window[rng.randrange(len(window))]
-            picks.append(r)
-            used.add(r["id"])
-            total += d
-            if abs(seconds - total) <= 0.05:
-                break
-        err = abs(seconds - total)
-        if best_err is None or err < best_err:
-            best, best_err = picks, err
-            if err <= 0.05:
-                break
-
-    total = sum(float(r["duration"] or 0) for r in best)
     out = []
-    for r in best:
+    for cand in composed.candidates:
+        r = cand.row
         out.append({"id": r["id"], "type": r["type"], "kind": r["kind"],
                     "title": r["title"], "duration": r["duration"],
                     "media_url": _media_url(r, request), "payload": _payload_obj(r),
-                    "creative": creative.resolve_creative(r)})
+                    "creative": cand.creative or creative.resolve_creative(r)})
+    total = composed.total
     return {"requested": seconds, "total": round(total, 2),
             "gap": round(seconds - total, 2),
             "exact": abs(seconds - total) <= tolerance,
-            "count": len(out), "bumpers": out}
+            "count": len(out), "bumpers": out,
+            "composition": composition}
 
 
 @app.get("/api/bumpers/{bumper_id:path}")

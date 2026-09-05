@@ -103,11 +103,16 @@ Playout is a virtual clock, not a continuously running encoder. A channel's
 timeline is extended when a playlist is requested, using a lookahead of
 `STATION_WINDOW_SEGMENTS × STATION_SEGMENT_SECONDS` (6 × 4 = 24 seconds by
 default). It chooses from conformed eligible items using `selection.scored_candidates`
-(the same helper as `/random` and `/fill`). A zero or negative score is a hard exclusion,
-including a seasonal `off_weight: 0`. The same item is not selected twice in a
-row when another positive-score item exists; if it is the only eligible item,
-repeating it is preferable to airing gated content. The slate is used when no
-positive-score playable exists.
+(the same helper as `/random` and `/fill`) and `sequence.choose_next` with the
+last five timeline entries as context. A zero or negative score is a hard exclusion,
+including a seasonal `off_weight: 0`. Zero family preference is also a hard
+profile gate. The same item is not selected twice in a row when another
+positive-score item exists; if it is the only eligible item, repeating it is
+preferable to airing gated content. Live is not narrowed solely because an
+old row inferred a specialized role. The slate is used when no positive-score
+playable exists. Timeline entries keep in-memory `family`, `text_heavy`,
+`energy`, `audio`, `template`, and `music_id`; those fields are not SQLite
+columns.
 
 When an entry's start time passes, playout writes one `play_history` row,
 updates `last_played` and increments `play_count`, and upserts the channel's

@@ -31,6 +31,11 @@ a row does not play, and a row is only playable when `enabled=1` and
 | `play_count` | INTEGER | Lifetime plays — station playout increments it when an entry starts; it is the fatigue factor's input (relative to the pool median). |
 | `created_at` | REAL | Unix ts. |
 
+Station timeline entries also keep in-memory `family`, `text_heavy`,
+`energy`, `audio`, `template`, and `music_id` for adjacency. Those are not
+columns; they are derived from `payload.creative` at pick time. No schema
+migration.
+
 ### `payload.creative`
 
 Optional namespaced metadata. Missing or partial objects are inferred at

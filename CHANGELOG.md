@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+**Break and station sequence grammar**
+- `bumparr.sequence` composes duration-bounded breaks and station adjacency
+  from scored candidates, resolved creative data, and the channel profile.
+  Hard gates (score, duration, role, unique ids, `max_items`, zero family
+  preference) are never relaxed. Soft rules relax only as
+  `exit_ident`, `energy_jump`, `same_family`, `text_run`, `same_music`.
+- `GET /api/bumpers/fill` gains `placement=any|open|inside|close` (invalid
+  values are FastAPI 4xx, not fallback to `any`) and additive `composition`
+  `{placement, relaxed_rules, profile_version}`. Existing `requested` /
+  `total` / signed `gap` / `exact` / `count` / `bumpers` are preserved;
+  `bumpers` is composed order. `/playlist.m3u` stays an unsequenced pool.
+- Station `choose_next` uses the last five timeline entries. In-memory
+  `Entry` carries `family`, `text_heavy`, `energy`, `audio`, `template`,
+  and `music_id` without a schema migration. Conformed-only playback,
+  status purity, last-request staleness, slate, and standby are unchanged.
+- `python -m bumparr.simulate` reports family shares, text runs, role
+  violations, relaxations, and profile source/version.
+
 **Creative resolver + channel profile**
 - Optional `payload.creative` holds family/roles/energy/audio and related
   fields. `bumparr.creative` is the only parser: `resolve_creative` infers a
@@ -13,8 +31,7 @@
   `/api/status` adds `profile: {version, valid, source}` where `source` is
   `shipped-default`, `custom`, or `fallback-after-error`.
 - List/random/fill/detail responses add resolved `creative` without replacing
-  `payload`. This is not sequence grammar (break placement / station
-  `choose_next` remain later).
+  `payload`.
 
 **Runtime selection truth + read-only simulation**
 - `/api/bumpers/random`, `/api/bumpers/fill`, and station playout share

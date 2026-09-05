@@ -15,7 +15,7 @@ live station is a bumper showcase plus branded failover.
 | Mode | What it does |
 |---|---|
 | Bumper library | Create, ingest, inspect, enable, disable, render, and serve individual items. `/playlist.m3u` is an unsequenced pool listing for a downstream scheduler (ErsatzTV, Tunarr, or similar). |
-| Break composer | `GET /api/bumpers/fill` returns an ordered bumper set that fits a duration. Today that is duration-only; it is not a programme schedule. |
+| Break composer | `GET /api/bumpers/fill` returns an ordered bumper set that fits a duration and optional placement. It is not a programme schedule. |
 | Live station | `/station/live` is a continuous bumper showcase; `/station/standby` is branded failover. The station schedules only its own bumper pool. |
 
 ## Run it
@@ -89,7 +89,7 @@ station is a showcase of that same pool, plus branded failover.
 
 | Endpoint | Use |
 |---|---|
-| `GET /api/bumpers/fill?seconds=N` | Ordered bumper set that fits a duration (not a programme schedule) |
+| `GET /api/bumpers/fill?seconds=N` | Ordered bumper set that fits a duration and optional placement (not a programme schedule) |
 | `GET /api/bumpers/random?count=N&max_duration=S&types=video,card` | N bumpers from the library, ranked by the scoring model |
 | `GET /playlist.m3u` | Unsequenced M3U of every playable bumper (video, stream, rendered cards) for a downstream scheduler |
 | `GET /media/<path>` | The actual media files |
@@ -110,9 +110,10 @@ is rarely the thing that plays its entries. Behind a reverse proxy, set
 `PUBLIC_URL` to the address consumers actually reach; otherwise Bumparr
 derives it from the incoming request.
 
-`/fill` solves a duration as a subset-sum rather than a greedy pass, so a break
-doesn't end in dead air. That is the contract a channel generator actually
-needs for bumper placement, and nothing else in the \*arr ecosystem offers it.
+`/fill` solves a duration as a subset-sum rather than a greedy pass, then
+applies break sequence grammar (placement, family, text run, exit ident).
+That is the contract a channel generator actually needs for bumper
+placement, and nothing else in the \*arr ecosystem offers it.
 
 The live station is the bumper pool run as HLS: pre-conformed segments and a
 playlist, no encoder in the playback path. It showcases bumpers; it does not

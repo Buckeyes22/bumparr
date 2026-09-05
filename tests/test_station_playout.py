@@ -93,6 +93,29 @@ class Timeline(Base):
                 mock.patch("bumparr.dayparts.factors_now", return_value={}):
             self.assertEqual(ch._pick(1000.0, None)["id"], "slate")
 
+    def test_entry_carries_in_memory_creative_fields(self):
+        ch = self.channel()
+        ch.advance(1000.0)
+        entry = ch.timeline[0]
+        self.assertIn(entry.family, ("text", "scenic", "archive", "data",
+                                     "window", "ident", "failure", "authored"))
+        self.assertIn(entry.energy, ("quiet", "neutral", "loud"))
+        self.assertIn(entry.audio, ("native", "music", "designed", "silence",
+                                    "unknown"))
+        self.assertIsInstance(entry.text_heavy, bool)
+        self.assertTrue(hasattr(entry, "template"))
+        self.assertTrue(hasattr(entry, "music_id"))
+
+    def test_live_is_not_narrowed_by_specialized_roles(self):
+        with db.conn() as c:
+            c.execute("UPDATE playables SET payload=? WHERE id='b'",
+                      ('{"creative":{"family":"ident","roles":["open","close",'
+                       '"return","ident"]}}',))
+            c.execute("UPDATE playables SET enabled=0 WHERE id!='b'")
+            c.commit()
+        ch = self.channel()
+        self.assertEqual(ch._pick(1000.0, None)["id"], "b")
+
 
 class Reporting(Base):
     def rows(self):

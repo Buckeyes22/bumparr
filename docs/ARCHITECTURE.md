@@ -140,8 +140,9 @@ content covers every kind with no model at all (CI asserts this).
 - **`selection.py`** — shared computed-eligibility helper. Calls
   `rotation.weights_for` once and keeps only finite scores `> 0`. Physical
   file/conform availability stays with the caller.
-- **`simulate.py`** — seeded, read-only mix report over in-memory copies.
-  Never writes history or calls station `advance()`.
+- **`simulate.py`** — seeded, read-only mix report over in-memory copies
+  using station `choose_next`. Never writes history or calls station
+  `advance()`.
 - **`seasons.py`** — calendar factors per category (holiday material ramps in
   and out rather than switching), computed at selection time, never stored.
 - **`creative.py`** — the only parser/resolver for optional
@@ -149,12 +150,14 @@ content covers every kind with no model at all (CI asserts this).
   writers persist what they know via `merge_creative`.
 - **`channel_profile.py`** — operator voice/mix/sequence/presentation/audio
   YAML. Invalid files fall back to the full shipped default.
+- **`sequence.py`** — pure `compose_break` / `choose_next`. No SQLite, files,
+  wall clock, or process-global RNG.
 - `/random`, `/fill`, and station playout share `scored_candidates`, so a
-  gated row cannot air on one path and not another. `/fill` still returns an
-  ordered duration-bounded bumper set, not a programme schedule (no creative
-  sequence grammar yet). `/playlist.m3u` is an unsequenced pool listing for a
+  gated row cannot air on one path and not another. `/fill` returns an
+  ordered duration-bounded bumper set with optional placement, not a
+  programme schedule. `/playlist.m3u` is an unsequenced pool listing for a
   downstream scheduler. The live station sequences its own bumper-only
-  timeline.
+  timeline through `choose_next`.
 
 ### 5. Service
 
@@ -226,6 +229,7 @@ preview reads never extend a timeline or write history.
 | `bumparr/selection.py` | shared computed-eligibility filter used by random, fill, and station |
 | `bumparr/creative.py` | payload.creative resolver (`resolve_creative` / `merge_creative`) |
 | `bumparr/channel_profile.py` | operator channel profile loader and `--check` |
+| `bumparr/sequence.py` | pure break composer and station adjacency |
 | `bumparr/simulate.py` | read-only seeded selection mix report |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |

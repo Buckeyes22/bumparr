@@ -2,8 +2,9 @@
 
 Station playout is the shipped writer of play_history. This module snapshots
 the enabled/healthy pool, mutates only in-memory copies of play counts and
-timestamps, and reports what a seeded run would have picked. It never calls
-station advance, never probes media, and never writes the database.
+timestamps, and reports what a seeded run of station choose_next would
+have picked. It never calls station advance, never probes media, and
+never writes the database.
 """
 import argparse
 import datetime
@@ -12,7 +13,7 @@ import math
 import random
 import time
 
-from bumparr import dayparts, db, selection
+from bumparr import channel_profile, creative, dayparts, db, selection, sequence
 
 
 def infer_audio(row):
@@ -77,32 +78,49 @@ def run(rows, *, picks, seed, start):
     """Simulate `picks` selections against in-memory copies of `rows`."""
     pool = [dict(r) for r in rows]
     rng = random.Random(seed)
+    profile = channel_profile.current()
+    status = channel_profile.profile_status()
     chosen = []
+    recent = []
     zero_score_picks = 0
     now = float(start)
-    item_counts, kind_counts = {}, {}
+    item_counts, kind_counts, family_counts = {}, {}, {}
     seasonal, daypart_counts, audio_counts = {}, {}, {}
+    relaxation_counts = {name: 0 for name in sequence.RELAXATION_ORDER}
+    role_violations = 0
 
     for _ in range(picks):
         season, daypart = selection.factors_at(now)
-        candidates, _ = selection.scored_candidates(
+        scored, _ = selection.scored_candidates(
             pool, season_factors=season, daypart_factors=daypart, now=now)
-        if not candidates:
+        candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))
+                      for row, score in scored]
+        picked, relaxed = sequence.choose_next(
+            candidates, profile, recent[-5:], rng, mode="station")
+        if picked is None:
             zero_score_picks += 1
             now += 10.0
             continue
-        weights = [score for _, score in candidates]
-        pick = rng.choices([row for row, _ in candidates], weights=weights, k=1)[0]
+        pick = picked.row
+        resolved = picked.creative or {}
         chosen.append(pick)
+        recent.append(picked)
         item_counts[pick["id"]] = item_counts.get(pick["id"], 0) + 1
         kind = pick.get("kind") or ""
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        family = resolved.get("family") or ""
+        family_counts[family] = family_counts.get(family, 0) + 1
         bucket = _season_bucket(kind, season)
         seasonal[bucket] = seasonal.get(bucket, 0) + 1
         name = _daypart_name(now)
         daypart_counts[name] = daypart_counts.get(name, 0) + 1
-        audio = infer_audio(pick)
+        audio = resolved.get("audio") or infer_audio(pick)
         audio_counts[audio] = audio_counts.get(audio, 0) + 1
+        if not creative.role_compatible(resolved, "any", mode="break"):
+            role_violations += 1
+        for rule in relaxed:
+            if rule in relaxation_counts:
+                relaxation_counts[rule] += 1
         pick["last_played"] = now
         pick["play_count"] = (pick.get("play_count") or 0) + 1
         duration = float(pick.get("duration") or 0) or 10.0
@@ -122,6 +140,19 @@ def run(rows, *, picks, seed, start):
     if run_len >= 2:
         same_kind_runs += 1
 
+    max_text = int((profile.get("sequence") or {}).get("max_text_run") or 2)
+    text_runs = 0
+    text_len = 0
+    for item in recent:
+        if (item.creative or {}).get("text_heavy"):
+            text_len += 1
+        else:
+            if text_len > max_text:
+                text_runs += 1
+            text_len = 0
+    if text_len > max_text:
+        text_runs += 1
+
     return {
         "picks": picks,
         "seed": seed,
@@ -132,6 +163,12 @@ def run(rows, *, picks, seed, start):
         "same_kind_runs": same_kind_runs,
         "item_shares": _shares(item_counts, picks),
         "kind_shares": _shares(kind_counts, picks),
+        "family_shares": _shares(family_counts, picks),
+        "text_runs": text_runs,
+        "role_violations": role_violations,
+        "relaxations": dict(relaxation_counts),
+        "profile": {"version": status.get("version", 1),
+                    "source": status.get("source", "shipped-default")},
         "seasonal": dict(sorted(seasonal.items())),
         "daypart": dict(sorted(daypart_counts.items())),
         "audio": dict(sorted(audio_counts.items())),
@@ -147,11 +184,15 @@ def _positive_int(value):
 
 def _print_report(report):
     print("picks=%d seed=%s start=%s chosen=%d zero-score=%d exact-repeats=%d "
-          "same-kind-runs=%d"
+          "same-kind-runs=%d text-runs=%d role-violations=%d"
           % (report["picks"], report["seed"], report["start"], report["chosen"],
              report["zero_score_picks"], report["exact_repeats"],
-             report["same_kind_runs"]))
+             report["same_kind_runs"], report.get("text_runs", 0),
+             report.get("role_violations", 0)))
     print("kind_shares %s" % report["kind_shares"])
+    print("family_shares %s" % report.get("family_shares", {}))
+    print("relaxations %s" % report.get("relaxations", {}))
+    print("profile %s" % report.get("profile", {}))
     print("seasonal %s" % report["seasonal"])
     print("daypart %s" % report["daypart"])
     print("audio %s" % report["audio"])
@@ -159,7 +200,7 @@ def _print_report(report):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="Simulate selection without writing play history.")
+        description="Simulate station selection without writing play history.")
     ap.add_argument("--seed", type=int, default=1,
                     help="RNG seed for reproducible picks")
     ap.add_argument("--picks", type=_positive_int, default=200,

@@ -78,7 +78,7 @@ The API's `POST /api/generate/{kind}` routes to these same modules.
 ### `bumparr.simulate` — read-only selection mix
 
 Snapshots enabled/healthy rows, mutates only in-memory copies of play counts
-and timestamps, and reports what a seeded run of `scored_candidates` would
+and timestamps, and reports what a seeded run of station `choose_next` would
 have picked. It never calls station `advance()`, never writes the database,
 and does not download, render, conform, or probe.
 
@@ -89,10 +89,11 @@ and does not download, render, conform, or probe.
 | `--start UNIX` | unix-seconds float for the first pick (default: now) |
 | `--json` | print the report as JSON |
 
-The report includes item/kind shares, exact repeats, same-kind runs,
-zero-score picks, seasonal/daypart distribution, and inferred audio balance
-(`native` / `music` / `silence` / `unknown` from existing payload). Family,
-role, and sequence relaxations are Phase 2 and are not reported here.
+The report includes item/kind/family shares, exact repeats, same-kind runs,
+text runs over `max_text_run`, zero-score picks, role violations,
+relaxations (`exit_ident`, `energy_jump`, `same_family`, `text_run`,
+`same_music`), profile source/version, seasonal/daypart distribution, and
+audio balance from resolved creative data.
 
 ### `bumparr.channel_profile` — validate the operator profile
 

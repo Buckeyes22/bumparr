@@ -95,9 +95,10 @@ detail route); `creative` is additive.
 These are the endpoints a channel generator or player pulls from. `/random`
 and `/fill` share `selection.scored_candidates` with station playout
 ([ROTATION.md](ROTATION.md)): a stored `weight <= 0` or computed `score <= 0`
-is a hard gate, and no epsilon/floor may revive it. `/fill` still composes a
-duration-bounded bumper set (not a programme schedule); `/playlist.m3u` is an
-unsequenced pool listing for a downstream scheduler.
+is a hard gate, and no epsilon/floor may revive it. `/fill` composes a
+duration-bounded bumper set with optional placement (not a programme
+schedule); `/playlist.m3u` is an unsequenced pool listing for a downstream
+scheduler.
 
 ### `GET /api/bumpers/random`
 
@@ -122,8 +123,9 @@ eligible). `explain` is a boolean query flag. `creative` never replaces
 The break-composer contract: return an ordered bumper set that fits N seconds.
 This is not a programme schedule and does not know what a downstream channel
 will air next. Shared scoring runs first (the same season/daypart resolution
-as `/random` and the station); then a randomized subset-sum searches duration
-— see the `fill` docstring in `bumparr/app.py` for why.
+as `/random` and the station); then `sequence.compose_break` reuses the
+bounded 240-restart duration search and applies placement/family/text/exit
+policy — see the `fill` docstring in `bumparr/app.py` for why.
 
 | Param | Default | Meaning |
 |---|---|---|
@@ -131,13 +133,19 @@ as `/random` and the station); then a randomized subset-sum searches duration
 | `tolerance` | 1.5 | acceptable over/under, seconds (maximum 3,600) |
 | `max_items` | 8 | ceiling on set size (1–40) |
 | `types` | all | comma list |
+| `placement` | `any` | `any` \| `open` \| `inside` \| `close` |
 
 Response: `{"requested": 47, "total": 46.9, "gap": 0.1, "exact": true,
-"count": 6, "bumpers": [...]}`. Each bumper includes additive `creative`
-alongside `payload`. A pool without short denominations will report a wider
-`gap` rather than return a bad fit — check `exact`/`gap`, not just `count`.
-Score `<= 0` items are excluded before the duration search. Sequence grammar
-(`placement`, `composition`) is not applied yet.
+"count": 6, "bumpers": [...], "composition": {"placement": "close",
+"relaxed_rules": ["exit_ident"], "profile_version": 1}}`. Each bumper
+includes additive `creative` alongside `payload`. `bumpers` is composed
+order. A pool without short denominations will report a wider `gap` rather
+than return a bad fit — check `exact`/`gap`, not just `count`. Score `<= 0`
+items are excluded before the duration search. Invalid `placement` is a
+FastAPI 4xx validation response, not fallback to `any`. Allowed
+`relaxed_rules` names are `exit_ident`, `energy_jump`, `same_family`,
+`text_run`, and `same_music`, listed in that order. `/fill` still returns
+best effort and an explicit gap when no exact fit exists.
 
 ## Station
 

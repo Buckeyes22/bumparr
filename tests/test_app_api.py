@@ -121,6 +121,34 @@ class AppApi(unittest.TestCase):
         self.assertEqual(out["count"], 0)
         self.assertFalse(out["exact"])
         self.assertEqual(out["gap"], 12.0)
+        self.assertEqual(out["composition"]["placement"], "any")
+        self.assertEqual(out["composition"]["relaxed_rules"], [])
+        self.assertEqual(out["composition"]["profile_version"], 1)
+
+    def test_fill_composition_and_close_placement(self):
+        seed = [_row(1, 22.0), _row(2, 18.0), _row(3, 7.0, kind="station_id")]
+        out = self._run_child("fill", seed, seconds=47.0, tolerance=1.5,
+                              max_items=8, types=None, placement="close")
+        self.assertTrue(out["exact"], out)
+        self.assertEqual(out["requested"], 47.0)
+        self.assertEqual(out["count"], 3)
+        self.assertEqual(out["bumpers"][-1]["kind"], "station_id")
+        self.assertEqual({b["id"] for b in out["bumpers"]},
+                         {"t:item-1", "t:item-2", "t:item-3"})
+        comp = out["composition"]
+        self.assertEqual(comp["placement"], "close")
+        self.assertEqual(comp["profile_version"], 1)
+        self.assertNotIn("exit_ident", comp["relaxed_rules"])
+        for bumper in out["bumpers"]:
+            self.assertIn("payload", bumper)
+            self.assertIn("creative", bumper)
+
+    def test_fill_invalid_placement_is_4xx(self):
+        seed = [_row(1, 10.0)]
+        out = self._run_child("fill", seed, seconds=10.0, tolerance=1.5,
+                              max_items=8, types=None, placement="middle")
+        self.assertEqual(out["__status__"], 400)
+        self.assertEqual(out["__body__"], {"error": "invalid placement"})
 
     def test_random_empty_pool_shape(self):
         """An empty pool returns the empty shape, not an error."""
@@ -404,6 +432,7 @@ class HttpValidation(unittest.TestCase):
             ("/api/bumpers/nope?explain=maybe", "GET"),
             ("/api/bumpers/fill?seconds=0", "GET"),
             ("/api/bumpers/fill?seconds=5&tolerance=3601", "GET"),
+            ("/api/bumpers/fill?seconds=5&placement=middle", "GET"),
             ("/api/starter?limit=0", "POST"),
             ("/api/render/cards?limit=1001", "POST"),
             ("/api/generate/trivia?n=101", "POST"),
@@ -417,6 +446,7 @@ class HttpValidation(unittest.TestCase):
         self.assertEqual(self._status("/api/bumpers?q=" + "x" * 101), 422)
         self.assertEqual(self._status("/api/bumpers/random?types=video,evil"), 400)
         self.assertEqual(self._status("/api/bumpers/fill?seconds=5&types=evil"), 400)
+        self.assertEqual(self._status("/api/bumpers/fill?seconds=5&placement=close"), 200)
 
     def test_random_default_count_contract_over_http(self):
         result = self._json("/api/bumpers/random")

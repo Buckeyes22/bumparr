@@ -64,11 +64,22 @@ class SimulateReport(unittest.TestCase):
         self.assertEqual(a["start"], 1_700_000_000.0)
         for key in ("item_shares", "kind_shares", "exact_repeats",
                     "same_kind_runs", "zero_score_picks", "seasonal",
-                    "daypart", "audio"):
+                    "daypart", "audio", "family_shares", "text_runs",
+                    "role_violations", "relaxations", "profile"):
             self.assertIn(key, a)
         self.assertEqual(a["chosen"] + a["zero_score_picks"], 40)
         self.assertGreater(a["chosen"], 0)
         self.assertTrue(a["audio"])
+        self.assertTrue(a["family_shares"])
+        self.assertEqual(set(a["relaxations"]),
+                         {"exit_ident", "energy_jump", "same_family",
+                          "text_run", "same_music"})
+        self.assertEqual(set(a["profile"]), {"version", "source"})
+        self.assertEqual(a["profile"]["version"], 1)
+        self.assertIn(a["profile"]["source"],
+                      ("shipped-default", "custom", "fallback-after-error"))
+        self.assertIsInstance(a["text_runs"], int)
+        self.assertIsInstance(a["role_violations"], int)
 
     def test_does_not_write_db_or_call_station_advance(self):
         before = self._fingerprint()

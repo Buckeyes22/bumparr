@@ -11,9 +11,13 @@
 - One `api()` wrapper normalizes every request: it checks the response, parses
   JSON safely, extracts the server's `error`, and throws a bounded single-line
   message with a status. Ordinary reads time out after 15 s; job POSTs opt out,
-  because the job id returns immediately and polling owns the long wait. Job
-  polling reports `status unknown` and backs off instead of inventing a
-  five-minute success.
+  because the job id returns immediately and polling owns the long wait.
+- A lost status read is never reported as a failed job. Polling keeps
+  `status unknown`, backs off to 10 s and keeps asking; only a 404 ends it, and
+  no five-minute success is invented. The ask bar hands its input and button
+  back as soon as a poll cannot reach the server, with **Check now** and
+  **Stop checking** controls, so a network outage can no longer leave the form
+  permanently disabled.
 - Library search is debounced 250 ms, superseded reads are aborted, and answers
   older than the current filter generation are discarded. The periodic
   20-second overview/station refresh does nothing while the tab is hidden and

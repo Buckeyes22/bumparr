@@ -53,6 +53,7 @@ const STATE = initialState();
 let searchTimer = null;
 let libraryAbort = null;
 let refreshTimer = null;
+let askGeneration = 0;
 
 // ---------------------------------------------------------------------------
 // 2. Safe DOM helpers
@@ -992,14 +993,32 @@ const MAINT = {
 
 // A job POST returns immediately; polling owns the long wait, so no clock is
 // imposed on the server's own duration and no five-minute success is invented.
+//
+// A lost status read is not a lost job: the work is very likely still running
+// server-side, so a network failure keeps `status unknown`, backs off to ten
+// seconds and keeps asking rather than reporting the action as failed. Only a
+// 404 — the server itself no longer tracking the id — ends the poll, and even
+// that is reported as unknown.
 async function pollJob(job, getStatus = async (jobId) =>
   api("/api/request/" + encodeURIComponent(jobId)),
 pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
   const jobId = job.job_id;
   let current = job;
+  let delay = JOB_POLL_MS;
   while (jobId && current.status === "working") {
-    await pause(JOB_POLL_MS);
-    current = await getStatus(jobId);
+    await pause(delay);
+    try {
+      current = await getStatus(jobId);
+      delay = JOB_POLL_MS;
+    } catch (err) {
+      if (err && err.status === 404) {
+        return { status: "unknown",
+                 result: "status unknown: the server no longer tracks this job" };
+      }
+      delay = JOB_BACKOFF_MS;
+      announce("status unknown (" + err.message +
+               ") — the job may still be running; checking again in 10s");
+    }
   }
   return current;
 }
@@ -1037,8 +1056,11 @@ async function doAction(url, label) {
     if (r.job_id) r = await pollJob(r);
     const result = r.result === undefined ? r : r.result;
     const msg = typeof result === "string" ? result : JSON.stringify(result);
-    announce((["error", "unknown"].includes(r.status) ? "✗ " : "✓ ") + label + ": " +
-             msg.trim().split("\n").slice(-2).join(" "));
+    // "unknown" is not "failed": the run may well have completed. The Actions
+    // buttons come back enabled below, so re-running it is the retry.
+    const mark = r.status === "error" ? "✗ " : (r.status === "unknown" ? "▲ " : "✓ ");
+    announce(mark + label + ": " + msg.trim().split("\n").slice(-2).join(" ") +
+             (r.status === "unknown" ? " — run it again to check" : ""));
   } catch (err) { announce("✗ " + label + " failed: " + err.message); }
   btns.forEach((b) => { b.disabled = false; });
   loadStatus(); loadGrid(true);
@@ -1049,9 +1071,14 @@ async function submitAsk() {
   const inp = $("#ask"), btn = $("#ask-go"), out = $("#ask-result");
   const text = inp.value.trim();
   if (!text) return;
+  // A poll that hands the controls back can be overtaken by a second ask; only
+  // the newest one is allowed to write to the result line.
+  const mine = ++askGeneration;
+  const current = () => mine === askGeneration;
   btn.disabled = true; inp.disabled = true;
   out.replaceChildren(statusBadge("working", "downloads and captures can take a bit"));
   const finish = (level, msg) => {
+    if (!current()) return;
     out.replaceChildren(statusBadge(level, msg));
     announce(msg);
     btn.disabled = false; inp.disabled = false; inp.focus();
@@ -1072,7 +1099,32 @@ async function submitAsk() {
   // "status unknown" and retried more slowly — never as a success or a failure.
   let elapsed = 0;
   let delay = JOB_POLL_MS;
+  let timer = null;
+  let stopped = false;
+  const schedule = (ms) => {
+    if (stopped || !current()) return;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(poll, ms);
+  };
+  // A poll that cannot reach the server must never leave the form dead. Give
+  // the controls back at once, keep checking in the background, and offer both
+  // an immediate check and a way to stop waiting.
+  const renderUnknown = (message) => {
+    if (!current()) return;
+    btn.disabled = false; inp.disabled = false;
+    const again = makeEl("button", "mini", "Check now");
+    again.addEventListener("click", () => { delay = JOB_POLL_MS; schedule(0); });
+    const stop = makeEl("button", "mini", "Stop checking");
+    stop.addEventListener("click", () => {
+      stopped = true;
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      finish("attention", "stopped checking — the job may still be running");
+    });
+    out.replaceChildren(statusBadge("attention", message), again, stop);
+  };
   const poll = async () => {
+    if (stopped || !current()) return;
+    timer = null;
     let s;
     try {
       s = await api("/api/request/" + encodeURIComponent(job.job_id));
@@ -1081,22 +1133,25 @@ async function submitAsk() {
         return finish("attention", "status unknown: the server no longer tracks this job");
       }
       delay = JOB_BACKOFF_MS;
-      out.replaceChildren(statusBadge("attention",
-        "status unknown (" + err.message + ") — retrying"));
-      setTimeout(poll, delay);
+      renderUnknown("status unknown (" + err.message + ") — checking again in 10s");
+      schedule(delay);
       return;
     }
     if (s.status === "working") {
       elapsed += delay;
       delay = JOB_POLL_MS;
-      out.replaceChildren(statusBadge("working",
-        "working on it… (" + Math.round(elapsed / 1000) + "s)"));
-      setTimeout(poll, delay);
+      // Controls handed back after a lost poll are never taken away again: a
+      // recovered poll updates the badge and leaves the form usable.
+      if (current()) {
+        out.replaceChildren(statusBadge("working",
+          "working on it… (" + Math.round(elapsed / 1000) + "s)"));
+      }
+      schedule(delay);
       return;
     }
     finish(s.status === "done" ? "healthy" : "failed", s.result || "done");
   };
-  setTimeout(poll, JOB_POLL_MS);
+  schedule(JOB_POLL_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,10 +1218,12 @@ if (COMMONJS) {
     loadStatus, loadGrid, loadStation, scheduleSearch, shufflePreview,
     clearFilters, renderFilters, previewPack, previewOne, pollJob, doAction,
     enableBumper, deleteBumper, announce, refreshTick, handleVisibilityChange,
+    submitAsk,
     resetStateForTests() {
       if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
       if (refreshTimer !== null) { clearInterval(refreshTimer); refreshTimer = null; }
       libraryAbort = null;
+      askGeneration = 0;
       Object.assign(STATE, initialState());
     },
   };

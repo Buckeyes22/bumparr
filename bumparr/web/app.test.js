@@ -226,7 +226,7 @@ const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
         renderPanelState, statusBadge, formatAge, formatDuration, loadGrid,
         loadStatus, scheduleSearch, refreshTick, handleVisibilityChange,
         announce, STATE, API_TIMEOUT_MS, SEARCH_DEBOUNCE_MS, REFRESH_MS,
-        resetStateForTests } = app;
+        doAction, submitAsk, resetStateForTests } = app;
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -243,6 +243,16 @@ const jsonReply = (body, init) => ({
   status: (init && init.status) || 200,
   text: async () => JSON.stringify(body),
 });
+// The shape api() throws: a status plus a message safe to show a human.
+const apiRejection = (status, message) => {
+  const err = new Error(message);
+  err.name = "ApiError";
+  err.status = status;
+  return err;
+};
+// Let every pending microtask settle; setImmediate is not one of the mocked
+// timer APIs, so this works with or without mock.timers enabled.
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test.beforeEach(() => {
   BODY = buildDocument();
@@ -425,6 +435,158 @@ test("action polling continues past the old five-minute cap", async () => {
 
   assert.equal(calls, 106);
   assert.deepEqual(result, { status: "done", result: "landed" });
+});
+
+test("a lost status poll keeps the job unknown and backs off, never failing it", async () => {
+  // A blip while reading the status is not a finished job. Letting the
+  // rejection escape reported "✗ generate trivia failed: Bumparr could not be
+  // reached" over work that was still running server-side.
+  const answers = [
+    () => { throw apiRejection(0, "Bumparr could not be reached."); },
+    () => { throw apiRejection(0, "The server did not answer in time."); },
+    () => ({ status: "working" }),
+    () => ({ status: "done", result: "landed" }),
+  ];
+  let call = 0;
+  const pauses = [];
+  const result = await pollJob(
+    { job_id: "j1", status: "working" },
+    async () => answers[call++](),
+    async (ms) => { pauses.push(ms); });
+
+  assert.deepEqual(result, { status: "done", result: "landed" });
+  assert.deepEqual(pauses, [3000, 10000, 10000, 3000],
+                   "each lost read backs off to ten seconds, then recovers");
+  assert.match(logText(), /status unknown/);
+  assert.doesNotMatch(logText(), /failed/);
+});
+
+test("a job the server no longer tracks ends the poll as unknown, not done", async () => {
+  let calls = 0;
+  const result = await pollJob(
+    { job_id: "gone", status: "working" },
+    async () => { calls++; throw apiRejection(404, "Not found (404)."); },
+    async () => {});
+  assert.equal(calls, 1, "an expired job stops the poll");
+  assert.equal(result.status, "unknown");
+  assert.match(result.result, /no longer tracks this job/);
+});
+
+test("the default status poll reads the job endpoint and survives a blip", async () => {
+  // The injected-getStatus tests above never exercise the default, which is the
+  // path every Actions button actually takes.
+  const urls = [];
+  let attempt = 0;
+  global.fetch = async (url) => {
+    urls.push(String(url));
+    attempt++;
+    if (attempt === 1) throw new TypeError("Failed to fetch");
+    return jsonReply({ status: "done", result: "landed" });
+  };
+  const pauses = [];
+  const result = await pollJob({ job_id: "j 1", status: "working" }, undefined,
+                               async (ms) => { pauses.push(ms); });
+  assert.deepEqual(result, { status: "done", result: "landed" });
+  assert.deepEqual(pauses, [3000, 10000]);
+  assert.deepEqual(urls, ["/api/request/j%201", "/api/request/j%201"]);
+  assert.match(logText(), /status unknown/);
+});
+
+test("an action whose status is unknown is not announced as a failure", async () => {
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") {
+      return jsonReply({ job_id: "j1", status: "unknown", result: "status unknown" });
+    }
+    return jsonReply({ total: 0, playable_now: 0, by_kind: {}, by_type: {},
+                       count: 0, bumpers: [], channels: {}, urls: {} });
+  };
+  await doAction("/api/generate/trivia?n=20", "generate trivia");
+  assert.match(logText(), /generate trivia: status unknown/);
+  assert.doesNotMatch(logText(), /generate trivia failed/);
+  assert.match(logText(), /run it again to check/);
+});
+
+test("an ask poll that cannot reach the server hands the controls back", async (t) => {
+  // The poll used to reschedule itself every ten seconds forever with the input
+  // and button still disabled: no typing, no cancel, no retry, only a reload.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = [];
+  global.fetch = async (url, opts) => {
+    urls.push(String(url));
+    if ((opts && opts.method) === "POST") return jsonReply({ job_id: "j1", status: "working" });
+    throw new TypeError("Failed to fetch");
+  };
+  const statusReads = () => urls.filter((u) => u.startsWith("/api/request/j1")).length;
+  $("#ask").value = "more dead air";
+  await submitAsk();
+  assert.equal($("#ask-go").disabled, true, "the form is held while the job starts");
+
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(statusReads(), 1);
+  assert.equal($("#ask-go").disabled, false, "a lost poll never leaves the form dead");
+  assert.equal($("#ask").disabled, false);
+  assert.match(textOf($("#ask-result")), /status unknown/);
+  assert.deepEqual(
+    descendants($("#ask-result")).filter((n) => n.tagName === "BUTTON")
+      .map((n) => n.textContent),
+    ["Check now", "Stop checking"]);
+
+  t.mock.timers.tick(10000);
+  await flush();
+  assert.equal(statusReads(), 2, "it keeps checking in the background");
+
+  const stop = descendants($("#ask-result")).find((n) => n.textContent === "Stop checking");
+  await stop.click();
+  await flush();
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(statusReads(), 2, "stopping actually stops the poll");
+  assert.match(textOf($("#ask-result")), /stopped checking/);
+  assert.equal($("#ask-go").disabled, false);
+});
+
+test("Check now polls immediately instead of waiting out the backoff", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = [];
+  global.fetch = async (url, opts) => {
+    urls.push(String(url));
+    if ((opts && opts.method) === "POST") return jsonReply({ job_id: "j1", status: "working" });
+    throw new TypeError("Failed to fetch");
+  };
+  $("#ask").value = "more dead air";
+  await submitAsk();
+  t.mock.timers.tick(3000);
+  await flush();
+  const before = urls.filter((u) => u.startsWith("/api/request/j1")).length;
+
+  const again = descendants($("#ask-result")).find((n) => n.textContent === "Check now");
+  await again.click();
+  t.mock.timers.tick(0);
+  await flush();
+  assert.equal(urls.filter((u) => u.startsWith("/api/request/j1")).length, before + 1);
+});
+
+test("a second ask supersedes the first job's result line", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let posts = 0;
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") {
+      posts++;
+      return jsonReply({ job_id: "j" + posts, status: "working" });
+    }
+    if (String(url).includes("j1")) return jsonReply({ status: "done", result: "first landed" });
+    return jsonReply({ status: "working" });
+  };
+  $("#ask").value = "one";
+  await submitAsk();
+  $("#ask").value = "two";
+  await submitAsk();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.doesNotMatch(textOf($("#ask-result")), /first landed/,
+                      "a superseded poll may not overwrite the newer request");
+  assert.match(textOf($("#ask-result")), /working on it/);
 });
 
 // ---------------------------------------------------------------------------

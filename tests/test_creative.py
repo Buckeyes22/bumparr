@@ -166,7 +166,7 @@ class RoleEnergyAudio(unittest.TestCase):
             {"family", "roles", "energy", "audio", "text_heavy",
              "template", "render_seed", "brand_mode", "music_id"})
         self.assertIn(got["family"], FAMILIES)
-        self.assertIsNone(got["template"])
+        self.assertEqual(got["template"], "image_caption")
         self.assertIsNone(got["music_id"])
         self.assertIsInstance(got["render_seed"], int)
         self.assertGreaterEqual(got["render_seed"], 0)

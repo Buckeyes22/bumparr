@@ -2,8 +2,8 @@
 # Point CHANNEL_PROFILE at a copy to override; an invalid file is ignored in
 # full (never applied partially) and the process keeps these shipped defaults.
 # Validate with: python -m bumparr.channel_profile --check
-# Sequence grammar that consumes mix/sequence is a later slice; this file is
-# the contract those pieces will read.
+# Voice is applied only to newly generated cards. Presentation defaults feed
+# template and brand-mode assignment for new items.
 version: 1
 
 voice:

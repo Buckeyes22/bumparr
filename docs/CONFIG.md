@@ -31,7 +31,7 @@ Variables are function-named, no prefix, no product name in a variable.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `CHANNEL_PROFILE` | shipped `bumparr/config_files/channel_profile.yaml` | Operator-owned voice, mix, sequence, presentation, and audio policy. Empty uses the shipped file. Changes require a process restart (no hot reload). An invalid file is never applied partially: runtime logs one warning and uses the full shipped default. Strict-validate with `python -m bumparr.channel_profile --check`. `/api/status` reports `profile.source` as `shipped-default`, `custom`, or `fallback-after-error` — never a filesystem path. |
+| `CHANNEL_PROFILE` | shipped `bumparr/config_files/channel_profile.yaml` | Operator-owned voice, mix, sequence, presentation, and audio policy. Empty uses the shipped file. Changes require a process restart (no hot reload). Voice (`persona`, subjects, boundaries, avoid phrases/topics) is applied only to newly generated cards. Presentation defaults are `default_template: minimal_center` and `default_brand_mode: reveal`. An invalid file is never applied partially: runtime logs one warning and uses the full shipped default. Strict-validate with `python -m bumparr.channel_profile --check`. `/api/status` reports `profile.source` as `shipped-default`, `custom`, or `fallback-after-error` — never a filesystem path. |
 
 ## Storage
 

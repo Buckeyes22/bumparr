@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 from bumparr import config, db
-from bumparr.creative import with_creative
+from bumparr.creative import with_creative, with_presentation
 
 UA = {"User-Agent": "bumparr/1.0"}
 
@@ -95,14 +95,14 @@ def generate(location):
                 parsed = {}
             if isinstance(parsed, dict):
                 existing = parsed
-        payload = with_creative(
-            {**existing, **fresh},
-            {"id": pid, "type": "card", "kind": "weather", "source": "grounded",
-             "tags": "grounded,weather"})
+        row = {"id": pid, "type": "card", "kind": "weather", "source": "grounded",
+               "tags": "grounded,weather"}
+        payload = with_creative({**existing, **fresh}, row)
         # Refresh only content fields; preserve render path, history and tuning.
         cur = c.execute("UPDATE playables SET title=?, payload=?, duration=? WHERE id=?",
                         (loc["label"], json.dumps(payload), 10.0, pid))
         if cur.rowcount == 0:
+            payload = with_presentation({**existing, **fresh}, row)
             c.execute("INSERT INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
                       "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
                       (pid, "card", "weather", "grounded", None, 10.0,

@@ -48,7 +48,7 @@ read time; explicit valid fields win. Allowed values:
 | `energy` | `quiet`, `neutral`, `loud` |
 | `audio` | `native`, `music`, `designed`, `silence`, `unknown` |
 | `text_heavy` | boolean adjacency signal |
-| `template` | Phase 3 template id; missing means the compatible default |
+| `template` | `minimal_center`, `minimal_corner`, `image_caption`, `information_board`, `signal`, `ident`. Missing means the compatible default. Strict creation/preview rejects an incompatible explicit value; runtime rendering falls back. |
 | `render_seed` | non-negative integer for stable variation |
 | `brand_mode` | `reveal`, `static`, `none` |
 | `music_id` | Phase 4 manifest id or null |

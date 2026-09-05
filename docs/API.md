@@ -109,7 +109,7 @@ scheduler.
 | `types` | all | comma list, e.g. `video,card` |
 | `explain` | `false` | if true, add per-item `selection.factors` |
 
-Response: `{"count": N, "bumpers": [{id, type, kind, title, duration,
+Response: `{"count": N, "bumpers": [{id, type, kind, title, duration, source,
 media_url, payload, creative}]}`. Only enabled + healthy items with a finite
 computed score strictly greater than zero are candidates. Gated rows are never
 returned. Default fields stay the same when `explain` is omitted except for
@@ -134,12 +134,13 @@ policy — see the `fill` docstring in `bumparr/app.py` for why.
 | `max_items` | 8 | ceiling on set size (1–40) |
 | `types` | all | comma list |
 | `placement` | `any` | `any` \| `open` \| `inside` \| `close` |
+| `explain` | `false` | if true, add per-item `selection.factors` (same as `/random`) |
 
 Response: `{"requested": 47, "total": 46.9, "gap": 0.1, "exact": true,
 "count": 6, "bumpers": [...], "composition": {"placement": "close",
 "relaxed_rules": ["exit_ident"], "profile_version": 1}}`. Each bumper
-includes additive `creative` alongside `payload`. `bumpers` is composed
-order. A pool without short denominations will report a wider `gap` rather
+includes additive `creative` alongside `payload` and `source`. `bumpers` is composed
+order. Preview/explain never writes history. A pool without short denominations will report a wider `gap` rather
 than return a bad fit — check `exact`/`gap`, not just `count`. Score `<= 0`
 items are excluded before the duration search. Invalid `placement` is a
 FastAPI 4xx validation response, not fallback to `any`. Allowed
@@ -342,6 +343,12 @@ here when the cam isn't CORS-direct.
   /api/pool/enable`, relaying any `warning` to the log). The shuffle preview
   reads `/api/bumpers/random`, which returns only live rows and no `enabled`
   key, so no card there carries the button.
+- **Preview** — one item (`GET /api/bumpers/random?count=1&explain=true`) and
+  15/30/60/90-second packs (`GET /api/bumpers/fill?seconds=N&explain=true`).
+  Cards show creative data, provenance, factors, media, and pack relaxations.
+  Enable/delete are reused. Preview is GET-only: it does not call station
+  `advance()`, write play history, or mutate `play_count`/`last_played`.
+  DOM is created with text/property assignment, never HTML interpolation.
 - **Actions** — one click per management endpoint: generate the card kinds,
   recapture live cams / run the fetch queue (`/api/sources/*`), preview or run
   the starter seeds, tidy, and revive.

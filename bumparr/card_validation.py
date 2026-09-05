@@ -42,6 +42,74 @@ COMEDIC_KINDS = {
     "achievements",
 }
 
+# min_lines, max_lines, max_line_chars — generated prose kinds only.
+PROSE_SHAPE = {
+    "psa": (1, 3, 120),
+    "corrections": (1, 3, 120),
+    "achievements": (1, 3, 120),
+    "coming_up": (1, 3, 120),
+}
+
+_PUNCT = re.compile(r"[^\w\s]+", flags=re.UNICODE)
+_SPACE = re.compile(r"\s+")
+
+
+def normalize_card_text(text: str) -> str:
+    """Casefold, strip punctuation, collapse space. Equality key, not a substring."""
+    folded = str(text or "").casefold()
+    return _SPACE.sub(" ", _PUNCT.sub(" ", folded)).strip()
+
+
+def card_body_text(kind, obj) -> str:
+    """On-screen text used for duplicate / avoid-phrase checks."""
+    if not isinstance(obj, dict):
+        return ""
+    lines = obj.get("lines")
+    if isinstance(lines, list) and lines:
+        return " ".join(str(x) for x in lines)
+    parts = [obj.get("text"), obj.get("number"), obj.get("meaning"), obj.get("answer")]
+    return " ".join(str(part) for part in parts if part)
+
+
+def opening_phrase(obj) -> str:
+    """First three normalized words of the first line (or the whole line)."""
+    if not isinstance(obj, dict):
+        return ""
+    lines = obj.get("lines") or []
+    first = str(lines[0]) if lines else str(obj.get("text") or "")
+    words = normalize_card_text(first).split()
+    return " ".join(words[:3])
+
+
+def _has_phrase(text, phrase) -> bool:
+    """True when `phrase` occurs in `text` as a whole-word (or whole-phrase) match."""
+    token = str(phrase or "").strip()
+    if not token:
+        return False
+    pattern = r"(?<!\w)" + re.escape(token) + r"(?!\w)"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def pre_insert_check(kind, obj, *, voice, batch_texts, batch_openings, existing_texts):
+    """Deterministic post-shape gate. Returns a reason string, or None to accept."""
+    body = card_body_text(kind, obj)
+    key = normalize_card_text(body)
+    if not key:
+        return "empty card"
+    if key in batch_texts or key in existing_texts:
+        return "duplicate"
+    opening = opening_phrase(obj)
+    if opening and opening in batch_openings:
+        return "repeated opening phrase"
+    voice = voice or {}
+    for phrase in voice.get("avoid_phrases") or []:
+        if _has_phrase(body, phrase):
+            return "avoid phrase"
+    for topic in voice.get("avoid_topics") or []:
+        if _has_phrase(body, topic):
+            return "avoid topic"
+    return None
+
 
 def looks_truncated(text: str) -> bool:
     """True if prose appears cut off mid-sentence.
@@ -183,4 +251,14 @@ def validate_card(kind, obj):
         return None, "empty card"
     if kind == "fun_facts" and looks_truncated(body):
         return None, "truncated fact"
-    return dict(obj), "ok"
+    shape = PROSE_SHAPE.get(kind)
+    if shape:
+        min_lines, max_lines, max_line = shape
+        if len(lines) < min_lines or len(lines) > max_lines:
+            return None, "line count out of range"
+        if any(len(line) > max_line for line in lines):
+            return None, "line too long"
+    cleaned = dict(obj)
+    if lines:
+        cleaned["lines"] = lines
+    return cleaned, "ok"

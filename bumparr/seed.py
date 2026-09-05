@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 from bumparr import config, db, paths
-from bumparr.creative import with_creative
+from bumparr.creative import with_presentation
 
 VIDEO_EXT = {".mp4", ".webm", ".ogv", ".m4v", ".mkv"}
 
@@ -98,7 +98,7 @@ def seed_from_assets():
                 "title": path.stem.replace("_", " ").replace("~", " ").strip(),
                 "weight": weight,
             }
-            row["payload"] = json.dumps(with_creative({}, row))
+            row["payload"] = json.dumps(with_presentation({}, row))
             if db.upsert_playable(c, row):
                 added += 1
         parked = cleared = 0

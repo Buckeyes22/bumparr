@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from bumparr import db, paths
-from bumparr.creative import with_creative
+from bumparr.creative import with_creative, with_presentation
 
 CONFIG = Path(__file__).resolve().parent / "config_files" / "live_cams.yaml"
 
@@ -100,19 +100,19 @@ def load_cams():
                         parsed = {}
                     if isinstance(parsed, dict):
                         existing = parsed
-                payload = json.dumps(with_creative(
-                    {**existing,
-                     "direct": bool(cam.get("direct", True)),
-                     "label": title,
-                     "region": region,
-                     "proxy_hosts": proxy_hosts},
-                    {"id": pid, "type": "stream", "kind": kind,
-                     "source": "live-cam", "tags": "live,window"}))
+                body = {**existing,
+                        "direct": bool(cam.get("direct", True)),
+                        "label": title,
+                        "region": region,
+                        "proxy_hosts": proxy_hosts}
+                meta = {"id": pid, "type": "stream", "kind": kind,
+                        "source": "live-cam", "tags": "live,window"}
                 if row:
                     if row["type"] != "stream" or row["source"] != "live-cam":
                         print("[bumparr] live_cams id conflicts with a non-cam row: %s" % pid)
                         pids.discard(pid)
                         continue
+                    payload = json.dumps(with_creative(body, meta))
                     if row["uri"] != url:
                         c.execute("UPDATE playables SET uri=?, payload=?, weight=?, title=?, kind=?, health='ok' WHERE id=?",
                                   (url, payload, weight, title, kind, pid))
@@ -121,6 +121,7 @@ def load_cams():
                                   (url, payload, weight, title, kind, pid))
                     updated += 1
                 else:
+                    payload = json.dumps(with_presentation(body, meta))
                     cursor = c.execute(
                         "INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
                         "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",

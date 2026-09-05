@@ -29,7 +29,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from bumparr import config, db, ffmpeg_pipe
+from bumparr import config, creative, db, ffmpeg_pipe
 
 # ---------------------------------------------------------------- geometry --
 # The reference player sizes everything in `vmin`. At 1920x1080 one vmin is
@@ -40,6 +40,14 @@ VMIN = min(W, H) / 100.0
 
 PAD = 8.0 * VMIN            # .card padding
 GAP = 3.0 * VMIN            # .card gap
+
+# Title-safe region at 1920×1080 (10% inset). All templates keep glyphs here.
+SAFE_LEFT = int(0.10 * W)
+SAFE_TOP = int(0.10 * H)
+SAFE_RIGHT = W - SAFE_LEFT
+SAFE_BOTTOM = H - SAFE_TOP
+SAFE_W = SAFE_RIGHT - SAFE_LEFT
+SAFE_H = SAFE_BOTTOM - SAFE_TOP
 
 FG = (232, 232, 232)        # --fg
 DIM = (138, 138, 138)       # --dim
@@ -211,13 +219,21 @@ def _draw_centred(draw, y, s, font, fill, track_em=0.0):
     if not s:
         return 0
     w = _text_w(draw, s, font, track_em)
-    x = (W - w) / 2.0
+    return _draw_at(draw, (W - w) / 2.0, y, s, font, fill, track_em)
+
+
+def _draw_at(draw, x, y, s, font, fill, track_em=0.0):
+    """Draw `s` at left `x`, baseline-top `y`. Returns its width."""
+    if not s:
+        return 0
+    w = _text_w(draw, s, font, track_em)
     if not track_em:
         draw.text((x, y), s, font=font, fill=fill)
         return w
-    for ch in s:                      # tracked: advance per glyph
-        draw.text((x, y), ch, font=font, fill=fill)
-        x += draw.textlength(ch, font=font) + track_em * font.size
+    cursor = x
+    for ch in s:
+        draw.text((cursor, y), ch, font=font, fill=fill)
+        cursor += draw.textlength(ch, font=font) + track_em * font.size
     return w
 
 
@@ -242,65 +258,241 @@ def _wrap(draw, text, font, max_w, track_em=0.0):
 
 
 class Block:
-    """One laid-out run of text: the unit the vertical centring works on."""
+    """One laid-out run of text: the unit the vertical packing works on."""
 
-    def __init__(self, lines, font, size, fill, track=0.0, lh=1.25, layer="base"):
+    def __init__(self, lines, font, size, fill, track=0.0, lh=1.25, layer="base",
+                 align="center"):
         """Pre-measure a run of lines so layout (and its height) is known
         before drawing; `layer` marks which transparency layer it lands on."""
         self.lines, self.font, self.size = lines, font, size
         self.fill, self.track, self.lh = fill, track, lh
         self.layer = layer            # base | reveal | brand
+        self.align = align            # center | left | right
         self.line_h = size * lh
         self.height = self.line_h * len(lines)
 
 
-def _layout(draw, kind, payload, title, card_font, brand_font, brand):
-    """Build the block stack exactly as the player's flex column does.
-
-    Critical detail: in the browser the reveal and brand elements exist from the
-    first frame at opacity 0, so they occupy layout space immediately and the
-    content above them does NOT shift when they appear. Laying them out here the
-    same way is what keeps the rendered card from jumping mid-play.
-    """
+def _content_blocks(draw, kind, payload, title, card_font, max_w, size_lines=None,
+                    align="center"):
+    """Eyebrow + body + optional reveal, without the brand mark."""
     blocks = []
-    max_w = W - 2 * PAD
-
+    line_size = size_lines if size_lines is not None else SZ_LINES
     label = CARD_LABELS.get(kind, "")
     if label:
         f = _load(card_font, SZ_EYEBROW)
         blocks.append(Block([label.upper()], f, SZ_EYEBROW, DIM,
-                            track=TRACK_EYEBROW, lh=1.2))
+                            track=TRACK_EYEBROW, lh=1.2, align=align))
 
     reveal_text, reveal_after = None, 0.0
     if kind == "number":
         f = _load(card_font, SZ_BIG_NUMBER)
         big = str(payload.get("number") or title or "")
         blocks.append(Block(_wrap(draw, big, f, max_w, TRACK_BIG_NUMBER), f,
-                            SZ_BIG_NUMBER, FG, track=TRACK_BIG_NUMBER, lh=1.15))
+                            SZ_BIG_NUMBER, FG, track=TRACK_BIG_NUMBER, lh=1.15,
+                            align=align))
         if payload.get("meaning"):
             reveal_text = str(payload["meaning"])
             reveal_after = float(payload.get("reveal_after") or 5)
     elif isinstance(payload.get("lines"), list):
-        f = _load(card_font, SZ_LINES)
+        f = _load(card_font, line_size)
         text = "\n".join(str(x) for x in payload["lines"])
-        blocks.append(Block(_wrap(draw, text, f, max_w), f, SZ_LINES, FG, lh=LH_LINES))
+        blocks.append(Block(_wrap(draw, text, f, max_w), f, line_size, FG,
+                            lh=LH_LINES, align=align))
         if payload.get("answer"):
             reveal_text = str(payload["answer"])
             reveal_after = float(payload.get("reveal_after") or 8)
     else:
         f = _load(card_font, SZ_BIG)
         big = str(payload.get("text") or title or "")
-        blocks.append(Block(_wrap(draw, big, f, max_w), f, SZ_BIG, FG, lh=1.15))
+        blocks.append(Block(_wrap(draw, big, f, max_w), f, SZ_BIG, FG, lh=1.15,
+                            align=align))
 
     if reveal_text:
         f = _load(card_font, SZ_REVEAL)
         blocks.append(Block(_wrap(draw, reveal_text, f, max_w), f, SZ_REVEAL,
-                            WHITE, lh=1.25, layer="reveal"))
-
-    bf = _load(brand_font, SZ_BRAND)
-    blocks.append(Block([brand], bf, SZ_BRAND, (255, 255, 255),
-                        track=TRACK_BRAND, lh=1.15, layer="brand"))
+                            WHITE, lh=1.25, layer="reveal", align=align))
     return blocks, reveal_after
+
+
+def _brand_timing(brand_mode, reveal_after, duration, render_seed):
+    if brand_mode == "none":
+        return duration + 1.0
+    if brand_mode == "static":
+        return 0.0
+    frac = (int(render_seed) % 100) / 100.0
+    if reveal_after:
+        return reveal_after + 1.5 + frac * 2.0
+    return min(duration * (0.25 + 0.20 * frac), max(0.5, duration - 1.5))
+
+
+def _line_box(draw, y, line, font, track, align, column_left, column_right):
+    width = _text_w(draw, line, font, track)
+    if align == "left":
+        x = column_left
+    elif align == "right":
+        x = column_right - width
+    else:
+        x = column_left + (column_right - column_left - width) / 2.0
+    x = min(max(x, SAFE_LEFT), max(SAFE_LEFT, SAFE_RIGHT - width))
+    return x, width
+
+
+def _pack_boxes(draw, blocks, y0, column_left, column_right, gap=GAP, brand_extra=0.0):
+    boxes = []
+    y = y0
+    for i, block in enumerate(blocks):
+        if block.layer == "brand":
+            y += brand_extra
+        for line in block.lines:
+            x, width = _line_box(draw, y, line, block.font, block.track,
+                                 block.align, column_left, column_right)
+            boxes.append({
+                "text": line, "x": x, "y": y, "w": width, "h": block.line_h,
+                "layer": block.layer, "font": block.font, "fill": block.fill,
+                "track": block.track,
+            })
+            y += block.line_h
+        y += gap
+    return boxes
+
+
+def _stack_height(blocks, gap=GAP, brand_extra=0.0):
+    if not blocks:
+        return 0.0
+    total = sum(b.height for b in blocks) + gap * max(0, len(blocks) - 1)
+    if any(b.layer == "brand" for b in blocks):
+        total += brand_extra
+    return total
+
+
+def _place(draw, kind, payload, title, card_font, brand_font, brand,
+           template, brand_mode, render_seed, duration):
+    """Return (boxes, reveal_after, brand_at) inside the title-safe region."""
+    template = template or "minimal_center"
+    brand_mode = brand_mode or "reveal"
+    include_brand = brand_mode != "none" and bool(brand)
+    brand_layer = "brand"
+
+    if template == "signal" or kind in ("technical_difficulties", "dead_air"):
+        return _place_signal(draw, kind, payload, title, card_font, brand_font,
+                             brand, brand_mode, duration)
+
+    if template == "minimal_corner":
+        max_w = SAFE_W * 0.42
+        blocks, reveal_after = _content_blocks(
+            draw, kind, payload, title, card_font, max_w,
+            size_lines=SZ_LINES * 0.75, align="left")
+        corner = int(render_seed) % 4
+        align = "left" if corner in (0, 2) else "right"
+        for block in blocks:
+            block.align = align
+        if include_brand:
+            bf = _load(brand_font, SZ_BRAND * 0.45)
+            blocks.append(Block([brand], bf, SZ_BRAND * 0.45, (255, 255, 255),
+                                track=TRACK_BRAND, lh=1.15, layer=brand_layer,
+                                align=align))
+        total = _stack_height(blocks, gap=GAP * 0.6)
+        y0 = SAFE_BOTTOM - total if corner in (0, 1) else SAFE_TOP
+        y0 = min(max(y0, SAFE_TOP), max(SAFE_TOP, SAFE_BOTTOM - total))
+        if align == "left":
+            left, right = SAFE_LEFT, SAFE_LEFT + max_w
+        else:
+            left, right = SAFE_RIGHT - max_w, SAFE_RIGHT
+        boxes = _pack_boxes(draw, blocks, y0, left, right, gap=GAP * 0.6)
+        return boxes, reveal_after, _brand_timing(brand_mode, reveal_after, duration, render_seed)
+
+    if template == "image_caption":
+        max_w = SAFE_W * 0.88
+        blocks, reveal_after = _content_blocks(
+            draw, kind, payload, title, card_font, max_w,
+            size_lines=SZ_LINES * 0.7, align="left")
+        if include_brand:
+            bf = _load(brand_font, SZ_BRAND * 0.4)
+            blocks.append(Block([brand], bf, SZ_BRAND * 0.4, (255, 255, 255),
+                                track=TRACK_BRAND, lh=1.15, layer=brand_layer,
+                                align="left"))
+        total = _stack_height(blocks, gap=GAP * 0.5)
+        y0 = min(max(SAFE_BOTTOM - total, SAFE_TOP), SAFE_BOTTOM - total)
+        boxes = _pack_boxes(draw, blocks, y0, SAFE_LEFT, SAFE_LEFT + max_w,
+                            gap=GAP * 0.5)
+        return boxes, reveal_after, _brand_timing(brand_mode, reveal_after, duration, render_seed)
+
+    if template == "information_board":
+        max_w = SAFE_W * 0.72
+        blocks, reveal_after = _content_blocks(
+            draw, kind, payload, title, card_font, max_w, align="left")
+        if include_brand:
+            bf = _load(brand_font, SZ_BRAND * 0.45)
+            blocks.append(Block([brand], bf, SZ_BRAND * 0.45, (255, 255, 255),
+                                track=TRACK_BRAND, lh=1.15, layer=brand_layer,
+                                align="left"))
+        total = _stack_height(blocks)
+        y0 = SAFE_TOP + max(0.0, (SAFE_H - total) / 2.0)
+        boxes = _pack_boxes(draw, blocks, y0, SAFE_LEFT, SAFE_LEFT + max_w)
+        return boxes, reveal_after, _brand_timing(brand_mode, reveal_after, duration, render_seed)
+
+    # minimal_center (and unknown names that already fell back)
+    max_w = min(W - 2 * PAD, SAFE_W)
+    blocks, reveal_after = _content_blocks(
+        draw, kind, payload, title, card_font, max_w)
+    if include_brand:
+        bf = _load(brand_font, SZ_BRAND)
+        blocks.append(Block([brand], bf, SZ_BRAND, (255, 255, 255),
+                            track=TRACK_BRAND, lh=1.15, layer=brand_layer))
+    total = _stack_height(blocks, brand_extra=BRAND_MARGIN_TOP)
+    y0 = SAFE_TOP + max(0.0, (SAFE_H - total) / 2.0)
+    boxes = _pack_boxes(draw, blocks, y0, SAFE_LEFT, SAFE_RIGHT,
+                        brand_extra=BRAND_MARGIN_TOP)
+    return boxes, reveal_after, _brand_timing(brand_mode, reveal_after, duration, render_seed)
+
+
+def _place_signal(draw, kind, payload, title, card_font, brand_font, brand,
+                  brand_mode, duration):
+    """Failure / dead-air caption inside the lower safe band."""
+    text = str(payload.get("text") or title or
+               ("PLEASE STAND BY" if payload.get("variant") != "nosignal" else "NO SIGNAL"))
+    text = text.replace("{BRAND}", brand)
+    f = _load(card_font, 5.0 * VMIN)
+    lines = _wrap(draw, text, f, SAFE_W * 0.9, 0.35)
+    pad = 1.4 * VMIN
+    band_h = f.size * 1.2 * max(1, len(lines)) + pad * 2
+    band_top = min(max(H * 0.92 - band_h, SAFE_TOP), SAFE_BOTTOM - band_h)
+    boxes = []
+    y = band_top + pad
+    for line in lines:
+        width = _text_w(draw, line, f, 0.35)
+        x = SAFE_LEFT + (SAFE_W - width) / 2.0
+        boxes.append({
+            "text": line, "x": x, "y": y, "w": width, "h": f.size * 1.2,
+            "layer": "base", "font": f, "fill": (255, 255, 255), "track": 0.35,
+        })
+        y += f.size * 1.2
+    brand_at = duration + 1.0
+    if brand_mode != "none" and brand and kind == "dead_air":
+        bf = _load(brand_font, 2.4 * VMIN)
+        width = _text_w(draw, brand, bf, 0.3)
+        boxes.append({
+            "text": brand, "x": SAFE_RIGHT - width, "y": SAFE_BOTTOM - bf.size,
+            "w": width, "h": bf.size * 1.2, "layer": "brand", "font": bf,
+            "fill": (255, 255, 255), "track": 0.3,
+        })
+        brand_at = 0.0 if brand_mode == "static" else max(1.0, duration - 2.0)
+    return boxes, 0.0, brand_at
+
+
+def measure_layout(kind, payload, title, template="minimal_center",
+                   brand_mode="reveal", brand="TV", duration=None, render_seed=0):
+    """Safe-area boxes at 1920×1080. No encode, no files."""
+    duration = float(duration if duration is not None else config.CARD_DEFAULT_DURATION)
+    card_font, brand_font = fonts()
+    dummy = Image.new("RGB", (W, H), (0, 0, 0))
+    draw = ImageDraw.Draw(dummy)
+    boxes, reveal_after, brand_at = _place(
+        draw, kind, payload, title, card_font, brand_font, brand,
+        template, brand_mode, render_seed, duration)
+    public = [{k: box[k] for k in ("text", "x", "y", "w", "h", "layer")} for box in boxes]
+    return {"boxes": public, "reveal_after": reveal_after, "brand_at": brand_at,
+            "duration": duration}
 
 
 # ------------------------------------------------------------- backgrounds --
@@ -413,7 +605,8 @@ def _scrim(img):
 
 
 # ------------------------------------------------------------- composition --
-def _compose(kind, payload, title, duration, card_font, brand_font, brand):
+def _compose(kind, payload, title, duration, card_font, brand_font, brand,
+             template="minimal_center", brand_mode="reveal", render_seed=0):
     """Render the three layers of a text card.
 
     Split by layer rather than by time: the base never changes, and the reveal
@@ -424,35 +617,27 @@ def _compose(kind, payload, title, duration, card_font, brand_font, brand):
     bg = _bg_image(payload.get("bg"))
     if bg is not None:
         base = _scrim(bg)
+    elif template == "image_caption":
+        base = Image.new("RGB", (W, H), (8, 8, 12))
 
     measure = ImageDraw.Draw(base)
-    blocks, reveal_after = _layout(measure, kind, payload, title,
-                                   card_font, brand_font, brand)
-
-    total = sum(b.height for b in blocks) + GAP * max(0, len(blocks) - 1)
-    for b in blocks:
-        if b.layer == "brand":
-            total += BRAND_MARGIN_TOP
-    y = (H - total) / 2.0
+    boxes, reveal_after, brand_at = _place(
+        measure, kind, payload, title, card_font, brand_font, brand,
+        template, brand_mode, render_seed, duration)
 
     reveal_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     brand_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d_base = ImageDraw.Draw(base)
-    d_rev = ImageDraw.Draw(reveal_layer)
-    d_brand = ImageDraw.Draw(brand_layer)
-
-    brand_at = 0.0
-    for b in blocks:
-        if b.layer == "brand":
-            y += BRAND_MARGIN_TOP
-        draw = {"base": d_base, "reveal": d_rev, "brand": d_brand}[b.layer]
-        fill = b.fill if b.layer == "base" else b.fill + (235 if b.layer == "brand" else 255,)
-        for line in b.lines:
-            _draw_centred(draw, y, line, b.font, fill, b.track)
-            y += b.line_h
-        if b.layer == "brand":
-            brand_at = reveal_after + 2.5 if reveal_after else min(3.0, duration * 0.35)
-        y += GAP
+    drawers = {
+        "base": ImageDraw.Draw(base),
+        "reveal": ImageDraw.Draw(reveal_layer),
+        "brand": ImageDraw.Draw(brand_layer),
+    }
+    for box in boxes:
+        layer = box["layer"]
+        draw = drawers.get(layer, drawers["base"])
+        fill = box["fill"] if layer == "base" else tuple(box["fill"][:3]) + (
+            235 if layer == "brand" else 255,)
+        _draw_at(draw, box["x"], box["y"], box["text"], box["font"], fill, box["track"])
 
     return base, reveal_layer, brand_layer, reveal_after, brand_at
 
@@ -523,7 +708,7 @@ def _now_parts(epoch, tz):
     return datetime.fromtimestamp(epoch, tz) if tz else datetime.fromtimestamp(epoch)
 
 
-def _frames_station_id(payload, brand, card_font, brand_font, duration):
+def _frames_station_id(payload, brand, card_font, brand_font, duration, brand_mode="none"):
     """Reproduce the three station-ID animations from the stylesheet.
 
     style 1 fades the logo up, style 2 scales it in from 0.6 while its tracking
@@ -585,17 +770,20 @@ def _frames_station_id(payload, brand, card_font, brand_font, duration):
     return frame
 
 
-def _frames_dead_air(payload, brand, card_font, brand_font, duration):
+def _frames_dead_air(payload, brand, card_font, brand_font, duration, brand_mode="none"):
     """Black, then the brand mark eases in near the end — the stylesheet's
     dead-logo fade at (duration - 2)s over 1.2s."""
     f = _load(brand_font, 2.4 * VMIN)
-    show_at = max(1.0, duration - 2.0)
+    show_at = 0.0 if brand_mode == "static" else max(1.0, duration - 2.0)
+    hide = brand_mode == "none"
 
     def frame(t):
         """One frame of the dead-air card: black, with the corner brand
         easing in during the final two seconds."""
         img = Image.new("RGB", (W, H), (0, 0, 0))
-        a = min(1.0, max(0.0, (t - show_at) / 1.2))
+        if hide:
+            return img
+        a = 1.0 if brand_mode == "static" else min(1.0, max(0.0, (t - show_at) / 1.2))
         if a > 0:
             layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             d = ImageDraw.Draw(layer)
@@ -608,7 +796,7 @@ def _frames_dead_air(payload, brand, card_font, brand_font, duration):
     return frame
 
 
-def _frames_local_time(payload, brand, card_font, brand_font, duration):
+def _frames_local_time(payload, brand, card_font, brand_font, duration, brand_mode="none"):
     """The clock card. Rendered from the wall clock at render time, which is why
     this kind carries a short TTL and is re-rendered rather than cached."""
     city = str(payload.get("city") or "").upper()
@@ -632,8 +820,9 @@ def _frames_local_time(payload, brand, card_font, brand_font, duration):
             (city, f_city, DIM, 0.6, 0),
             (now.strftime("%I:%M %p").lstrip("0"), f_clock, FG, 0.02, 0),
             (now.strftime("%A, %B ") + str(now.day), f_date, (187, 187, 187), 0.0, 0),
-            (brand, f_bug, (255, 255, 255), 0.3, 3.0 * VMIN),
         ]
+        if brand_mode != "none":
+            items.append((brand, f_bug, (255, 255, 255), 0.3, 3.0 * VMIN))
         for y, text, font, fill, tr in _column(d, items, 1.5 * VMIN):
             _draw_centred(d, y, text, font, fill, tr)
         return img
@@ -641,7 +830,7 @@ def _frames_local_time(payload, brand, card_font, brand_font, duration):
     return frame
 
 
-def _frames_weather(payload, brand, card_font, brand_font, duration):
+def _frames_weather(payload, brand, card_font, brand_font, duration, brand_mode="none"):
     """Current conditions, laid out like the stylesheet's weather card. Carries a
     TTL for the same reason the clock does."""
     emoji = str(payload.get("emoji") or "")
@@ -667,8 +856,9 @@ def _frames_weather(payload, brand, card_font, brand_font, duration):
         (str(payload.get("temp") or ""), f_temp, FG, 0.0, 0),
         (str(payload.get("conditions") or ""), f_cond, (205, 214, 224), 0.0, 0),
         (meta, f_meta, DIM, 0.1, 1.0 * VMIN),
-        (brand, f_bug, (255, 255, 255), 0.3, 3.0 * VMIN),
     ]
+    if brand_mode != "none":
+        items_spec.append((brand, f_bug, (255, 255, 255), 0.3, 3.0 * VMIN))
     items_spec = [it for it in items_spec if it[0]]
 
     def frame(t):
@@ -785,9 +975,10 @@ def _encode(dest, base, reveal, brand_img, duration, reveal_at, brand_at, music)
                     "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
         ai = 3
 
+        brand_fade = 0.05 if brand_at <= 0 else FADE_BRAND
         chains = [
             "[1:v]format=rgba,fade=in:st=%.2f:d=%.2f:alpha=1[rv]" % (reveal_at, FADE_REVEAL),
-            "[2:v]format=rgba,fade=in:st=%.2f:d=%.2f:alpha=1[bd]" % (brand_at, FADE_BRAND),
+            "[2:v]format=rgba,fade=in:st=%.2f:d=%.2f:alpha=1[bd]" % (brand_at, brand_fade),
             "[0:v][rv]overlay=format=auto[t1]",
             "[t1][bd]overlay=format=auto[t2]",
             # A short fade at each end so a card does not slam in or out when a
@@ -916,6 +1107,31 @@ def is_stale(kind, dest):
     return (time.time() - dest.stat().st_mtime) > ttl
 
 
+def stamp_presentation(row, rel_uri=None):
+    """Payload with template/render_seed/brand_mode merged. Does not write SQLite.
+
+    Used by explicit render/refresh so legacy rows persist a derived seed only
+    when a file is actually (re)written — never during inspection or selection.
+    """
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    resolved = creative.resolve_creative(row)
+    template = creative.resolve_template(
+        row.get("kind"), resolved["family"], resolved.get("template"), strict=False)
+    payload = creative.merge_creative(payload, {
+        "template": template,
+        "render_seed": int(resolved["render_seed"]),
+        "brand_mode": resolved["brand_mode"],
+    })
+    payload["brand"] = config.BRAND
+    payload["branded"] = True
+    return payload
+
+
 def render_one(row, card_font, brand_font, brand, force=False):
     """Render a single card row. Returns (status, rel_uri).
 
@@ -927,6 +1143,13 @@ def render_one(row, card_font, brand_font, brand, force=False):
         payload = json.loads(row["payload"] or "{}")
     except Exception:
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    resolved = creative.resolve_creative({**dict(row), "payload": payload})
+    template = creative.resolve_template(
+        kind, resolved["family"], resolved.get("template"), strict=False)
+    brand_mode = resolved["brand_mode"]
+    render_seed = resolved["render_seed"]
 
     duration = float(row["duration"] or config.CARD_DEFAULT_DURATION)
     rel = "%s/%s.mp4" % (OUT_SUBDIR, str(row["id"]).replace(":", "_").replace("/", "_"))
@@ -939,7 +1162,8 @@ def render_one(row, card_font, brand_font, brand, force=False):
     partial = dest.with_name(".%s.%s.part.mp4" % (dest.stem, uuid.uuid4().hex))
     try:
         if kind in ANIMATED_BUILDERS:
-            frame_fn = ANIMATED_BUILDERS[kind](payload, brand, card_font, brand_font, duration)
+            frame_fn = ANIMATED_BUILDERS[kind](
+                payload, brand, card_font, brand_font, duration, brand_mode)
             _encode_frames(partial, frame_fn, duration, music)
         elif kind == "technical_difficulties" and payload.get("variant") == "static":
             # caption only; ffmpeg supplies the grain underneath it
@@ -951,7 +1175,8 @@ def render_one(row, card_font, brand_font, brand, force=False):
                     duration + 1, music)
         else:
             base, rev, bmg, reveal_at, brand_at = _compose(
-                kind, payload, row["title"], duration, card_font, brand_font, brand)
+                kind, payload, row["title"], duration, card_font, brand_font, brand,
+                template=template, brand_mode=brand_mode, render_seed=render_seed)
             if not reveal_at:
                 reveal_at = duration + 1        # nothing to reveal: never fires
             _encode(partial, base, rev, bmg, duration, reveal_at, brand_at, music)
@@ -1009,14 +1234,8 @@ def render_all(limit=None, kinds=None, force=False):
             continue
         stats[status] += 1
         with db.conn() as c:
-            # Stamp the brand this file was rendered with, so a later change of
-            # BRAND can be detected rather than silently leaving stale marks.
-            try:
-                pay = json.loads(row["payload"] or "{}")
-            except Exception:
-                pay = {}
-            pay["brand"] = config.BRAND
-            pay["branded"] = True
+            # Stamp brand plus presentation; only happens on explicit render.
+            pay = stamp_presentation(row, info)
             c.execute("UPDATE playables SET uri=?, health='ok', payload=? WHERE id=?",
                       (info, json.dumps(pay), row["id"]))
             c.commit()

@@ -20,7 +20,7 @@ from pathlib import Path
 from PIL import Image
 
 from bumparr import brandslam, config, db, ffmpeg_pipe
-from bumparr.creative import with_creative
+from bumparr.creative import with_presentation
 
 # Length bands, in seconds. The short end exists to make exact fills possible;
 # the long end is a proper station ident you can actually read.
@@ -136,7 +136,7 @@ def generate(count=60, seed=None, dry_run=False):
             continue
         try:
             with db.conn() as c:
-                payload = with_creative(
+                payload = with_presentation(
                     {"roulette": brandslam.describe(spec), "branded": True,
                      "brand": config.BRAND},
                     {"id": pid, "type": "video", "kind": "station_id",

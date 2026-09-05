@@ -154,6 +154,43 @@ function addEnable(el, b) {
   el.appendChild(x);
 }
 
+function provenanceLine(b) {
+  const p = b.payload || {};
+  const bits = [];
+  [b.source, p.source, p.bg_creator, p.bg_title].forEach((value) => {
+    const text = value == null ? "" : String(value);
+    if (text && bits.indexOf(text) === -1) bits.push(text);
+  });
+  return bits.join(" · ");
+}
+
+function creativeLine(b) {
+  const cr = b.creative || {};
+  const bits = [cr.family, cr.template, cr.brand_mode, cr.energy, cr.audio]
+    .filter((value) => value !== undefined && value !== null && value !== "");
+  if (cr.text_heavy) bits.push("text-heavy");
+  return bits.join(" · ");
+}
+
+function factorsLine(b) {
+  const f = b.selection && b.selection.factors;
+  if (!f) return "";
+  const parts = ["base", "season", "daypart", "recency", "affinity", "fatigue"]
+    .filter((key) => f[key] !== undefined)
+    .map((key) => key + " " + f[key]);
+  if (f.score !== undefined) parts.push("score " + f.score);
+  return parts.join(" · ");
+}
+
+function decorateCard(card, b) {
+  const cr = creativeLine(b);
+  if (cr) card.append(makeEl("div", "pv-creative", cr));
+  const prov = provenanceLine(b);
+  if (prov) card.append(makeEl("div", "pv-meta", prov));
+  const fac = factorsLine(b);
+  if (fac) card.append(makeEl("div", "pv-factors", fac));
+}
+
 function cardEl(b) {
   const card = document.createElement("div");
   card.className = "pv-card";
@@ -180,9 +217,88 @@ function cardEl(b) {
     card.className = "pv-card pv-textcard";
     card.append(makeEl("div", "pv-kind", b.kind || ""), makeEl("div", "tc", txt));
   }
+  decorateCard(card, b);
   addDelete(card, b);
   addEnable(card, b);
   return card;
+}
+
+function packSummaryEl(d) {
+  const root = makeEl("div", "pack-summary");
+  if (!d || typeof d !== "object") {
+    root.append(makeEl("div", "preview-err", "preview failed: empty response"));
+    return root;
+  }
+  const count = d.count || 0;
+  root.append(makeEl("div", "",
+    "Requested " + d.requested + "s | Composed " + d.total + "s | Gap " + d.gap +
+    "s | " + (d.exact ? "Within tolerance" : "Outside tolerance") +
+    " | " + count + " item(s)"));
+  const relaxed = (d.composition && d.composition.relaxed_rules) || [];
+  if (relaxed.length) {
+    root.append(makeEl("div", "attn pv-relax", "Relaxed: " + relaxed.join(", ")));
+  }
+  if (!count) {
+    root.append(makeEl("div", "empty", d.note || "nothing in this pack"));
+  }
+  return root;
+}
+
+function renderPackPreview(d) {
+  const summary = $("#preview-summary");
+  const grid = $("#preview-grid");
+  if (summary) summary.replaceChildren(packSummaryEl(d));
+  if (!grid) return;
+  grid.replaceChildren();
+  (d.bumpers || []).forEach((b) => grid.appendChild(cardEl(b)));
+}
+
+async function previewPack(seconds) {
+  const summary = $("#preview-summary");
+  const grid = $("#preview-grid");
+  if (grid) grid.replaceChildren();
+  if (summary) summary.replaceChildren(makeEl("div", "muted", "composing " + seconds + "s pack…"));
+  try {
+    const r = await fetch("/api/bumpers/fill?seconds=" + encodeURIComponent(seconds) + "&explain=true");
+    const d = await r.json();
+    if (!r.ok) {
+      if (summary) summary.replaceChildren(makeEl("div", "preview-err",
+        (d && d.error) ? d.error : ("preview failed: " + r.status)));
+      return d;
+    }
+    renderPackPreview(d);
+    return d;
+  } catch (e) {
+    if (summary) summary.replaceChildren(makeEl("div", "preview-err", "preview failed: " + e));
+    return null;
+  }
+}
+
+async function previewOne() {
+  const summary = $("#preview-summary");
+  const grid = $("#preview-grid");
+  if (grid) grid.replaceChildren();
+  if (summary) summary.replaceChildren(makeEl("div", "muted", "loading one item…"));
+  try {
+    const r = await fetch("/api/bumpers/random?count=1&explain=true");
+    const d = await r.json();
+    if (!r.ok) {
+      if (summary) summary.replaceChildren(makeEl("div", "preview-err",
+        (d && d.error) ? d.error : ("preview failed: " + r.status)));
+      return d;
+    }
+    if (summary) summary.replaceChildren(makeEl("div", "pack-summary",
+      d.count ? "one item" : "nothing to preview"));
+    if (grid) {
+      grid.replaceChildren();
+      (d.bumpers || []).forEach((b) => grid.appendChild(cardEl(b)));
+      if (!d.count) grid.appendChild(makeEl("div", "empty", "nothing here yet"));
+    }
+    return d;
+  } catch (e) {
+    if (summary) summary.replaceChildren(makeEl("div", "preview-err", "preview failed: " + e));
+    return null;
+  }
 }
 
 function stationEl(s) {
@@ -373,6 +489,10 @@ function boot() {
   $("#shuffle").addEventListener("click", shufflePreview);
   $("#more").addEventListener("click", () => loadGrid(false));
   $("#search").addEventListener("input", (e) => { STATE.search = e.target.value; loadGrid(true); });
+  const previewOneBtn = $("#preview-one");
+  if (previewOneBtn) previewOneBtn.addEventListener("click", previewOne);
+  document.querySelectorAll("[data-pack]").forEach((b) =>
+    b.addEventListener("click", () => previewPack(b.dataset.pack)));
 
   loadStatus();
   loadGrid(true);
@@ -384,5 +504,6 @@ function boot() {
 const COMMONJS = typeof module !== "undefined" && module.exports;
 if (typeof document !== "undefined" && !COMMONJS) boot();
 if (COMMONJS) {
-  module.exports = { makeEl, cardEl, stationEl, pollJob, enableBumper };
+  module.exports = { makeEl, cardEl, stationEl, pollJob, enableBumper,
+    previewPack, previewOne, packSummaryEl, renderPackPreview };
 }

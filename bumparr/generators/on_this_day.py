@@ -22,7 +22,7 @@ import urllib.request
 
 from bumparr import config, db
 from bumparr.content_filter import weight_for
-from bumparr.creative import with_creative
+from bumparr.creative import with_presentation
 
 
 def fetch_events():
@@ -136,7 +136,7 @@ def generate(target: int) -> int:
             body = {"lines": lines, "for_date": today}
             identity = json.dumps(body, sort_keys=True)
             pid = "card:on_this_day:" + hashlib.md5(identity.encode()).hexdigest()[:12]
-            pj = json.dumps(with_creative(
+            pj = json.dumps(with_presentation(
                 body, {"id": pid, "type": "card", "kind": "on_this_day",
                        "source": "generated"}),
                 sort_keys=True)

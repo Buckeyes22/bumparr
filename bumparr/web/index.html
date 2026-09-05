@@ -74,6 +74,19 @@
       <pre id="log" class="log">ready.</pre>
     </section>
 
+    <!-- read-only preview: one item or a duration pack. Never advances playout. -->
+    <section class="panel wide">
+      <h2>Preview
+        <button id="preview-one" class="mini">one item</button>
+        <button data-pack="15" class="mini">15s</button>
+        <button data-pack="30" class="mini">30s</button>
+        <button data-pack="60" class="mini">60s</button>
+        <button data-pack="90" class="mini">90s</button>
+      </h2>
+      <div id="preview-summary"></div>
+      <div id="preview-grid" class="grid"></div>
+    </section>
+
     <!-- browser: filter by category, see everything -->
     <section class="panel wide">
       <h2>Browse the pool

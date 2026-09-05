@@ -14,6 +14,7 @@ class FakeNode {
   }
   append(...nodes) { this.children.push(...nodes); }
   appendChild(node) { this.children.push(node); return node; }
+  replaceChildren(...nodes) { this.children = nodes; }
   addEventListener() {}
 }
 
@@ -31,7 +32,8 @@ global.document = {
   querySelectorAll() { return []; },
 };
 
-const { cardEl, pollJob, enableBumper, stationEl } = require("./app.js");
+const { cardEl, pollJob, enableBumper, stationEl, previewPack, previewOne,
+        packSummaryEl } = require("./app.js");
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -83,8 +85,10 @@ test("an attacker-controlled type cannot create an element", () => {
     payload: { text: "literal <script>not markup</script>" },
   });
   const nodes = descendants(card);
-  assert.deepEqual(nodes.map((node) => node.tagName), ["DIV", "DIV", "DIV", "BUTTON"]);
-  assert.equal(nodes[2].textContent, "literal <script>not markup</script>");
+  assert.equal(nodes.filter((node) => node.tagName === "IFRAME").length, 0);
+  assert.equal(nodes.filter((node) => node.tagName === "SCRIPT").length, 0);
+  assert.equal(nodes.find((node) => node.className === "tc").textContent,
+               "literal <script>not markup</script>");
 });
 
 const enableButton = (card) => descendants(card).find(
@@ -211,4 +215,75 @@ test("station panel renders now/next and URLs as text and values, never markup",
 test("station panel says when ffmpeg is missing", () => {
   const el = stationEl({ ffmpeg: false, conformed: 0, eligible: 4, urls: {}, channels: {} });
   assert.ok(JSON.stringify(el).includes("ffmpeg not found"));
+});
+
+test("preview cards keep hostile creative strings as text", () => {
+  const family = '<img src=x onerror="globalThis.pwned=9">';
+  const card = cardEl({
+    type: "card", kind: "psa", title: "x",
+    source: '<script>globalThis.pwned=8</script>',
+    payload: { lines: ["Stay."], source: "operator" },
+    creative: { family, template: "minimal_center", brand_mode: "reveal" },
+    selection: { factors: { base: 1, score: 0.5 } },
+  });
+  const text = descendants(card).find((n) => n.className === "pv-creative").textContent;
+  assert.ok(text.includes(family));
+  assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("empty pack preview shows a message, not leftover cards", () => {
+  const el = packSummaryEl({
+    requested: 15, total: 0, gap: 15, exact: false, count: 0, bumpers: [],
+    note: "no bumper is short enough for this gap",
+    composition: { relaxed_rules: [] },
+  });
+  const text = JSON.stringify(el);
+  assert.ok(text.includes("nothing in this pack") || text.includes("no bumper is short enough"));
+  assert.ok(text.includes("Requested 15s"));
+  assert.equal(el.children.filter((n) => n.className === "pv-card").length, 0);
+});
+
+test("pack summary reports error text for a missing body", () => {
+  const el = packSummaryEl(null);
+  assert.ok(JSON.stringify(el).includes("preview failed: empty response"));
+});
+
+test("pack preview only GETs fill and never mutates history", async () => {
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || "GET" });
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        requested: 15, total: 0, gap: 15, exact: false, count: 0, bumpers: [],
+        composition: { relaxed_rules: ["exit_ident"] },
+      }),
+    };
+  };
+  await previewPack(15);
+  assert.ok(calls.length >= 1);
+  assert.ok(calls.every((c) => c.method === "GET"));
+  assert.ok(calls.every((c) => !/\/station\//.test(c.url)));
+  assert.ok(calls.some((c) => c.url.includes("/api/bumpers/fill") && c.url.includes("seconds=15")));
+  assert.ok(calls.every((c) => !c.url.includes("advance")));
+});
+
+test("one-item preview is a GET with explain and reports errors as text", async () => {
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    calls.push({ url: String(url), method: (opts && opts.method) || "GET" });
+    return { ok: false, status: 503, json: async () => ({ error: "offline" }) };
+  };
+  await previewOne();
+  assert.ok(calls.every((c) => c.method === "GET"));
+  assert.ok(calls.some((c) => c.url.includes("/api/bumpers/random") && c.url.includes("explain=true")));
+  assert.match(document.querySelector("#preview-summary").children[0].textContent, /offline/);
+});
+
+test("failed pack preview reports the error as text", async () => {
+  global.fetch = async () => { throw new Error("network down"); };
+  await previewPack(30);
+  assert.match(document.querySelector("#preview-summary").children[0].textContent,
+               /preview failed: Error: network down/);
 });

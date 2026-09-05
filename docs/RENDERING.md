@@ -20,8 +20,9 @@ consumer cannot play.
 playables row (type=card)
   └─ render_all:  select unrendered (volatile kinds always re-checked)
        └─ render_one per card
-            ├─ layout:  _layout / _compose — block stack, centred,
-            │           reveal + brand pre-reserved (no mid-play jump)
+            ├─ layout:  template-aware _place / _compose — title-safe
+            │           1920×1080 region; reveal + brand pre-reserved
+            │           (no mid-play jump). Brand mode reveal/static/none.
             ├─ draw:    PIL — base layer (bg image + scrim + text),
             │           transparent reveal layer, transparent brand layer
             └─ encode:  ffmpeg → 1080p30 H.264 + AAC (silent track if no
@@ -58,13 +59,39 @@ is the per-file check; `refresh_volatile` is the cheap scheduled pass.
 This is also why these two kinds are the only ones allowed into
 `render_all`'s candidate set after they have a `uri`.
 
+## Templates
+
+A finite set, not a plugin framework. Kind/family compatibility is defined in
+`bumparr.creative`. Strict creation/preview rejects an incompatible explicit
+template; runtime rendering falls back to the documented default.
+
+| Template | Use |
+|---|---|
+| `minimal_center` | Current centred column. Default for ordinary text cards (`presentation.default_template`). |
+| `minimal_corner` | Sparse safe-corner/edge text. |
+| `image_caption` | Background (or dark ground) plus a restrained safe-area caption. |
+| `information_board` | Weather, clock, fact, and number presentation. Weather/clock keep their existing builders. |
+| `signal` | Failure / dead-air presentation (existing technical-difficulties and dead-air builders). |
+| `ident` | Existing station-ident builders. Ident family only. |
+
+New items persist `payload.creative.template`, `render_seed`, and `brand_mode`.
+Legacy items derive `render_seed` from a stable id hash (not process `hash()`)
+and persist those fields only during an explicit render or refresh — never
+inspection or selection. Existing files stay until you re-render (`--force`).
+
+Brand modes: `reveal` (timed fade, delay varied by `render_seed`), `static`
+(visible from the first frame), `none` (no brand layer). Idents and failure
+cards default to `none`; periodic idents carry continuity instead of a forced
+reveal on every new card. Profile default for ordinary cards is `reveal`.
+
 ## Layout fidelity
 
 The renderer deliberately mirrors the reference player's CSS: sizes are kept
 as the stylesheet's `vmin` numbers (1 vmin = 10.8px at 1080p) so the file can
 be diffed against the stylesheet; the reveal and brand elements occupy layout
 space from frame one (opacity 0 in the browser, transparent layers here) so
-content above them never shifts when they appear.
+content above them never shifts when they appear. Every template keeps glyphs
+inside the 10% title-safe region at 1920×1080.
 
 Fonts come from `CARD_FONT` / `BRAND_FONT` with bundled OFL fallbacks
 (see [fonts/README.md](../bumparr/fonts/README.md)); `.woff2` names resolve to a same-stem

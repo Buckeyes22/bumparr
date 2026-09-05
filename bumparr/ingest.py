@@ -22,7 +22,7 @@ import uuid
 
 from bumparr import config, db, paths
 from bumparr.card_validation import validate_card
-from bumparr.creative import with_creative
+from bumparr.creative import with_presentation
 
 log = logging.getLogger(__name__)
 UA = {"User-Agent": "Mozilla/5.0 bumparr (polite)"}
@@ -79,7 +79,7 @@ def _insert_stream(title, url, direct, kind="webcam", region="user-added"):
     checked); False routes it through the same-origin proxy instead.
     """
     pid = "stream:cam:" + hashlib.md5(url.encode()).hexdigest()[:10]
-    payload = json.dumps(with_creative(
+    payload = json.dumps(with_presentation(
         {"direct": direct, "label": title, "region": region},
         {"id": pid, "type": "stream", "kind": kind, "source": "user-added",
          "tags": "live,window,user"}))
@@ -271,7 +271,7 @@ def _download_image(url, category, stem, title=""):
         return False
     rel = "%s/%s.jpg" % (category, stem)
     pid = "img:" + rel
-    payload = json.dumps(with_creative(
+    payload = json.dumps(with_presentation(
         {"pan": True, "title": (title or "")[:120], "source": "Library of Congress"},
         {"id": pid, "type": "image", "kind": category, "source": "loc",
          "tags": "image,pd,gov,loc"}))
@@ -752,7 +752,7 @@ def _register_procedural(kind):
         for text, variant in items:
             pid = "card:%s:%s" % (kind, hashlib.md5((kind + text + variant).encode()).hexdigest()[:10])
             body = {"variant": variant, "text": text} if variant else {}
-            payload = json.dumps(with_creative(
+            payload = json.dumps(with_presentation(
                 body, {"id": pid, "type": "card", "kind": kind, "source": "render",
                        "tags": "visual,user"}))
             before = c.total_changes
@@ -804,7 +804,7 @@ def register_card_seeds(kind):
                 payload["answer"] = clean.get("answer", "")
             identity = json.dumps(payload, sort_keys=True)
             pid = "card:%s:seed:%s" % (kind, hashlib.md5(identity.encode()).hexdigest()[:10])
-            pj = json.dumps(with_creative(
+            pj = json.dumps(with_presentation(
                 payload, {"id": pid, "type": "card", "kind": kind, "source": "seed",
                           "tags": "starter"}),
                 sort_keys=True)

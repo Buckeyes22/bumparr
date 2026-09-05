@@ -3,9 +3,11 @@
 Cards are the text bumpers — the trivia, the fake PSAs, the "please stand by".
 They are the part of Bumparr with a *voice*, and the shipped ones are
 deliberately plain so you replace them. This is how. New cards persist
-optional `payload.creative` metadata (family, roles, energy, audio); the
-operator voice block lives in `config_files/channel_profile.yaml` (see
-[CONFIG.md](CONFIG.md)). Prompt rebuild from that profile is a later slice.
+optional `payload.creative` metadata (family, roles, energy, audio, template,
+render_seed, brand_mode); the operator voice block lives in
+`config_files/channel_profile.yaml` (see [CONFIG.md](CONFIG.md)). Model prompts
+are built from fixed per-kind schema instructions plus that validated voice
+block. Changing the voice never rewrites cards already in the pool.
 
 There are three ways to get cards, and they are independent — use any or all:
 
@@ -95,11 +97,15 @@ Then:
 curl -X POST 'http://localhost:8780/api/generate/psa?n=20'
 ```
 
-**The prompts are yours to edit.** They live in `PROMPTS` in
-`bumparr/generators/cards.py`, one per kind. That is where the voice of your
-channel actually lives — if the generated cards don't sound like your station,
-change the prompt, not the model. Generated cards go through the same
-structural validation, so malformed model output is rejected per item.
+**Voice lives in the channel profile, not in the prompt table.** `PROMPTS` in
+`bumparr/generators/cards.py` is the fixed per-kind JSON schema (line count,
+shape). `build_prompt` concatenates that schema with the validated voice
+block (`persona`, favored subjects, boundaries, avoid phrases/topics) and the
+requested item count. Describe traits directly in `channel_profile.yaml`;
+never tell a model to imitate a network or named creator. Generated cards
+still go through structural validation plus deterministic pre-insert checks
+(normalized duplicates, repeated batch openings, avoid phrases/topics, length
+and shape). Rejected items are counted, not inserted.
 
 Kinds a model can write: `psa`, `corrections`, `coming_up`, `achievements`,
 `tiny_games`.
@@ -132,9 +138,9 @@ To add your own verified figures, append to
 2. If it needs rules, add them to `bumparr/card_validation.py` — and add a test
    in `tests/test_card_validation.py`. If it is purely comedic, add it to
    `COMEDIC_KINDS` so it is not held to a factual standard.
-3. To generate it with a model, add a prompt to `PROMPTS` in
-   `generators/cards.py` and list the kind in the generate endpoint's
-   `model_kinds`.
+3. To generate it with a model, add a schema prompt to `PROMPTS` in
+   `generators/cards.py` (voice still comes from the channel profile) and
+   list the kind in the generate endpoint's `model_kinds`.
 4. To ship starter examples, add them to `card_seeds.json` and to
    `MODEL_CARD_KINDS` in `bumparr/ingest.py` so they register at startup.
 

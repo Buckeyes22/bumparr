@@ -255,6 +255,7 @@ def random_bumpers(request: Request,
         seen.add(r["id"])
         item = {"id": r["id"], "type": r["type"], "kind": r["kind"],
                 "title": r["title"], "duration": r["duration"],
+                "source": r.get("source"),
                 "media_url": _media_url(r, request), "payload": _payload_obj(r),
                 "creative": creative.resolve_creative(r)}
         if explain:
@@ -274,7 +275,8 @@ def fill(request: Request,
          tolerance: float = Query(1.5, ge=0, le=3600, description="acceptable over/under, seconds"),
          max_items: int = Query(8, ge=1, le=40),
          types: str = Query(None, description="comma list, e.g. video,card"),
-         placement: Literal["any", "open", "inside", "close"] = Query("any")):
+         placement: Literal["any", "open", "inside", "close"] = Query("any"),
+         explain: bool = False):
     """Hand back bumpers that add up to a requested gap.
 
     This is the contract a channel generator actually needs: "the next show
@@ -306,7 +308,7 @@ def fill(request: Request,
             continue
         pool_rows.append(r)
     season, daypart = selection.live_factors()
-    scored, _ = selection.scored_candidates(
+    scored, ctx = selection.scored_candidates(
         pool_rows, season_factors=season, daypart_factors=daypart)
     profile = channel_profile.current()
     candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))
@@ -328,10 +330,14 @@ def fill(request: Request,
     out = []
     for cand in composed.candidates:
         r = cand.row
-        out.append({"id": r["id"], "type": r["type"], "kind": r["kind"],
-                    "title": r["title"], "duration": r["duration"],
-                    "media_url": _media_url(r, request), "payload": _payload_obj(r),
-                    "creative": cand.creative or creative.resolve_creative(r)})
+        item = {"id": r["id"], "type": r["type"], "kind": r["kind"],
+                "title": r["title"], "duration": r["duration"],
+                "source": r.get("source"),
+                "media_url": _media_url(r, request), "payload": _payload_obj(r),
+                "creative": cand.creative or creative.resolve_creative(r)}
+        if explain:
+            item["selection"] = {"factors": selection.factor_view(r, ctx)}
+        out.append(item)
     total = composed.total
     return {"requested": seconds, "total": round(total, 2),
             "gap": round(seconds - total, 2),

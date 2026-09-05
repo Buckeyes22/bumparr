@@ -35,7 +35,7 @@ import uuid
 from pathlib import Path
 
 from bumparr import brandslam, config, db
-from bumparr.creative import with_creative
+from bumparr.creative import with_presentation
 
 FPS = 30
 W, H = 1920, 1080
@@ -438,7 +438,7 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
         audio = ("native" if has_native else
                  ("bed:" + Path(bed["path"]).stem[:18] if bed else "silent"))
         pid = "clip:%s:%d" % (stem, int(time.time()))
-        payload = with_creative(
+        payload = with_presentation(
             {"from": src.name, "window": [start, length],
              "audio": audio, "slam": brandslam.describe(spec),
              "scene_cuts": len(cuts),

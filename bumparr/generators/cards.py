@@ -23,35 +23,40 @@ import time
 import urllib.request
 import uuid
 
-from bumparr import config, db
-from bumparr.card_validation import validate_card
+from bumparr import channel_profile, config, db
+from bumparr.card_validation import (
+    card_body_text,
+    normalize_card_text,
+    opening_phrase,
+    pre_insert_check,
+    validate_card,
+)
 from bumparr.content_filter import weight_for
-from bumparr.creative import with_creative
+from bumparr.creative import with_presentation
 
+# Fixed per-kind schema. Voice comes from the validated channel-profile block,
+# not from these strings. Never name a network or creator here.
 PROMPTS = {
     "psa": (
-        "You write bumpers for a strange, dry, deadpan TV channel called " + config.BRAND + ". "
         "Generate {n} surreal fake public-service announcements. Each is 1 to 3 very short lines, "
         "understated and a little unsettling, never a joke with a punchline. "
         'Return ONLY a JSON array of objects: [{{"lines": ["line one", "line two"]}}]. No prose.'
     ),
     "corrections": (
-        "You write bumpers for a dry, deadpan TV channel called " + config.BRAND + ". "
         "Generate {n} fake on-air corrections to things never actually stated: retractions "
         "of claims nobody made, clarifications that clarify nothing. Understated, 1 to 3 "
         "very short lines, never a punchline. "
         'Return ONLY a JSON array: [{{"lines": ["We regret the error.", "..."]}}]. No prose.'
     ),
     "achievements": (
-        "Generate {n} mock achievement unlocks for watching television, in the style of a "
-        "game notification but wry and slightly sad. Two lines: a title, then a one-line "
+        "Generate {n} mock achievement unlocks for watching television, as a game-like "
+        "notification that is wry and slightly sad. Two lines: a title, then a one-line "
         "description of the trivial feat. "
         'Return ONLY a JSON array: [{{"lines": ["Still Awake", "You outlasted the last commercial."]}}]. No prose.'
     ),
     "coming_up": (
-        "Generate {n} fake 'coming up later' teasers for programmes that will never air on a "
-        "channel called " + config.BRAND + ". Plausible-sounding but quietly absurd, 1 to 2 "
-        "short lines, delivered straight. "
+        "Generate {n} fake 'coming up later' teasers for programmes that will never air. "
+        "Plausible-sounding but quietly absurd, 1 to 2 short lines, delivered straight. "
         'Return ONLY a JSON array: [{{"lines": ["Coming up: a man reads a map.", "Later: he folds it."]}}]. No prose.'
     ),
     "tiny_games": (
@@ -74,6 +79,58 @@ class NoModelConfigured(RuntimeError):
     supplies the model that writes them — local or cloud, their choice. Failing
     with a clear message beats emitting a malformed request to an empty URL.
     """
+
+
+def _voice_block(voice):
+    """Turn a validated voice mapping into direct trait instructions. No imitation."""
+    voice = voice or {}
+    lines = []
+    persona = str(voice.get("persona") or "").strip()
+    if persona:
+        lines.append("Voice: " + persona)
+    subjects = [str(s).strip() for s in (voice.get("favored_subjects") or []) if str(s).strip()]
+    if subjects:
+        lines.append("Favored subjects: " + ", ".join(subjects) + ".")
+    bounds = voice.get("boundaries") or {}
+    if bounds.get("allow_direct_address"):
+        lines.append("Direct address is allowed.")
+    else:
+        lines.append("Do not address the viewer directly.")
+    if bounds.get("allow_profanity"):
+        lines.append("Profanity is allowed, sparingly.")
+    else:
+        lines.append("Do not use profanity, slurs, sexual material, or targeted cruelty.")
+    if bounds.get("allow_politics"):
+        lines.append("Political subjects are allowed.")
+    else:
+        lines.append("Do not use political persuasion.")
+    if bounds.get("allow_bleak_humor"):
+        lines.append("Bleak humor is allowed.")
+    else:
+        lines.append("Do not use bleak humor.")
+    phrases = [str(p).strip() for p in (voice.get("avoid_phrases") or []) if str(p).strip()]
+    if phrases:
+        lines.append("Never use these phrases: " + ", ".join(phrases) + ".")
+    topics = [str(t).strip() for t in (voice.get("avoid_topics") or []) if str(t).strip()]
+    if topics:
+        lines.append("Avoid these topics: " + ", ".join(topics) + ".")
+    return "\n".join(lines)
+
+
+def build_prompt(kind, n, voice=None):
+    """Schema instructions + validated voice block + item count. No model call."""
+    if kind not in PROMPTS:
+        raise ValueError("unknown kind: %s (choose from %s)" % (kind, list(PROMPTS)))
+    if voice is None:
+        voice = channel_profile.current()["voice"]
+    schema = PROMPTS[kind].format(n=int(n))
+    parts = [
+        "You write on-screen bumper cards for a television channel called %s." % config.BRAND,
+        "Follow the voice traits below. Do not imitate any network, show, or named creator.",
+        _voice_block(voice),
+        schema,
+    ]
+    return "\n\n".join(part for part in parts if part)
 
 
 def _require_model():
@@ -199,23 +256,47 @@ def _prepare_item(kind, obj):
     return payload, str(lines[0])[:80]
 
 
+def _existing_same_kind_texts(conn, kind):
+    texts = set()
+    for row in conn.execute("SELECT payload FROM playables WHERE kind=?", (kind,)):
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            key = normalize_card_text(card_body_text(kind, payload))
+            if key:
+                texts.add(key)
+    return texts
+
+
 def generate(kind: str, n: int) -> tuple:
     """Generate `n` cards of `kind` with the model and register the clean ones.
 
-    Pipeline: prompt -> salvage the JSON array -> validate_card repairs or
-    rejects each item -> insert. Returns
+    Pipeline: build_prompt -> salvage the JSON array -> validate_card repairs or
+    rejects each item -> pre_insert_check -> insert. Returns
     (added, rejected); rejected counts are the quality signal, not a failure.
     Cards land with uri=NULL (unrendered) until render_cards promotes them.
+    Voice changes apply only to this batch; existing rows are not rewritten.
     """
     if kind not in PROMPTS:
         raise SystemExit(f"unknown kind: {kind} (choose from {list(PROMPTS)})")
-    raw = _call_model(PROMPTS[kind].format(n=n))
+    profile = channel_profile.current()
+    raw = _call_model(build_prompt(kind, n, profile["voice"]))
     items = _extract_array(raw)
     added = rejected = 0
     with db.conn() as c:
+        existing = _existing_same_kind_texts(c, kind)
+        batch_texts, batch_openings = set(), set()
         for i, obj in enumerate(items):
             try:
                 payload, title = _prepare_item(kind, obj)
+                reason = pre_insert_check(
+                    kind, payload, voice=profile["voice"],
+                    batch_texts=batch_texts, batch_openings=batch_openings,
+                    existing_texts=existing)
+                if reason:
+                    raise ValueError(reason)
             except (TypeError, ValueError, KeyError, IndexError) as exc:
                 print("  rejected item %d: %s" % (i, str(exc)[:120]))
                 rejected += 1
@@ -226,9 +307,10 @@ def generate(kind: str, n: int) -> tuple:
                          " " + " ".join(payload.get("lines", [])))
             weight = weight_for(DEFAULT_WEIGHT.get(kind, 0.7), card_text)
             pid = "card:%s:%s" % (kind, uuid.uuid4().hex)
-            payload = with_creative(
+            payload = with_presentation(
                 payload, {"id": pid, "type": "card", "kind": kind,
-                          "source": "generated"})
+                          "source": "generated"},
+                profile)
             cursor = c.execute(
                 """INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
                    VALUES (:id,:type,:kind,:source,:uri,:duration,:title,:payload,'',:weight,1,'ok',:created_at)""",
@@ -239,6 +321,13 @@ def generate(kind: str, n: int) -> tuple:
             )
             if cursor.rowcount:
                 added += 1
+                key = normalize_card_text(card_body_text(kind, payload))
+                opening = opening_phrase(payload)
+                if key:
+                    batch_texts.add(key)
+                    existing.add(key)
+                if opening:
+                    batch_openings.add(opening)
         c.commit()
     return added, rejected
 

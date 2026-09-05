@@ -13,7 +13,35 @@ ROLES = ("any", "open", "inside", "close", "return", "ident", "standby")
 ENERGIES = ("quiet", "neutral", "loud")
 AUDIOS = ("native", "music", "designed", "silence", "unknown")
 BRAND_MODES = ("reveal", "static", "none")
+TEMPLATES = (
+    "minimal_center", "minimal_corner", "image_caption",
+    "information_board", "signal", "ident",
+)
 PERSIST_FIELDS = ("family", "roles", "energy", "audio", "text_heavy", "music_id")
+PRESENTATION_FIELDS = ("template", "render_seed", "brand_mode")
+
+_KIND_TEMPLATES = {
+    "station_id": ("ident",),
+    "technical_difficulties": ("signal",),
+    "dead_air": ("signal",),
+    "testpattern": ("signal",),
+    "weather": ("information_board",),
+    "local_time": ("information_board",),
+}
+_FAMILY_TEMPLATES = {
+    "ident": ("ident",),
+    "failure": ("signal",),
+    "text": ("minimal_center", "minimal_corner", "image_caption"),
+    "data": ("information_board", "minimal_center", "minimal_corner", "image_caption"),
+    "authored": ("minimal_center", "minimal_corner", "image_caption"),
+    "scenic": ("image_caption", "minimal_center"),
+    "archive": ("image_caption", "minimal_center"),
+    "window": ("minimal_center",),
+}
+
+
+class TemplateError(ValueError):
+    """Strict creation/preview rejected an incompatible template."""
 
 KIND_FAMILY = {
     "station_id": "ident",
@@ -138,7 +166,7 @@ def _valid_brand(value):
 
 
 def _valid_template(value):
-    return isinstance(value, str) and bool(value.strip())
+    return isinstance(value, str) and value.strip() in TEMPLATES
 
 
 def _valid_seed(value):
@@ -239,6 +267,91 @@ def _render_seed(row):
     return int(digest[:8], 16)
 
 
+def compatible_templates(kind, family):
+    """Finite templates allowed for this kind/family. Kind wins when listed."""
+    kind = _norm(kind)
+    family = _norm(family)
+    if kind in _KIND_TEMPLATES:
+        return _KIND_TEMPLATES[kind]
+    return _FAMILY_TEMPLATES.get(family, ("minimal_center",))
+
+
+def default_template(kind, family, profile=None):
+    """Profile default when compatible, else the documented kind/family default."""
+    compat = compatible_templates(kind, family)
+    if profile:
+        wanted = str((profile.get("presentation") or {}).get("default_template") or "").strip()
+        if wanted in compat:
+            return wanted
+    return compat[0] if compat else "minimal_center"
+
+
+def resolve_template(kind, family, explicit, *, strict=False, profile=None):
+    """Return a compatible template. Strict creation/preview raises TemplateError."""
+    compat = compatible_templates(kind, family)
+    token = explicit.strip() if isinstance(explicit, str) else ""
+    if token and token in compat:
+        return token
+    if token and strict:
+        raise TemplateError(
+            "template %r is not compatible with kind=%s family=%s"
+            % (explicit, kind, family))
+    return default_template(kind, family, profile)
+
+
+def _pick_template(kind, family, seed, profile):
+    compat = compatible_templates(kind, family)
+    default = default_template(kind, family, profile)
+    if len(compat) <= 1:
+        return default
+    others = [name for name in compat if name != default]
+    choices = [default, default] + others
+    return choices[int(seed) % len(choices)]
+
+
+def _pick_brand(kind, family, seed, profile):
+    if family in ("ident", "failure") or kind in (
+            "station_id", "technical_difficulties", "dead_air", "testpattern"):
+        return "none"
+    default = str((profile or {}).get("presentation", {}).get("default_brand_mode") or "reveal")
+    if default not in BRAND_MODES:
+        default = "reveal"
+    if default == "reveal" and int(seed) % 5 == 0:
+        return "static"
+    return default
+
+
+def assign_presentation(row, profile=None):
+    """template / render_seed / brand_mode for a new item. Deterministic per id."""
+    from bumparr import channel_profile
+    row = _as_row(row)
+    if profile is None:
+        profile = channel_profile.current()
+    resolved = resolve_creative(row)
+    explicit = _creative_obj(_payload(row.get("payload")))
+    seed = resolved["render_seed"]
+    family = resolved["family"]
+    kind = _kind(row)
+    if _valid_template(explicit.get("template")):
+        template = resolve_template(kind, family, explicit.get("template"),
+                                    strict=False, profile=profile)
+    else:
+        template = _pick_template(kind, family, seed, profile)
+    if _valid_brand(explicit.get("brand_mode")):
+        brand = explicit["brand_mode"].strip()
+    else:
+        brand = _pick_brand(kind, family, seed, profile)
+    return {"template": template, "render_seed": int(seed), "brand_mode": brand}
+
+
+def with_presentation(payload, row, profile=None):
+    """Persist inferred creative plus presentation fields for a new item."""
+    base = with_creative(payload, row)
+    row = dict(_as_row(row))
+    row["payload"] = base
+    return merge_creative(base, assign_presentation(row, profile))
+
+
 def resolve_creative(row):
     """Complete normalized creative dict for a playable row."""
     row = _as_row(row)
@@ -253,10 +366,11 @@ def resolve_creative(row):
         text_heavy = explicit["text_heavy"]
     else:
         text_heavy = family in TEXT_HEAVY_FAMILIES
+    kind = _kind(row)
     if _valid_template(explicit.get("template")):
-        template = explicit["template"].strip()[:200]
+        template = resolve_template(kind, family, explicit["template"], strict=False)
     else:
-        template = None
+        template = default_template(kind, family)
     render_seed = explicit["render_seed"] if _valid_seed(explicit.get("render_seed")) else _render_seed(row)
     if _valid_brand(explicit.get("brand_mode")):
         brand_mode = explicit["brand_mode"].strip()

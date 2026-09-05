@@ -146,8 +146,10 @@ content covers every kind with no model at all (CI asserts this).
 - **`seasons.py`** — calendar factors per category (holiday material ramps in
   and out rather than switching), computed at selection time, never stored.
 - **`creative.py`** — the only parser/resolver for optional
-  `payload.creative` (family, roles, energy, audio, …). Legacy rows infer;
-  writers persist what they know via `merge_creative`.
+  `payload.creative` (family, roles, energy, audio, template, render_seed,
+  brand_mode, …). Legacy rows infer; new writers persist presentation via
+  `with_presentation`. Template compatibility is defined here; there is no
+  renderer plugin framework.
 - **`channel_profile.py`** — operator voice/mix/sequence/presentation/audio
   YAML. Invalid files fall back to the full shipped default.
 - **`sequence.py`** — pure `compose_break` / `choose_next`. No SQLite, files,

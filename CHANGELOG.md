@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+**Operator voice and restrained card templates**
+- Model card prompts are built from fixed per-kind schema instructions plus
+  the validated channel-profile voice block and the item count. Traits are
+  described directly; prompts never request imitation of a network or named
+  creator. `_call_model` stays provider-agnostic and job-only.
+- Pre-insert checks reject normalized duplicates (batch and existing
+  same-kind text), repeated batch opening phrases, configured avoid
+  phrases/topics with word boundaries, and existing length/shape defects.
+  Voice changes affect only new candidates.
+- Finite templates: `minimal_center`, `minimal_corner`, `image_caption`,
+  `information_board`, `signal`, plus existing ident builders. Kind/family
+  compatibility is in `bumparr.creative`. Strict creation/preview rejects an
+  incompatible explicit template; runtime falls back to the documented
+  default. New items persist template, `render_seed`, and `brand_mode`.
+  Legacy seeds are derived from a stable id hash and persisted only during
+  explicit render/refresh.
+- Brand modes `reveal`, `static`, and `none`. Existing files stay until an
+  explicit rerender. Dashboard previews one item and 15/30/60/90s packs
+  (creative, provenance, factors, relaxations, media) via GET only.
+
 **Break and station sequence grammar**
 - `bumparr.sequence` composes duration-bounded breaks and station adjacency
   from scored candidates, resolved creative data, and the channel profile.

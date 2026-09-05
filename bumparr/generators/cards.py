@@ -26,6 +26,7 @@ import uuid
 from bumparr import config, db
 from bumparr.card_validation import validate_card
 from bumparr.content_filter import weight_for
+from bumparr.creative import with_creative
 
 PROMPTS = {
     "psa": (
@@ -225,6 +226,9 @@ def generate(kind: str, n: int) -> tuple:
                          " " + " ".join(payload.get("lines", [])))
             weight = weight_for(DEFAULT_WEIGHT.get(kind, 0.7), card_text)
             pid = "card:%s:%s" % (kind, uuid.uuid4().hex)
+            payload = with_creative(
+                payload, {"id": pid, "type": "card", "kind": kind,
+                          "source": "generated"})
             cursor = c.execute(
                 """INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
                    VALUES (:id,:type,:kind,:source,:uri,:duration,:title,:payload,'',:weight,1,'ok',:created_at)""",

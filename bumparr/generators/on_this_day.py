@@ -22,6 +22,7 @@ import urllib.request
 
 from bumparr import config, db
 from bumparr.content_filter import weight_for
+from bumparr.creative import with_creative
 
 
 def fetch_events():
@@ -132,8 +133,13 @@ def generate(target: int) -> int:
             # Grim events are kept but rare (heavily down-weighted), never dropped.
             weight = weight_for(0.7, tx)
             lines = ["ON THIS DAY", str(yr), tx]
-            pj = json.dumps({"lines": lines, "for_date": today}, sort_keys=True)
-            pid = "card:on_this_day:" + hashlib.md5(pj.encode()).hexdigest()[:12]
+            body = {"lines": lines, "for_date": today}
+            identity = json.dumps(body, sort_keys=True)
+            pid = "card:on_this_day:" + hashlib.md5(identity.encode()).hexdigest()[:12]
+            pj = json.dumps(with_creative(
+                body, {"id": pid, "type": "card", "kind": "on_this_day",
+                       "source": "generated"}),
+                sort_keys=True)
             before = c.total_changes
             c.execute(
                 """INSERT OR IGNORE INTO playables

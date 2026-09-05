@@ -57,6 +57,9 @@ PRESERVE_CODE = textwrap.dedent("""
     with db.conn() as c:
         c.execute("UPDATE playables SET uri=?, play_count=?, enabled=?, health=?, weight=?, last_played=?, created_at=? WHERE id=?",
                   ("custom/uri.mp4", 42, 0, "dead", 9.9, 12345.0, 11111.0, pid))
+        raw = json.loads(c.execute("SELECT payload FROM playables WHERE id=?", (pid,)).fetchone()["payload"])
+        raw["bg"] = "kept.png"
+        c.execute("UPDATE playables SET payload=? WHERE id=?", (json.dumps(raw), pid))
         c.commit()
     def fake_gj2(url):
         if "geocoding" in url:
@@ -77,6 +80,8 @@ PRESERVE_CODE = textwrap.dedent("""
     assert r["created_at"] == 11111.0, dict(r)
     payload = json.loads(r["payload"])
     assert payload["temp"] == "80°", payload
+    assert payload["bg"] == "kept.png", payload
+    assert payload["creative"]["family"] == "data", payload
     assert r["title"] == label, dict(r)
     print("OK preserve")
 """)

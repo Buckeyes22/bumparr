@@ -21,7 +21,7 @@ a row does not play, and a row is only playable when `enabled=1` and
 | `uri` | TEXT | The media pointer. Videos/images: path relative to `ASSET_ROOT`; produced output: `bumpers/<path>` relative to `OUTPUT`; streams: the upstream HLS URL. **NULL until a card is rendered** — that NULL is what keeps unrendered cards out of `/playlist.m3u` and out of `media_url`. |
 | `duration` | REAL | Seconds this item occupies the channel. The fill endpoint's contract depends on these being true, so writers set real measured durations (window captures re-probe on every re-capture). |
 | `title` | TEXT | Display name. |
-| `payload` | TEXT (JSON) | Per-type content. Cards: `lines` / `answer` / `number` / `meaning` / `reveal_after` / optional background query, creator/source/license metadata / `music`. Produced clips: `from`, `window`, `audio`, `slam`, `branded`, `brand`, `base_weight`. Streams: `direct`, `label`, `region`, optional `proxy_hosts` CDN allowlist. |
+| `payload` | TEXT (JSON) | Per-type content. Cards: `lines` / `answer` / `number` / `meaning` / `reveal_after` / optional background query, creator/source/license metadata / `music`. Produced clips: `from`, `window`, `audio`, `slam`, `branded`, `brand`, `base_weight`. Streams: `direct`, `label`, `region`, optional `proxy_hosts` CDN allowlist. Optional `creative` object (family, roles, energy, audio, text_heavy, template, render_seed, brand_mode, music_id) is namespaced here — not sibling columns. Missing values are inferred at read time by `bumparr.creative.resolve_creative`; there is no schema migration. |
 | `tags` | TEXT | Comma string, freeform. |
 | `weight` | REAL | **Declared** editorial weight — the `base` in the rotation model. The system never mutates it; seasonality multiplies at selection time. `0` = deliberately off air. |
 | `enabled` | INTEGER | On/off switch. Dated cards (on_this_day) are parked here by the daily rotation; disabling is preferred over deleting because it is reversible. |
@@ -30,6 +30,23 @@ a row does not play, and a row is only playable when `enabled=1` and
 | `last_played` | REAL | Unix ts of last air — the station playout writer updates it when an entry starts; it is the recency factor's input. |
 | `play_count` | INTEGER | Lifetime plays — station playout increments it when an entry starts; it is the fatigue factor's input (relative to the pool median). |
 | `created_at` | REAL | Unix ts. |
+
+### `payload.creative`
+
+Optional namespaced metadata. Missing or partial objects are inferred at
+read time; explicit valid fields win. Allowed values:
+
+| Field | Allowed values / meaning |
+|---|---|
+| `family` | `text`, `scenic`, `archive`, `data`, `window`, `ident`, `failure`, `authored` |
+| `roles` | subset of `any`, `open`, `inside`, `close`, `return`, `ident`, `standby` |
+| `energy` | `quiet`, `neutral`, `loud` |
+| `audio` | `native`, `music`, `designed`, `silence`, `unknown` |
+| `text_heavy` | boolean adjacency signal |
+| `template` | Phase 3 template id; missing means the compatible default |
+| `render_seed` | non-negative integer for stable variation |
+| `brand_mode` | `reveal`, `static`, `none` |
+| `music_id` | Phase 4 manifest id or null |
 
 ### `type='card'` lifecycle
 

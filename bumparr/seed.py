@@ -4,10 +4,12 @@ Video bumpers are discovered by scanning ASSET_ROOT (organised by category
 sub-directory: ambient/, station_ids/, test_patterns/, ephemeral/). Card and
 stream playables are added by their own generators/adapters, not here.
 """
+import json
 import subprocess
 from pathlib import Path
 
 from bumparr import config, db, paths
+from bumparr.creative import with_creative
 
 VIDEO_EXT = {".mp4", ".webm", ".ogv", ".m4v", ".mkv"}
 
@@ -96,6 +98,7 @@ def seed_from_assets():
                 "title": path.stem.replace("_", " ").replace("~", " ").strip(),
                 "weight": weight,
             }
+            row["payload"] = json.dumps(with_creative({}, row))
             if db.upsert_playable(c, row):
                 added += 1
         parked = cleared = 0

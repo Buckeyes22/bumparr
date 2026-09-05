@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**Creative resolver + channel profile**
+- Optional `payload.creative` holds family/roles/energy/audio and related
+  fields. `bumparr.creative` is the only parser: `resolve_creative` infers a
+  complete dict for legacy rows; `merge_creative` preserves unrelated payload
+  keys. New writers persist what they know. No schema migration.
+- Shipped `bumparr/config_files/channel_profile.yaml` plus
+  `CHANNEL_PROFILE` override. Invalid files warn once and use the full
+  default. `python -m bumparr.channel_profile --check` is strict.
+  `/api/status` adds `profile: {version, valid, source}` where `source` is
+  `shipped-default`, `custom`, or `fallback-after-error`.
+- List/random/fill/detail responses add resolved `creative` without replacing
+  `payload`. This is not sequence grammar (break placement / station
+  `choose_next` remain later).
+
 **Runtime selection truth + read-only simulation**
 - `/api/bumpers/random`, `/api/bumpers/fill`, and station playout share
   `selection.scored_candidates`: only finite computed scores strictly greater

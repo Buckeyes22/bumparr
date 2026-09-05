@@ -35,6 +35,7 @@ import uuid
 from pathlib import Path
 
 from bumparr import brandslam, config, db
+from bumparr.creative import with_creative
 
 FPS = 30
 W, H = 1920, 1080
@@ -436,31 +437,35 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
         actual = duration_of(dest)
         audio = ("native" if has_native else
                  ("bed:" + Path(bed["path"]).stem[:18] if bed else "silent"))
+        pid = "clip:%s:%d" % (stem, int(time.time()))
+        payload = with_creative(
+            {"from": src.name, "window": [start, length],
+             "audio": audio, "slam": brandslam.describe(spec),
+             "scene_cuts": len(cuts),
+             # The mark is IN the file. Players must not draw
+             # their own over it, or the clip ends up branded
+             # twice with two different rolls fighting.
+             "branded": True,
+             # The brand actually baked into this file. Two
+             # containers sharing one pool can disagree on
+             # BRAND, and a file stamped with the wrong name is
+             # invisible until someone watches it — so record
+             # it and let a checker find the mismatches.
+             "brand": config.BRAND,
+             # Pre-seasonal weight, so the hourly seasonal pass
+             # has a stable baseline to multiply rather than
+             # compounding whatever was current at mint time.
+             "base_weight": weight},
+            {"id": pid, "type": "video", "kind": kind, "source": "produced"})
         try:
             with db.conn() as c:
                 cursor = c.execute(
                 """INSERT OR IGNORE INTO playables
                    (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
                    VALUES (?,?,?,?,?,?,?,?,'',?,1,'ok',?)""",
-                ("clip:%s:%d" % (stem, int(time.time())), "video", kind, "produced",
+                (pid, "video", kind, "produced",
                  "bumpers/" + name, actual, src.stem.replace("_", " ")[:70],
-                 json.dumps({"from": src.name, "window": [start, length],
-                             "audio": audio, "slam": brandslam.describe(spec),
-                             "scene_cuts": len(cuts),
-                             # The mark is IN the file. Players must not draw
-                             # their own over it, or the clip ends up branded
-                             # twice with two different rolls fighting.
-                             "branded": True,
-                             # The brand actually baked into this file. Two
-                             # containers sharing one pool can disagree on
-                             # BRAND, and a file stamped with the wrong name is
-                             # invisible until someone watches it — so record
-                             # it and let a checker find the mismatches.
-                             "brand": config.BRAND,
-                             # Pre-seasonal weight, so the hourly seasonal pass
-                             # has a stable baseline to multiply rather than
-                             # compounding whatever was current at mint time.
-                             "base_weight": weight}),
+                 json.dumps(payload),
                  weight, time.time()))
                 if not cursor.rowcount:
                     raise RuntimeError("clip registration was not inserted")

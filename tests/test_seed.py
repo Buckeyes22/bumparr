@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,21 @@ class SeedQuality(unittest.TestCase):
         self.assertEqual((rows["i"]["enabled"], rows["i"]["health"]), (0, "dead"))
         self.assertIsNone(rows["c"]["uri"])
         self.assertEqual(rows["c"]["enabled"], 0)
+
+    def test_new_file_persists_creative_metadata(self):
+        clip = config.ASSET_ROOT / "ambient" / "fresh.mp4"
+        clip.parent.mkdir(); clip.write_bytes(b"fresh")
+        with mock.patch.object(seed, "_probe_duration", return_value=4):
+            self.assertEqual(seed.seed_from_assets(), 1)
+        with db.conn() as connection:
+            row = connection.execute(
+                "SELECT kind, source, payload FROM playables WHERE id='vid:ambient/fresh.mp4'"
+            ).fetchone()
+        payload = json.loads(row["payload"])
+        self.assertEqual(row["kind"], "ambient")
+        self.assertEqual(row["source"], "nasa")
+        self.assertEqual(payload["creative"]["family"], "archive")
+        self.assertEqual(payload["creative"]["roles"], ["any", "inside"])
 
 
 if __name__ == "__main__":

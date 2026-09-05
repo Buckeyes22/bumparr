@@ -94,6 +94,19 @@ zero-score picks, seasonal/daypart distribution, and inferred audio balance
 (`native` / `music` / `silence` / `unknown` from existing payload). Family,
 role, and sequence relaxations are Phase 2 and are not reported here.
 
+### `bumparr.channel_profile` — validate the operator profile
+
+Loads `CHANNEL_PROFILE` if set, otherwise the shipped
+`bumparr/config_files/channel_profile.yaml`.
+
+| Flag | Meaning |
+|---|---|
+| `--check` | strict validation; exit 0 if the document is a complete version-1 profile, nonzero with an actionable error otherwise |
+
+Runtime (the API process) never partially applies a malformed file: one
+warning, then the full shipped default. `--check` is the operator/CI path
+that fails closed instead.
+
 ## Maintenance
 
 ### `bumparr.prune` — remove off-shape material

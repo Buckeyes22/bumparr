@@ -24,11 +24,17 @@ Pool overview.
 ```json
 {"brand": "Bumparr", "total": 412, "playable_now": 350,
  "by_type": {"video": 210, "card": 150, "stream": 20, "image": 32},
- "by_kind": {"ambient": 40, "trivia": 60, ...}}
+ "by_kind": {"ambient": 40, "trivia": 60, ...},
+ "profile": {"version": 1, "valid": true, "source": "shipped-default"}}
 ```
 
 `playable_now` is the enabled-and-healthy count before dynamic seasonal and
 duration filters. The gap to `total` is disabled or dead items.
+
+`profile` is the loaded channel profile's health, not the YAML path.
+`source` is only `shipped-default`, `custom`, or `fallback-after-error`.
+`valid` is false when runtime fell back to the full shipped default after an
+invalid or missing operator file.
 
 ### `GET /api/bumpers`
 
@@ -49,12 +55,16 @@ keeps showing both. `?enabled=false` is how you find what the system parked
 without paging the whole pool by eye; `POST /api/pool/enable` is the way back.
 
 Response: `{"count": N, "bumpers": [{id, type, kind, source, duration, title,
-tags, enabled, health, media_url, payload}]}`. `payload` is the parsed JSON
-card content (lines/answer/number/meaning/…), null-ish for plain media.
+tags, enabled, health, media_url, payload, creative}]}`. `payload` is the
+parsed JSON card content (lines/answer/number/meaning/…), null-ish for plain
+media. `creative` is the resolved vocabulary from `bumparr.creative` (family,
+roles, energy, audio, …); it does not replace `payload`.
 
 ### `GET /api/bumpers/{bumper_id}`
 
-One bumper as JSON: every registry column plus `media_url`. 404 if unknown.
+One bumper as JSON: every registry column plus `media_url` and resolved
+`creative`. 404 if unknown. `payload` remains the stored JSON (string on this
+detail route); `creative` is additive.
 
 | Param | Default | Meaning |
 |---|---|---|
@@ -99,12 +109,13 @@ unsequenced pool listing for a downstream scheduler.
 | `explain` | `false` | if true, add per-item `selection.factors` |
 
 Response: `{"count": N, "bumpers": [{id, type, kind, title, duration,
-media_url, payload}]}`. Only enabled + healthy items with a finite computed
-score strictly greater than zero are candidates. Gated rows are never
-returned. Default fields stay the same when `explain` is omitted; with
-`explain=true` each bumper also has `selection.factors` (reasons may be
-omitted because returned rows are eligible). `explain` is a boolean query
-flag.
+media_url, payload, creative}]}`. Only enabled + healthy items with a finite
+computed score strictly greater than zero are candidates. Gated rows are never
+returned. Default fields stay the same when `explain` is omitted except for
+the additive `creative` object; with `explain=true` each bumper also has
+`selection.factors` (reasons may be omitted because returned rows are
+eligible). `explain` is a boolean query flag. `creative` never replaces
+`payload`.
 
 ### `GET /api/bumpers/fill`
 
@@ -122,9 +133,11 @@ as `/random` and the station); then a randomized subset-sum searches duration
 | `types` | all | comma list |
 
 Response: `{"requested": 47, "total": 46.9, "gap": 0.1, "exact": true,
-"count": 6, "bumpers": [...]}`. A pool without short denominations will report
-a wider `gap` rather than return a bad fit — check `exact`/`gap`, not just
-`count`. Score `<= 0` items are excluded before the duration search.
+"count": 6, "bumpers": [...]}`. Each bumper includes additive `creative`
+alongside `payload`. A pool without short denominations will report a wider
+`gap` rather than return a bad fit — check `exact`/`gap`, not just `count`.
+Score `<= 0` items are excluded before the duration search. Sequence grammar
+(`placement`, `composition`) is not applied yet.
 
 ## Station
 

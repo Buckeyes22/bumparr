@@ -20,6 +20,7 @@ import urllib.request
 
 from bumparr import config, db
 from bumparr.card_validation import looks_truncated, validate_card
+from bumparr.creative import with_creative
 
 UA = {"User-Agent": "bumparr/1.0"}
 
@@ -43,8 +44,12 @@ def _insert_result(c, kind, payload, title, weight=0.9):
         print("  reject %s: %s" % (kind, reason))
         return "rejected"
     payload = clean
-    pj = json.dumps(payload, sort_keys=True)
-    pid = "card:%s:%s" % (kind, hashlib.md5(pj.encode()).hexdigest()[:12])
+    identity = json.dumps(payload, sort_keys=True)
+    pid = "card:%s:%s" % (kind, hashlib.md5(identity.encode()).hexdigest()[:12])
+    pj = json.dumps(with_creative(
+        payload, {"id": pid, "type": "card", "kind": kind, "source": "grounded",
+                  "tags": "grounded"}),
+        sort_keys=True)
     before = c.total_changes
     c.execute(
         """INSERT OR IGNORE INTO playables

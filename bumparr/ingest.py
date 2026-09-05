@@ -22,6 +22,7 @@ import uuid
 
 from bumparr import config, db, paths
 from bumparr.card_validation import validate_card
+from bumparr.creative import with_creative
 
 log = logging.getLogger(__name__)
 UA = {"User-Agent": "Mozilla/5.0 bumparr (polite)"}
@@ -78,7 +79,10 @@ def _insert_stream(title, url, direct, kind="webcam", region="user-added"):
     checked); False routes it through the same-origin proxy instead.
     """
     pid = "stream:cam:" + hashlib.md5(url.encode()).hexdigest()[:10]
-    payload = json.dumps({"direct": direct, "label": title, "region": region})
+    payload = json.dumps(with_creative(
+        {"direct": direct, "label": title, "region": region},
+        {"id": pid, "type": "stream", "kind": kind, "source": "user-added",
+         "tags": "live,window,user"}))
     with db.conn() as c:
         if c.execute("SELECT 1 FROM playables WHERE id=?", (pid,)).fetchone():
             return "already in the pool"
@@ -267,7 +271,10 @@ def _download_image(url, category, stem, title=""):
         return False
     rel = "%s/%s.jpg" % (category, stem)
     pid = "img:" + rel
-    payload = json.dumps({"pan": True, "title": (title or "")[:120], "source": "Library of Congress"})
+    payload = json.dumps(with_creative(
+        {"pan": True, "title": (title or "")[:120], "source": "Library of Congress"},
+        {"id": pid, "type": "image", "kind": category, "source": "loc",
+         "tags": "image,pd,gov,loc"}))
     with db.conn() as c:
         c.execute("INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
                   "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
@@ -743,8 +750,11 @@ def _register_procedural(kind):
     added = 0
     with db.conn() as c:
         for text, variant in items:
-            payload = json.dumps({"variant": variant, "text": text} if variant else {})
             pid = "card:%s:%s" % (kind, hashlib.md5((kind + text + variant).encode()).hexdigest()[:10])
+            body = {"variant": variant, "text": text} if variant else {}
+            payload = json.dumps(with_creative(
+                body, {"id": pid, "type": "card", "kind": kind, "source": "render",
+                       "tags": "visual,user"}))
             before = c.total_changes
             c.execute("INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
                       "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
@@ -792,8 +802,12 @@ def register_card_seeds(kind):
             payload = {"lines": clean["lines"]}
             if kind == "tiny_games":
                 payload["answer"] = clean.get("answer", "")
-            pj = json.dumps(payload, sort_keys=True)
-            pid = "card:%s:seed:%s" % (kind, hashlib.md5(pj.encode()).hexdigest()[:10])
+            identity = json.dumps(payload, sort_keys=True)
+            pid = "card:%s:seed:%s" % (kind, hashlib.md5(identity.encode()).hexdigest()[:10])
+            pj = json.dumps(with_creative(
+                payload, {"id": pid, "type": "card", "kind": kind, "source": "seed",
+                          "tags": "starter"}),
+                sort_keys=True)
             c.execute("INSERT OR IGNORE INTO playables (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,last_played,play_count,created_at) "
                       "VALUES (?,?,?,?,?,?,?,?,?,?,1,'ok',0,0,?)",
                       (pid, "card", kind, "seed", None, config.CARD_DEFAULT_DURATION,

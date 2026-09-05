@@ -249,6 +249,28 @@ class AppApi(unittest.TestCase):
         self.assertEqual(out["by_kind"]["shared"], 2)
         self.assertEqual(out["by_type"], {"card": 1, "video": 1})
 
+    def test_status_profile_is_not_a_path(self):
+        out = self._run_child("status")
+        profile = out["profile"]
+        self.assertEqual(set(profile), {"version", "valid", "source"})
+        self.assertEqual(profile["version"], 1)
+        self.assertIsInstance(profile["valid"], bool)
+        self.assertIn(profile["source"],
+                      ("shipped-default", "custom", "fallback-after-error"))
+        self.assertNotIn("/", profile["source"])
+        self.assertNotIn("\\", profile["source"])
+
+    def test_get_and_list_include_resolved_creative(self):
+        seed = [_row(1, 4.0, kind="station_id")]
+        detail = self._run_child("get", seed, bumper_id="t:item-1")
+        self.assertIn("payload", detail)
+        self.assertEqual(detail["creative"]["family"], "ident")
+        self.assertEqual(detail["creative"]["roles"],
+                         ["open", "close", "return", "ident"])
+        listed = self._run_child("list", seed, limit=10, offset=0)
+        self.assertEqual(listed["bumpers"][0]["creative"]["family"], "ident")
+        self.assertIn("payload", listed["bumpers"][0])
+
     def test_m3u_attr_mapping(self):
         """Quotes and newlines are replaced; commas survive inside the quotes."""
         self.assertEqual(_m3u_attr('Say "hi", now\ntomorrow\rend'),

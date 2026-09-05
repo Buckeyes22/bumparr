@@ -145,3 +145,8 @@ STATION_BITRATE_K = int(env("STATION_BITRATE_K", "4000"))
 # somewhere is the classic hold pattern.
 STANDBY_KINDS = tuple(k.strip() for k in env(
     "STANDBY_KINDS", "technical_difficulties,station_id,dead_air,window").split(",") if k.strip())
+
+# Optional operator channel profile (voice, mix, sequence, presentation, audio).
+# Empty uses the shipped YAML at bumparr/config_files/channel_profile.yaml.
+# Changes take effect on process restart; the loader does not hot-reload.
+CHANNEL_PROFILE = env("CHANNEL_PROFILE", "").strip()

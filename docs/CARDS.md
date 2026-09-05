@@ -2,7 +2,10 @@
 
 Cards are the text bumpers — the trivia, the fake PSAs, the "please stand by".
 They are the part of Bumparr with a *voice*, and the shipped ones are
-deliberately plain so you replace them. This is how.
+deliberately plain so you replace them. This is how. New cards persist
+optional `payload.creative` metadata (family, roles, energy, audio); the
+operator voice block lives in `config_files/channel_profile.yaml` (see
+[CONFIG.md](CONFIG.md)). Prompt rebuild from that profile is a later slice.
 
 There are three ways to get cards, and they are independent — use any or all:
 

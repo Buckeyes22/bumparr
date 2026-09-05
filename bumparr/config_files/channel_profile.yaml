@@ -1,0 +1,41 @@
+# Channel profile — operator-owned voice, mix, sequence, presentation, and audio.
+# Point CHANNEL_PROFILE at a copy to override; an invalid file is ignored in
+# full (never applied partially) and the process keeps these shipped defaults.
+# Validate with: python -m bumparr.channel_profile --check
+# Sequence grammar that consumes mix/sequence is a later slice; this file is
+# the contract those pieces will read.
+version: 1
+
+voice:
+  persona: "Concise, dry, observant, and lightly strange."
+  favored_subjects: []
+  boundaries:
+    allow_direct_address: true
+    allow_profanity: false
+    allow_politics: false
+    allow_bleak_humor: false
+  avoid_phrases: []
+  avoid_topics: []
+
+mix:
+  break: {text: 1.0, scenic: 1.0, archive: 1.0, data: 1.0,
+          window: 0.8, ident: 0.8, failure: 0.2, authored: 1.0}
+  station: {text: 1.0, scenic: 1.0, archive: 1.0, data: 1.0,
+            window: 1.0, ident: 0.7, failure: 0.3, authored: 1.0}
+
+sequence:
+  max_text_run: 2
+  avoid_same_family: true
+  prefer_exit_ident: true
+  avoid_same_music: true
+  avoid_large_energy_jump: true
+
+presentation:
+  default_template: minimal_center
+  default_brand_mode: reveal
+
+audio:
+  allowed: [native, music, designed, silence, unknown]
+  target_lufs: -16.0
+  true_peak_db: -1.5
+  fallback: silence

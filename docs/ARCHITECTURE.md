@@ -144,6 +144,11 @@ content covers every kind with no model at all (CI asserts this).
   Never writes history or calls station `advance()`.
 - **`seasons.py`** — calendar factors per category (holiday material ramps in
   and out rather than switching), computed at selection time, never stored.
+- **`creative.py`** — the only parser/resolver for optional
+  `payload.creative` (family, roles, energy, audio, …). Legacy rows infer;
+  writers persist what they know via `merge_creative`.
+- **`channel_profile.py`** — operator voice/mix/sequence/presentation/audio
+  YAML. Invalid files fall back to the full shipped default.
 - `/random`, `/fill`, and station playout share `scored_candidates`, so a
   gated row cannot air on one path and not another. `/fill` still returns an
   ordered duration-bounded bumper set, not a programme schedule (no creative
@@ -219,6 +224,8 @@ preview reads never extend a timeline or write history.
 | `bumparr/content_filter.py` | shared tone (grim) policy |
 | `bumparr/rotation.py` | the scoring model |
 | `bumparr/selection.py` | shared computed-eligibility filter used by random, fill, and station |
+| `bumparr/creative.py` | payload.creative resolver (`resolve_creative` / `merge_creative`) |
+| `bumparr/channel_profile.py` | operator channel profile loader and `--check` |
 | `bumparr/simulate.py` | read-only seeded selection mix report |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |
@@ -230,6 +237,6 @@ preview reads never extend a timeline or write history.
 | `bumparr/station/routes.py` | HLS, channel M3U, guide, status, and conform routes |
 | `bumparr/generators/` | card production: model, grounded, dated, weather, bg |
 | `bumparr/sources/` | self-maintaining sources: window capture, fetch queue |
-| `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog) |
+| `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog, channel profile) |
 | `bumparr/web/` | dashboard (vanilla JS over the API) |
 | `bumparr/tools/overnight.sh` | scheduled batch: generate cards, then quarry |

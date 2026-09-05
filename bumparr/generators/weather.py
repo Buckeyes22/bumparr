@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 
 from bumparr import config, db
+from bumparr.creative import with_creative
 
 UA = {"User-Agent": "bumparr/1.0"}
 
@@ -74,7 +75,7 @@ def generate(location):
     code = cur.get("weather_code", 0)
     label, emoji = WMO.get(code, ("—", "•"))
     temp = round(cur.get("temperature_2m", 0))
-    payload = {
+    fresh = {
         "city": loc["label"].upper(),
         "temp": "%d°" % temp,
         "conditions": label,
@@ -85,6 +86,19 @@ def generate(location):
     }
     pid = "card:weather:" + hashlib.md5(loc["label"].encode()).hexdigest()[:12]
     with db.conn() as c:
+        existing = {}
+        row = c.execute("SELECT payload FROM playables WHERE id=?", (pid,)).fetchone()
+        if row:
+            try:
+                parsed = json.loads(row["payload"] or "{}")
+            except Exception:
+                parsed = {}
+            if isinstance(parsed, dict):
+                existing = parsed
+        payload = with_creative(
+            {**existing, **fresh},
+            {"id": pid, "type": "card", "kind": "weather", "source": "grounded",
+             "tags": "grounded,weather"})
         # Refresh only content fields; preserve render path, history and tuning.
         cur = c.execute("UPDATE playables SET title=?, payload=?, duration=? WHERE id=?",
                         (loc["label"], json.dumps(payload), 10.0, pid))

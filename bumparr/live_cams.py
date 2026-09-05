@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from bumparr import db, paths
+from bumparr.creative import with_creative
 
 CONFIG = Path(__file__).resolve().parent / "config_files" / "live_cams.yaml"
 
@@ -80,12 +81,6 @@ def load_cams():
                 title = str(cam.get("title") or "Live Cam").strip() or "Live Cam"
                 kind = str(cam.get("kind") or "webcam").strip() or "webcam"
                 region = str(cam.get("region") or "").strip()
-                payload = json.dumps({
-                    "direct": bool(cam.get("direct", True)),
-                    "label": title,
-                    "region": region,
-                    "proxy_hosts": proxy_hosts,
-                })
                 try:
                     weight = float(cam.get("weight", 1.0))
                 except (ValueError, TypeError):
@@ -94,7 +89,25 @@ def load_cams():
                 if not math.isfinite(weight):
                     print("[bumparr] live_cams bad weight for %s, using 1.0" % url)
                     weight = 1.0
-                row = c.execute("SELECT uri, type, source FROM playables WHERE id=?", (pid,)).fetchone()
+                row = c.execute(
+                    "SELECT uri, type, source, payload FROM playables WHERE id=?",
+                    (pid,)).fetchone()
+                existing = {}
+                if row:
+                    try:
+                        parsed = json.loads(row["payload"] or "{}")
+                    except Exception:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        existing = parsed
+                payload = json.dumps(with_creative(
+                    {**existing,
+                     "direct": bool(cam.get("direct", True)),
+                     "label": title,
+                     "region": region,
+                     "proxy_hosts": proxy_hosts},
+                    {"id": pid, "type": "stream", "kind": kind,
+                     "source": "live-cam", "tags": "live,window"}))
                 if row:
                     if row["type"] != "stream" or row["source"] != "live-cam":
                         print("[bumparr] live_cams id conflicts with a non-cam row: %s" % pid)

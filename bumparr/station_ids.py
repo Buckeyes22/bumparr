@@ -20,6 +20,7 @@ from pathlib import Path
 from PIL import Image
 
 from bumparr import brandslam, config, db, ffmpeg_pipe
+from bumparr.creative import with_creative
 
 # Length bands, in seconds. The short end exists to make exact fills possible;
 # the long end is a proper station ident you can actually read.
@@ -135,14 +136,18 @@ def generate(count=60, seed=None, dry_run=False):
             continue
         try:
             with db.conn() as c:
+                payload = with_creative(
+                    {"roulette": brandslam.describe(spec), "branded": True,
+                     "brand": config.BRAND},
+                    {"id": pid, "type": "video", "kind": "station_id",
+                     "source": "generated"})
                 cursor = c.execute(
                     """INSERT OR IGNORE INTO playables
                        (id,type,kind,source,uri,duration,title,payload,tags,weight,enabled,health,created_at)
                        VALUES (?,?,?,?,?,?,?,?,'',?,1,'ok',?)""",
                     (pid, "video", "station_id", "generated", rel, duration,
                      "%s ident" % config.BRAND,
-                     json.dumps({"roulette": brandslam.describe(spec), "branded": True,
-                                 "brand": config.BRAND}),
+                     json.dumps(payload),
                      1.0, time.time()))
                 if not cursor.rowcount:
                     raise RuntimeError("station ID registration was not inserted")

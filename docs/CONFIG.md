@@ -27,6 +27,12 @@ Variables are function-named, no prefix, no product name in a variable.
 | `STATION_BITRATE_K` | `4000` | Target video bitrate (kbit/s) of the conformed profile. |
 | `STANDBY_KINDS` | `technical_difficulties,station_id,dead_air,window` | Kinds the standby channel may air. |
 
+## Channel profile
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CHANNEL_PROFILE` | shipped `bumparr/config_files/channel_profile.yaml` | Operator-owned voice, mix, sequence, presentation, and audio policy. Empty uses the shipped file. Changes require a process restart (no hot reload). An invalid file is never applied partially: runtime logs one warning and uses the full shipped default. Strict-validate with `python -m bumparr.channel_profile --check`. `/api/status` reports `profile.source` as `shipped-default`, `custom`, or `fallback-after-error` — never a filesystem path. |
+
 ## Storage
 
 | Variable | Default | Effect |

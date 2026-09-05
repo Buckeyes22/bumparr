@@ -2836,8 +2836,17 @@ async function composeBreak() {
     return null;
   }
   c.loading = false;
+  // A 200 carrying no object is not a composition. Dropping the last good break
+  // for it would clear known-good content without a replacement and leave the
+  // panel claiming nothing was ever composed, so it is a failure like any
+  // other: the previous break stays, marked stale, and says what happened.
+  if (!d || typeof d !== "object") {
+    c.error = "The server sent an empty response instead of a break.";
+    renderComposer();
+    return null;
+  }
   c.error = null;
-  c.result = d && typeof d === "object" ? d : null;
+  c.result = d;
   c.updatedAt = now();
   renderComposer();
   return d;

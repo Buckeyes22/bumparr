@@ -3312,3 +3312,45 @@ test("the composer only ever GETs, and never writes play history", async () => {
   stopComposerPlayback();
   assert.equal(calls.length, before, "local playback makes no requests");
 });
+
+test("an answer with no break in it is a failure, not an empty composer", async () => {
+  // A 200 that carries no object used to blank the panel and claim nothing had
+  // ever been composed — known-good content cleared without a replacement, and
+  // a factually wrong state on top of it.
+  stubFill(breakBody([BREAK_ITEM({ title: "keep me" })]));
+  await composeBreak();
+  assert.deepEqual(titles(), ["keep me"]);
+
+  stubFill(null);
+  assert.equal(await composeBreak(), null);
+  assert.deepEqual(titles(), ["keep me"], "the known-good break is kept");
+  assert.equal($("#composer-state").dataset.state, "stale");
+  assert.match(textOf($("#composer-state")), /empty response/);
+  assert.ok(descendants($("#composer-state")).some((n) => n.tagName === "BUTTON"),
+            "and it still offers a way to try again");
+});
+
+test("a failed compose with nothing to keep is an error with Retry", async () => {
+  global.fetch = async () => { throw new Error("network down"); };
+  await composeBreak();
+  assert.equal($("#composer-state").dataset.state, "error");
+  assert.match(textOf($("#composer-state")), /Failed/);
+  assert.match(textOf($("#composer-state")), /could not be reached/);
+  const retry = descendants($("#composer-state")).find((n) => n.tagName === "BUTTON");
+  assert.ok(retry, "an error offers a way to try again");
+  const calls = stubFill(breakBody([BREAK_ITEM({ title: "second try" })]));
+  await retry.click();
+  await flush();
+  assert.equal($("#composer-state").dataset.state, "populated");
+  assert.deepEqual(titles(), ["second try"]);
+  assert.equal(fillCalls(calls).length, 1);
+
+  // An empty body with nothing to fall back on is the same failure.
+  resetStateForTests();
+  BODY = buildDocument();
+  stubFill(null);
+  await composeBreak();
+  assert.equal($("#composer-state").dataset.state, "error");
+  assert.match(textOf($("#composer-state")), /empty response/);
+  assert.equal(timelineItems().length, 0);
+});

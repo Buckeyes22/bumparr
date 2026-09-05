@@ -270,28 +270,52 @@ function buildDocument() {
           ]),
         ]),
         view("view-station", [
-          el("div", { className: "viewtools" }, [
-            el("button", { data: { station: "conform" } }),
-          ]),
-          el("div", { className: "panel wide" }, [
+          panel("panel-channels", [
             el("div", { id: "station-state", className: "panel-state" }),
             el("div", { id: "station" }),
+            // Never redrawn with the summary: an open preview holds a
+            // connection to the channel and must survive the 20s refresh.
+            el("div", { id: "station-preview", className: "station-preview" }),
+          ]),
+          panel("panel-conform", [
+            el("div", { id: "conform-state", className: "panel-state" }),
+            el("div", { id: "conform" }),
+            el("div", { className: "viewtools" }, [
+              el("button", { data: { station: "conform", jobKey: "station conform" } }),
+            ]),
           ]),
         ]),
         view("view-operations", [
+          el("p", { className: "notice notice-panel", textContent:
+            "This operator API has no authentication. Do not expose this " +
+            "service to the public internet." }),
           panel("panel-ask", [
             el("input", { id: "ask", value: "" }),
             el("button", { id: "ask-go" }),
             el("div", { id: "ask-result" }),
+            el("div", { className: "action-group" }, [
+              el("button", { data: { starter: "dry", jobKey: "check starter" } }),
+              el("button", { data: { starter: "run", jobKey: "run starter" } }),
+            ]),
           ]),
           panel("panel-actions", [
             el("div", { id: "actions-state", className: "panel-state" }),
+            // Grouped by consequence, exactly as the view is: every button that
+            // starts a job carries the key its lock is held under.
             el("div", { className: "actions" }, [
-              el("button", { data: { gen: "trivia" } }),
-              el("button", { data: { src: "fetch-queue" } }),
-              el("button", { data: { starter: "dry" } }),
-              el("button", { data: { maint: "tidy" } }),
+              el("button", { data: { gen: "trivia", jobKey: "generate trivia" } }),
+              el("button", { data: { gen: "psa", jobKey: "generate psa" } }),
+              el("button", { data: { src: "fetch-queue", jobKey: "fetch-queue" } }),
+              el("button", { data: { prep: "render", jobKey: "render cards" } }),
+              el("button", { data: { prep: "conform", jobKey: "station conform" } }),
+              el("button", { data: { maint: "tidy-dry", jobKey: "preview tidy" } }),
+              el("button", { data: { maint: "tidy", jobKey: "tidy up" } }),
+              el("button", { data: { maint: "revive", jobKey: "recheck retired" } }),
             ]),
+          ]),
+          panel("panel-ops-jobs", [
+            el("div", { id: "ops-jobs-state", className: "panel-state" }),
+            el("ul", { id: "ops-jobs-list", className: "joblist" }),
             el("pre", { id: "log", className: "log" }),
           ]),
         ]),
@@ -736,11 +760,15 @@ test("an action whose status reads keep failing leaves the panel usable", async 
   const urls = [];
   const statusReads = stubFailingJob(urls);
   const buttons = document.querySelectorAll(".actions button");
-  assert.ok(buttons.length > 1, "the panel disables more than the clicked button");
+  const mine = buttons.find((b) => b.dataset.jobKey === "generate trivia");
+  const others = buttons.filter((b) => b !== mine);
+  assert.ok(others.length > 1, "the panel holds more actions than the one clicked");
 
   const running = doAction("/api/generate/trivia?n=20", "generate trivia");
   await flush();
-  assert.ok(buttons.every((b) => b.disabled), "the panel is held while the job starts");
+  assert.ok(mine.disabled, "the duplicate of a running action is held");
+  assert.ok(others.every((b) => !b.disabled),
+            "unrelated actions stay available within backend concurrency");
 
   t.mock.timers.tick(3000);
   await flush();
@@ -1839,9 +1867,11 @@ test("the composer and operations views ask for nothing that could advance playo
   await applyHash("#/composer");
   await applyHash("#/operations");
   assert.ok(calls.every((c) => c.method === "GET"));
-  assert.ok(calls.every((c) => c.url.startsWith("/api/status")),
-            "entering a view reads the header's status and nothing else: " +
-            JSON.stringify(calls));
+  // /api/jobs is documented pure — it never starts, cancels or changes a job —
+  // so Operations may list the registry without touching a timeline.
+  assert.ok(calls.every((c) => /^\/api\/(status|jobs)($|\?)/.test(c.url)),
+            "entering a view reads the header's status and the job list, and " +
+            "nothing else: " + JSON.stringify(calls));
 });
 
 test("back and forward between two deep links restore both filter sets", async () => {
@@ -2811,4 +2841,858 @@ test("the danger zone is dead until a kind is actually selected", () => {
   renderFilters();
   assert.equal($("#drop-kind").disabled, false);
   assert.match(textOf($("#danger-note")), /12/);
+});
+
+// ---------------------------------------------------------------------------
+// F4: station diagnostics, handoff copy, operations and the jobs list
+// ---------------------------------------------------------------------------
+
+const fs = require("node:fs");
+const path = require("node:path");
+const INDEX_HTML = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+
+const { stationRollup, conformEl, hlsSupported, renderStation, mergeJobs,
+        jobsList, jobRetry, renderOpsJobs, loadJobs, lockAction, RECENT_JOBS,
+        renderActionLocks, wireMaintenance, syncJobWatches, stopJobWatches,
+        STATION_MESSAGES, HLS_NO_NATIVE } = app;
+
+// The fake selector parser splits on whitespace, so an attribute value with a
+// space in it cannot be written as a selector. Job keys are action labels.
+const keyed = (key) => document.querySelectorAll("[data-job-key]")
+  .filter((b) => b.dataset.jobKey === key);
+
+// Native HLS is a browser capability, so it is stubbed the way a browser
+// presents it: canPlayType on a freshly created <video>. `null` — the default,
+// and what Node's own element stand-in offers — is a browser with no such
+// method at all, which is the same answer as "no".
+let hlsAnswer = null;
+const realCreateElement = document.createElement;
+document.createElement = function (tag) {
+  const node = realCreateElement(tag);
+  if (String(tag).toLowerCase() === "video" && hlsAnswer !== null) {
+    node.canPlayType = () => hlsAnswer;
+  }
+  return node;
+};
+
+const F4_STATION = {
+  ffmpeg: true, conformed: 3, eligible: 4, pending: 1,
+  last_conform: { at: 1700000000, conformed: 2, failed: 0, pruned: 1, skipped: 0,
+                  ffmpeg: true },
+  urls: { channel_m3u: "http://x/station/channel.m3u",
+          guide_xml: "http://x/station/guide.xml",
+          live: "http://x/station/live/index.m3u8",
+          standby: "http://x/station/standby/index.m3u8" },
+  channels: {
+    live: { now: { id: "a", title: "Ident", kind: "station_id", started_at: 100,
+                   ends_at: 200 },
+            next: { id: "b", title: "Trivia", kind: "trivia" },
+            state: "active", reason: "playing",
+            last_playlist_request: 1700000005, lookahead_seconds: 24 },
+    standby: { now: null, next: null, state: "idle", reason: "no_recent_client",
+               last_playlist_request: null, lookahead_seconds: 24 },
+  },
+};
+
+const stationBody = () => stationEl(F4_STATION, { updatedAt: 1 });
+const inputsIn = (node) => descendants(node).filter((n) => n.tagName === "INPUT");
+const buttonIn = (node, label) => descendants(node)
+  .find((n) => n.tagName === "BUTTON" && n.textContent === label);
+
+// --- station state ----------------------------------------------------------
+
+test("stationState answers each condition with the plan's own sentence", () => {
+  const withChannel = (channel, over, top) => Object.assign(
+    { ffmpeg: true, channels: { live: Object.assign({ state: "active",
+      reason: "playing" }, over) } }, top || {});
+
+  assert.deepEqual(
+    [stationState("live", withChannel("live", { state: "idle", reason: "no_recent_client" })).state,
+     stationState("live", withChannel("live", { state: "idle" })).message],
+    ["idle", "Idle — no playlist client has requested this channel recently."]);
+
+  const unconformed = withChannel("live", { state: "unavailable",
+                                            reason: "nothing_conformed" });
+  assert.equal(stationState("live", unconformed).message,
+               "Unavailable — conform at least one eligible item.");
+
+  assert.equal(stationState("live", withChannel("live", { reason: "slate" })).message,
+               "Using slate — all playable candidates are currently gated.");
+
+  // ffmpeg absence is the cause of "nothing conformed", so it is what gets
+  // said — and with ffmpeg present the two stay different answers.
+  const noFfmpeg = Object.assign({}, unconformed, { ffmpeg: false });
+  assert.equal(stationState("live", noFfmpeg).message,
+               "Cannot conform — ffmpeg is unavailable in the service.");
+  assert.notEqual(stationState("live", noFfmpeg).message,
+                  stationState("live", unconformed).message,
+                  "not conformed and ffmpeg absent are distinct");
+
+  assert.equal(stationState("live", withChannel("live", {})).state, "active");
+  assert.equal(stationState("live", withChannel("live", {})).message,
+               STATION_MESSAGES.playing);
+});
+
+test("every station condition names a level as well as a colour", () => {
+  const level = (over, top) => stationState("live", Object.assign(
+    { ffmpeg: true, channels: { live: over } }, top || {})).level;
+  assert.equal(level({ state: "active", reason: "playing" }), "healthy");
+  assert.equal(level({ state: "active", reason: "slate" }), "attention",
+               "the slate plays, but it is not content");
+  assert.equal(level({ state: "idle", reason: "no_recent_client" }), "attention");
+  assert.equal(level({ state: "unavailable", reason: "nothing_conformed" }), "failed");
+});
+
+test("a station that could not be read says how old the last good read was", () => {
+  const at = 1700000000000;
+  const cold = stationState("live", null, { updatedAt: null, at });
+  assert.equal(cold.state, "unknown");
+  assert.equal(cold.message, "Station status unavailable; last successful update was never.");
+
+  const warm = stationState("live", null, { updatedAt: at - 120000, at });
+  assert.match(warm.message,
+    /^Station status unavailable; last successful update was 2m ago\.$/,
+    "a failed read still says when the page last knew something");
+  assert.equal(warm.level, "offline");
+});
+
+test("a build that does not diagnose a channel claims nothing about it", () => {
+  // Reading an absent `state` as "idle" would invent a diagnosis; missing data
+  // is not evidence either way.
+  const older = { ffmpeg: true, channels: { live: { now: null, next: null } } };
+  assert.equal(stationState("live", older).state, "unknown");
+  assert.equal(stationState("live", older).message, NOT_AVAILABLE);
+  assert.equal(stationState("nowhere", F4_STATION).message, NOT_AVAILABLE);
+});
+
+test("stationState is pure: it reads its arguments and touches nothing", () => {
+  const before = JSON.stringify(F4_STATION);
+  stationState("live", F4_STATION, { updatedAt: 1, at: 2 });
+  stationState("standby", F4_STATION, { updatedAt: 1, at: 2 });
+  assert.equal(JSON.stringify(F4_STATION), before);
+  // The roll-up form the Overview badge uses is still the same function.
+  assert.equal(stationState(F4_STATION).level, stationRollup(F4_STATION).level);
+});
+
+// --- station panel ----------------------------------------------------------
+
+test("the station panel reports now, next, times and remaining per channel", () => {
+  const text = textOf(stationBody());
+  assert.match(text, /Ident/);
+  assert.match(text, /Trivia/);
+  assert.match(text, /off air/, "a channel with nothing on air says so");
+  assert.match(text, /nothing scheduled/);
+  assert.match(text, /3 \/ 4 conformed/);
+});
+
+test("last playlist request and lookahead are shown without being set", () => {
+  const text = textOf(stationBody());
+  assert.match(text, /last playlist request/);
+  assert.match(text, /no client has asked yet/, "a null request is not an age");
+  assert.match(text, /lookahead/);
+  assert.match(text, /24s/);
+
+  // A build that does not send them says so rather than showing a zero.
+  const older = { ffmpeg: true, conformed: 0, eligible: 0, urls: {},
+                  channels: { live: {}, standby: {} } };
+  const olderText = textOf(stationEl(older));
+  assert.ok(olderText.includes(NOT_AVAILABLE),
+            "a field this version does not send is named, never invented");
+});
+
+test("the conform block shows progress, ffmpeg and the last sweep", () => {
+  const text = textOf(conformEl(F4_STATION));
+  assert.match(text, /conformed/);
+  assert.match(text, /3 \/ 4/);
+  assert.match(text, /pending/);
+  assert.match(text, /found/);
+  assert.match(text, /last sweep/);
+  assert.match(text, /conformed 2 · failed 0 · pruned 1 · skipped 0/);
+});
+
+test("a service that has never swept says so, and one without ffmpeg says why", () => {
+  const never = textOf(conformEl(Object.assign({}, F4_STATION, { last_conform: null })));
+  assert.match(never, /no sweep has finished in this service yet/);
+
+  const older = Object.assign({}, F4_STATION);
+  delete older.last_conform;
+  assert.ok(textOf(conformEl(older)).includes(NOT_AVAILABLE),
+            "a build with no last_conform key is unavailable, not never-swept");
+
+  const broken = textOf(conformEl(Object.assign({}, F4_STATION, { ffmpeg: false })));
+  assert.ok(broken.includes(STATION_MESSAGES.ffmpeg));
+  assert.match(broken, /Failed/, "it is a state, not only a colour");
+});
+
+test("the station view explains that conforming can be slow", () => {
+  assert.match(INDEX_HTML, /It can be slow/,
+               "a job that takes minutes says so before it is started");
+});
+
+// --- HLS gating -------------------------------------------------------------
+
+test("no video element exists anywhere until Open preview is pressed", () => {
+  hlsAnswer = "maybe";
+  try {
+    const body = stationBody();
+    assert.equal(descendants(body).filter((n) => n.tagName === "VIDEO").length, 0,
+                 "the station panel never builds a player on render");
+    const open = buttonIn(body, "Open preview");
+    assert.ok(open, "a browser with native HLS is offered an explicit Open preview");
+    assert.match(textOf(body),
+      /Opening the preview is a real playlist client and may advance and report playout\./,
+      "and is told what that does before pressing it");
+  } finally { hlsAnswer = null; }
+});
+
+test("a browser without native HLS is given the URL, never a broken player", () => {
+  hlsAnswer = "";
+  try {
+    const body = stationBody();
+    assert.equal(descendants(body).filter((n) => n.tagName === "VIDEO").length, 0);
+    assert.equal(buttonIn(body, "Open preview"), undefined,
+                 "no preview is offered where the browser cannot play it");
+    assert.ok(textOf(body).includes(HLS_NO_NATIVE));
+    assert.match(textOf(body), /Open in external player \(VLC, mpv, IINA\)/);
+    // The URL is still right there to copy.
+    assert.ok(inputsIn(body).some((i) => i.value.includes("live/index.m3u8")));
+  } finally { hlsAnswer = null; }
+});
+
+test("the HLS answer is read once and never fetches a media library", () => {
+  let asked = 0;
+  hlsAnswer = "probably";
+  const create = document.createElement;
+  document.createElement = function (tag) {
+    const node = create(tag);
+    if (String(tag).toLowerCase() === "video") {
+      node.canPlayType = () => { asked++; return hlsAnswer; };
+    }
+    return node;
+  };
+  try {
+    assert.equal(hlsSupported(), true);
+    assert.equal(hlsSupported(), true);
+    assert.equal(asked, 1, "the capability is probed once per session");
+  } finally { document.createElement = create; hlsAnswer = null; }
+  assert.ok(!INDEX_HTML.includes("hls.js"), "no remote media dependency is loaded");
+  assert.equal((INDEX_HTML.match(/<script/g) || []).length, 1);
+});
+
+test("opening the preview builds the player only then, and closing lets go", async () => {
+  hlsAnswer = "maybe";
+  try {
+    STATE.station.value = F4_STATION;
+    STATE.station.updatedAt = 1;
+    renderStation();
+    assert.equal($("#station-preview").children.length, 0);
+
+    buttonIn($("#station"), "Open preview").click();
+    const video = descendants($("#station-preview")).find((n) => n.tagName === "VIDEO");
+    assert.ok(video, "the element is built by the press, not by the render");
+    assert.equal(video.src, "http://x/station/live/index.m3u8");
+    assert.equal(video.muted, true, "sound is never started for anyone");
+    assert.equal(video.preload, "none", "catalog HLS is never pre-fetched");
+    assert.equal(video.paused, true, "nothing autoplays");
+    assert.match($("#live-region").textContent, /playlist client/);
+
+    // A refresh redraws the summary; it must not reopen the stream.
+    renderStation();
+    assert.equal(descendants($("#station-preview")).find((n) => n.tagName === "VIDEO"),
+                 video, "a redraw leaves the open preview exactly where it was");
+
+    buttonIn($("#station"), "Close preview").click();
+    assert.equal($("#station-preview").children.length, 0);
+    assert.equal(video.src, "", "closing detaches the stream rather than pausing it");
+  } finally { hlsAnswer = null; }
+});
+
+test("toggling the preview hands focus to the control that replaced the button",
+     async () => {
+  // The button lives inside the region the redraw replaces, so pressing it
+  // would otherwise drop focus out to <body>.
+  hlsAnswer = "maybe";
+  try {
+    STATE.station.value = F4_STATION;
+    renderStation();
+    const open = buttonIn($("#station"), "Open preview");
+    open.focus();
+    open.click();
+    assert.equal(document.activeElement.textContent, "Close preview");
+    document.activeElement.click();
+    assert.equal(document.activeElement.textContent, "Open preview");
+  } finally { hlsAnswer = null; }
+});
+
+test("leaving the station closes the preview it left open", async () => {
+  hlsAnswer = "maybe";
+  try {
+    stubRoutes({ station: F4_STATION });
+    await applyHash("#/station");
+    buttonIn($("#station"), "Open preview").click();
+    const video = descendants($("#station-preview")).find((n) => n.tagName === "VIDEO");
+    assert.ok(video);
+    await applyHash("#/overview");
+    assert.equal(video.src, "", "the route change let go of the channel");
+    assert.equal(STATE.ops.preview, null);
+  } finally { hlsAnswer = null; }
+});
+
+// --- copying the handoff URLs -----------------------------------------------
+
+const copyRow = (body, label) => descendants(body)
+  .filter((n) => String(n.className).split(" ").includes("station-url"))
+  .find((n) => textOf(n).includes(label));
+
+test("every handoff URL is copyable and says so when it worked", async () => {
+  const written = [];
+  stubClipboard(async (text) => { written.push(text); });
+  const body = stationBody();
+  const row = copyRow(body, "Live HLS");
+  assert.ok(row, "the live channel's HLS URL is offered, not only the standby one");
+  const field = inputsIn(row)[0];
+  assert.equal(field.readOnly, true, "the URL is a field to copy, not a link to follow");
+
+  field.dispatch("focus");
+  assert.equal(field.selected, true, "focusing a URL still selects it");
+
+  await buttonIn(row, "Copy").click();
+  await flush();
+  assert.deepEqual(written, ["http://x/station/live/index.m3u8"]);
+  assert.match(textOf(row), /Healthy/, "the outcome is a state, not just colour");
+  assert.match(textOf(row), /copied/i);
+  assert.match($("#live-region").textContent, /copied/i, "and it is announced");
+});
+
+test("a clipboard the browser refuses falls back to a selection and says so", async () => {
+  stubClipboard(async () => { throw new Error("denied"); });
+  const row = copyRow(stationBody(), "Channel M3U");
+  await buttonIn(row, "Copy").click();
+  await flush();
+  assert.equal(inputsIn(row)[0].selected, true);
+  assert.match(textOf(row), /Attention/, "a refusal is never reported as a success");
+  assert.match(textOf(row), /keyboard/i);
+  assert.match($("#live-region").textContent, /keyboard/i);
+});
+
+test("a browser with no Clipboard API at all still offers a way to copy", async () => {
+  stubClipboard(null);
+  const row = copyRow(stationBody(), "Guide XMLTV");
+  await buttonIn(row, "Copy").click();
+  await flush();
+  assert.equal(inputsIn(row)[0].selected, true);
+  assert.match(textOf(row), /Attention/);
+});
+
+test("a hostile handoff URL reaches the clipboard as a value, never as markup",
+     async () => {
+  const hostile = 'http://x/s.m3u8"><img src=x onerror="globalThis.pwned=71">';
+  const written = [];
+  stubClipboard(async (text) => { written.push(text); });
+  const body = stationEl(Object.assign({}, F4_STATION,
+    { urls: Object.assign({}, F4_STATION.urls, { live: hostile }) }));
+  const row = copyRow(body, "Live HLS");
+  assert.equal(inputsIn(row)[0].value, hostile);
+  assert.equal(descendants(body).filter((n) => n.tagName === "IMG").length, 0);
+  await buttonIn(row, "Copy").click();
+  await flush();
+  assert.deepEqual(written, [hostile]);
+  assert.equal(descendants(body).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("a URL this build does not send is named, not shown as an empty box", () => {
+  const body = stationEl(Object.assign({}, F4_STATION, { urls: {} }));
+  assert.equal(inputsIn(body).length, 0, "no empty field pretends to hold a URL");
+  assert.ok(textOf(copyRow(body, "Live HLS")).includes(NOT_AVAILABLE));
+});
+
+test("a hostile station title stays text in the channel block", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=72">';
+  const body = stationEl({ ffmpeg: true, conformed: 0, eligible: 0, urls: {},
+    channels: { live: { now: { title: hostile, kind: hostile, ends_at: 0 },
+                        next: { title: hostile }, state: "active", reason: "playing" },
+                standby: {} } });
+  assert.ok(textOf(body).includes(hostile));
+  assert.equal(descendants(body).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// --- action locking ---------------------------------------------------------
+
+test("Conform now disables only itself while its job runs", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let job = { status: "working" };
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") return jsonReply({ job_id: "c1", status: "working" });
+    if (u.startsWith("/api/request/")) return jsonReply(job);
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  const running = doAction("/api/station/conform", "station conform",
+                           { region: "#conform-state" });
+  await flush();
+
+  const all = document.querySelectorAll("[data-job-key]");
+  const conform = keyed("station conform");
+  const others = all.filter((b) => b.dataset.jobKey !== "station conform");
+  assert.equal(conform.length, 2,
+               "the Station view and Operations offer the same action under one key");
+  assert.ok(conform.every((b) => b.disabled), "the duplicate is held wherever it appears");
+  assert.ok(others.length > 3);
+  assert.ok(others.every((b) => !b.disabled),
+            "unrelated actions stay available while conform runs");
+  assert.match(textOf($("#conform-state")), /station conform/,
+               "the station's own panel reports its own job");
+  assert.equal(textOf($("#actions-state")), "",
+               "and does not shout it from a panel on another view");
+
+  job = { status: "done", result: "conformed 2" };
+  t.mock.timers.tick(3000);
+  await running;
+  assert.ok(all.every((b) => !b.disabled), "the lock is released when the job ends");
+});
+
+test("a lock is a rendering of state, so redrawing repeats it", () => {
+  lockAction("generate psa", true);
+  renderActionLocks();
+  const psa = keyed("generate psa")[0];
+  assert.equal(psa.disabled, true);
+  psa.disabled = false;                 // as a stray DOM write would leave it
+  renderActionLocks();
+  assert.equal(psa.disabled, true, "the button's state comes from STATE, not the DOM");
+  lockAction("generate psa", false);
+  renderActionLocks();
+  assert.equal(psa.disabled, false);
+});
+
+// --- the merged jobs list ---------------------------------------------------
+
+const serverJob = (over) => Object.assign(
+  { id: "s1", request: "generate trivia", status: "done", created_at: 1700000000,
+    updated_at: 1700000004, result: "made 20" }, over);
+
+test("the jobs list merges the server's registry with the page's own, newest first", () => {
+  const client = [
+    { id: "s2", label: "conform", status: "working", startedAt: 3000, updatedAt: 3000,
+      result: "" },
+    { id: "page-1", label: "tidy up", status: "done", startedAt: 1000, updatedAt: 1200,
+      result: "removed 2 empty file(s), 0 empty dir(s)" },
+  ];
+  const server = [serverJob({ id: "s2", request: "station conform", status: "done",
+                              created_at: 3, updated_at: 4, result: "conformed 2" }),
+                  serverJob({ id: "s1", created_at: 2, updated_at: 2 })];
+  const rows = mergeJobs(client, server);
+  assert.deepEqual(rows.map((r) => r.id), ["s2", "s1", "page-1"],
+                   "newest first, whichever registry knew about them");
+  const merged = rows[0];
+  assert.equal(merged.status, "done", "the server is authoritative for the verdict");
+  assert.equal(merged.result, "conformed 2");
+  assert.equal(merged.source, "both");
+  assert.equal(rows[2].label, "tidy up",
+               "a synchronous action the registry never saw is still listed");
+});
+
+test("the merge keeps the label the page already showed when the server sends none", () => {
+  const rows = mergeJobs(
+    [{ id: "s1", label: "add: more harbour cams", status: "working",
+       startedAt: 5000, updatedAt: 5000, result: "" }],
+    [serverJob({ id: "s1", request: "", status: "working", result: null })]);
+  assert.equal(rows.length, 1, "one job is one row, not two");
+  assert.equal(rows[0].label, "add: more harbour cams");
+  assert.equal(rows[0].result, "");
+});
+
+test("the merge survives a body that is not the shape it promised", () => {
+  assert.deepEqual(mergeJobs(null, null), []);
+  assert.deepEqual(mergeJobs(undefined, [null, {}, { id: "" }, "nope"]), []);
+  const rows = mergeJobs([], [serverJob({ status: "gibberish" })]);
+  assert.equal(rows[0].status, "unknown", "a status outside the vocabulary is unknown");
+});
+
+test("a dict result reaches both lists as one line of text, never as markup", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=73">';
+  STATE.jobs.server = [serverJob({ request: hostile,
+    result: { ok: false, output: hostile } })];
+  renderJobs();
+  const overview = textOf($("#jobs-list"));
+  const ops = textOf($("#ops-jobs-list"));
+  assert.ok(overview.includes(hostile));
+  assert.ok(ops.includes(hostile));
+  assert.equal(descendants($("#ops-jobs-list")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(descendants($("#jobs-list")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("Operations expands a job's raw result; the Overview stays a triage line", () => {
+  STATE.jobs.server = [serverJob({ status: "error", result: "line one\nline two" })];
+  renderJobs();
+  const ops = descendants($("#ops-jobs-list"));
+  const box = ops.find((n) => n.tagName === "DETAILS");
+  assert.ok(box, "the raw error is expandable rather than truncated into a log");
+  assert.equal(descendants(box).find((n) => n.tagName === "SUMMARY").textContent, "error");
+  assert.match(textOf($("#ops-jobs-list")), /Failed/);
+  assert.equal(descendants($("#jobs-list")).filter((n) => n.tagName === "DETAILS").length, 0,
+               "the overview offers no controls of its own");
+});
+
+test("a job id borrowed from Object.prototype claims no note and no lock", () => {
+  // Ids come from the server, and the note/lock maps are plain objects: read
+  // naively, "constructor" would answer with a function and render as a badge.
+  STATE.jobs.server = [serverJob({ id: "constructor", request: "generate psa" }),
+                       serverJob({ id: "__proto__", request: "fetch-queue",
+                                   created_at: 1699999999 })];
+  renderOpsJobs();
+  const rows = $("#ops-jobs-list").children;
+  assert.equal(rows.length, 2);
+  assert.ok(!textOf(rows[0]).includes("function"),
+            "an inherited property is not a note anyone stored");
+  renderActionLocks();
+  assert.ok(document.querySelectorAll("[data-job-key]").every((b) => !b.disabled),
+            "and it locks nothing");
+});
+
+test("both lists say which registries they could read", () => {
+  renderJobs();
+  assert.equal($("#ops-jobs-state").dataset.state, "empty");
+  assert.match(textOf($("#ops-jobs-state")), /has not been read yet/);
+  STATE.jobs.updatedAt = Date.now();
+  renderJobs();
+  assert.match(textOf($("#ops-jobs-state")), /the server's registry is empty/,
+               "once it has been read, an empty list is the server's answer");
+});
+
+test("Retry is offered only where running it a second time is safe", () => {
+  const offered = (label, retry) => Boolean(jobRetry(
+    retry === undefined ? { label } : { label, retry }));
+  assert.ok(offered("station conform"));
+  assert.ok(offered("capture-windows"));
+  assert.ok(offered("fetch-queue"));
+  assert.ok(offered("render cards"));
+  assert.ok(offered("tidy up"));
+  assert.ok(offered("recheck retired"));
+  assert.ok(offered("generate trivia"));
+  assert.equal(jobRetry({ label: "generate trivia" }).url, "/api/generate/trivia?n=20");
+
+  assert.ok(!offered("starter"), "the starter spends the operator's API quota");
+  assert.ok(!offered("run starter"));
+  assert.ok(!offered("add: more harbour cams"),
+            "repeating an ingest of arbitrary text pulls the material twice");
+  assert.ok(!offered("delete kind trivia"), "retry is never invented for destructive work");
+  assert.ok(!offered("something this build has never heard of"));
+  assert.ok(!offered("add: anything", null), "an explicit refusal wins over the table");
+});
+
+test("the jobs list shows Retry only on the rows that may be repeated", () => {
+  STATE.jobs.server = [
+    serverJob({ id: "a", request: "fetch-queue", status: "error", result: "no" }),
+    serverJob({ id: "b", request: "starter", status: "error", result: "no",
+                created_at: 1699999999 }),
+  ];
+  renderOpsJobs();
+  const rows = $("#ops-jobs-list").children;
+  assert.equal(rows.length, 2);
+  assert.ok(buttonIn(rows[0], "Retry"), "a source refresh may simply be run again");
+  assert.equal(buttonIn(rows[1], "Retry"), undefined,
+               "the starter is never offered a one-click repeat");
+});
+
+test("Retry runs the same action again and reports where it was started", async () => {
+  const posts = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") { posts.push(u); return jsonReply({ status: "done", result: "ok" }); }
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  STATE.jobs.server = [serverJob({ id: "a", request: "fetch-queue", status: "error" })];
+  renderOpsJobs();
+  await buttonIn($("#ops-jobs-list").children[0], "Retry").click();
+  await flush();
+  assert.deepEqual(posts, ["/api/sources/fetch-queue"]);
+});
+
+// --- following listed jobs to a terminal state ------------------------------
+
+function stubOperations(jobs, request) {
+  const urls = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    urls.push(u);
+    if ((opts && opts.method) === "POST") return jsonReply({ job_id: "n1", status: "working" });
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs, count: jobs.length });
+    if (u.startsWith("/api/request/")) return request();
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  return urls;
+}
+
+const jobReads = (urls) => urls.filter((u) => u.startsWith("/api/request/")).length;
+
+test("a working job the server lists is polled to its terminal state", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let answer = { status: "working" };
+  const urls = stubOperations(
+    [serverJob({ id: "w1", request: "station conform", status: "working", result: null })],
+    () => jsonReply(answer));
+
+  await applyHash("#/operations");
+  await flush();
+  assert.match(textOf($("#ops-jobs-list")), /Working/);
+
+  answer = { status: "done", result: "conformed 2, failed 0" };
+  const statusReads = urls.filter((u) => u.startsWith("/api/status")).length;
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(jobReads(urls), 1, "one poll every three seconds, not a busy loop");
+  assert.match(textOf($("#ops-jobs-list")), /Healthy/);
+  assert.match(textOf($("#ops-jobs-list")), /conformed 2/);
+  assert.ok(urls.filter((u) => u.startsWith("/api/status")).length > statusReads,
+            "a job reaching a terminal state refreshes the views it changed");
+
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(jobReads(urls), 1, "a finished job stops being polled");
+});
+
+test("a job the server no longer tracks reads unknown, and is never called done",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = stubOperations(
+    [serverJob({ id: "gone", request: "generate psa", status: "working", result: null })],
+    () => jsonReply({ error: "not found" }, { ok: false, status: 404 }));
+
+  await applyHash("#/operations");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(jobReads(urls), 1, "an expired job ends the poll rather than retrying it");
+  assert.match(textOf($("#ops-jobs-list")), /Attention/);
+  assert.match(textOf($("#ops-jobs-list")), /no longer tracks this job/);
+  assert.doesNotMatch(textOf($("#ops-jobs-list")), /Healthy/,
+                      "a forgotten job is never invented into a success");
+
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(jobReads(urls), 1);
+});
+
+test("a lost status read keeps a listed job unknown and backs off to ten seconds",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = stubOperations(
+    [serverJob({ id: "w2", request: "render cards", status: "working", result: null })],
+    () => { throw new TypeError("Failed to fetch"); });
+
+  await applyHash("#/operations");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(jobReads(urls), 1);
+  assert.match(textOf($("#ops-jobs-list")), /status unknown/);
+  assert.match(textOf($("#ops-jobs-list")), /Working/,
+               "a lost read is doubt about the status, not a finished job");
+  assert.ok(buttonIn($("#ops-jobs-list"), "Retry"),
+            "and the operator is offered a way to run it again");
+
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(jobReads(urls), 1, "it does not keep hammering at three seconds");
+  t.mock.timers.tick(7000);
+  await flush();
+  assert.equal(jobReads(urls), 2, "it keeps checking, ten seconds apart");
+});
+
+test("leaving Operations abandons every background job poll", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = stubOperations(
+    [serverJob({ id: "w3", request: "fetch-queue", status: "working", result: null })],
+    () => jsonReply({ status: "working" }));
+
+  await applyHash("#/operations");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(jobReads(urls), 1);
+
+  await applyHash("#/overview");
+  const settled = jobReads(urls);
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(jobReads(urls), settled, "no poll outlives the view that started it");
+  assert.equal(stopJobWatches(), null);
+});
+
+test("a job this page is already waiting on is not polled twice", async (t) => {
+  // The list read at entry already saw this job working, so a background watch
+  // was following it. Starting the same work from the panel hands the job over
+  // rather than adding a second poll racing the first to write the answer.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let answer = { status: "working" };
+  const urls = stubOperations(
+    [serverJob({ id: "n1", request: "generate trivia", status: "working", result: null })],
+    () => jsonReply(answer));
+  await applyHash("#/operations");
+  await flush();
+
+  const running = doAction("/api/generate/trivia?n=20", "generate trivia");
+  await flush();
+  syncJobWatches();
+  const before = jobReads(urls);
+  answer = { status: "done", result: "made 20" };
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(jobReads(urls) - before, 1,
+               "the action's own poll is the only one asking");
+  await running;
+  assert.match(logText(), /generate trivia: made 20/);
+});
+
+// --- capacity, confirmation and the notice ----------------------------------
+
+test("a capacity refusal leaves the operator's text exactly where they typed it",
+     async () => {
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") {
+      return jsonReply({ error: "job capacity reached" }, { ok: false, status: 429 });
+    }
+    if (String(url).startsWith("/api/bumpers")) {
+      return jsonReply({ count: 0, total: 0, bumpers: [] });
+    }
+    return jsonReply(OK_STATUS);
+  };
+  $("#ask").value = "more harbour cams";
+  await submitAsk();
+  await flush();
+  assert.equal($("#ask").value, "more harbour cams",
+               "a refusal must not cost the operator what they typed");
+  assert.equal($("#ask").disabled, false);
+  assert.equal($("#ask-go").disabled, false);
+  assert.match(textOf($("#ask-result")), /job capacity reached/);
+  assert.match(textOf($("#ask-result")), /Attention/,
+               "a server saying 'not now' is not the request failing");
+});
+
+test("an action refused for capacity says so instead of reporting a failure",
+     async () => {
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") {
+      return jsonReply({ error: "job capacity reached" }, { ok: false, status: 429 });
+    }
+    if (String(url).startsWith("/api/bumpers")) {
+      return jsonReply({ count: 0, total: 0, bumpers: [] });
+    }
+    return jsonReply(String(url).startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  await doAction("/api/generate/psa?n=20", "generate psa");
+  assert.match(logText(), /generate psa not started: job capacity reached/);
+  assert.match(logText(), /try again in a moment/);
+  assert.doesNotMatch(logText(), /generate psa failed/);
+});
+
+test("only the starter run stops to confirm; routine work does not", async () => {
+  const posts = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") { posts.push(u); return jsonReply({ status: "done", result: "ok" }); }
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  wireMaintenance();
+
+  await document.querySelector("[data-maint=tidy]").click();
+  await flush();
+  assert.equal(openDialogs().length, 0, "routine maintenance asks for no modal");
+  assert.ok(posts.some((u) => u.startsWith("/api/pool/tidy")));
+
+  await document.querySelector("[data-prep=conform]").click();
+  await flush();
+  assert.equal(openDialogs().length, 0, "neither does preparing output");
+
+  document.querySelector("[data-starter=dry]").click();
+  await flush();
+  assert.equal(openDialogs().length, 0, "a dry run only reports");
+  assert.ok(posts.some((u) => u === "/api/starter?dry_run=true"));
+
+  document.querySelector("[data-starter=run]").click();
+  await flush();
+  assert.equal(openDialogs().length, 1, "the starter run is the one thing that asks");
+  assert.match(dialogText(), /API keys/);
+  dialogButton("Cancel").click();
+  await flush();
+  assert.ok(!posts.some((u) => u.includes("dry_run=false")), "cancelling sends nothing");
+
+  document.querySelector("[data-starter=run]").click();
+  await flush();
+  dialogButton("Seed the pool").click();
+  await flush();
+  assert.ok(posts.some((u) => u === "/api/starter?dry_run=false"));
+});
+
+test("Operations carries the unprotected-API notice and groups by consequence", () => {
+  const flat = INDEX_HTML.replace(/\s+/g, " ");
+  assert.equal((flat.match(
+    /This operator API has no authentication\. Do not expose this service to the public internet\./g)
+    || []).length, 1, "the notice is at the top of the view, verbatim");
+  assert.match(flat, /Unprotected operator API/, "and the footer still carries its own");
+  ["1 · Add material", "2 · Generate cards", "3 · Refresh sources",
+   "4 · Prepare output", "5 · Maintenance"].forEach((group) => {
+    assert.ok(INDEX_HTML.includes(group), "missing group: " + group);
+  });
+  assert.match(INDEX_HTML, /needs network/);
+  assert.match(INDEX_HTML, /needs ffmpeg/);
+  assert.match(INDEX_HTML, /\(grounded\)/);
+  assert.match(INDEX_HTML, /\(model\)/);
+
+  // Destructive work is linked, never duplicated: hiding a button is not
+  // authorization, and the one bulk delete this app has lives in the Library.
+  assert.match(INDEX_HTML, /Library danger zone/);
+  assert.match(INDEX_HTML, /docs\/CLI\.md/);
+  assert.equal((INDEX_HTML.match(/DELETE/g) || []).length, 0,
+               "Operations starts no destructive request of its own");
+});
+
+test("every button that starts a job carries the key its lock is held under", () => {
+  const starters = (INDEX_HTML.match(/data-(gen|src|maint|prep|starter|station)=/g) || []);
+  const keys = (INDEX_HTML.match(/data-job-key=/g) || []);
+  assert.ok(starters.length >= 18, "the supported kinds and actions are all offered");
+  assert.equal(keys.length, starters.length,
+               "an unkeyed action would be locked by nothing, or by everything");
+});
+
+test("the failed-job warning is bounded to the rows the operator can still see", () => {
+  finishJob(recordJob("generate trivia"), "error", "boom");
+  assert.deepEqual(
+    overviewWarnings(OK_STATUS, OK_STATION, recentJobs(jobsList())).map((w) => w.id),
+    ["failed-job"], "a failure still on the list is worth saying");
+
+  for (let i = 0; i < RECENT_JOBS; i++) finishJob(recordJob("job " + i), "done", "ok");
+  assert.deepEqual(
+    overviewWarnings(OK_STATUS, OK_STATION, recentJobs(jobsList())).map((w) => w.id), [],
+    "a failure the operator can no longer see listed is not a warning they cannot clear");
+  assert.ok(STATE.jobs.items.length > RECENT_JOBS,
+            "the registry still holds it; only the warning is bounded");
+});
+
+test("a terminal refresh of the list clears a warning the server has moved past",
+     async () => {
+  finishJob(recordJob("generate trivia"), "error", "boom");
+  global.fetch = async (url) => {
+    if (String(url).startsWith("/api/jobs")) {
+      return jsonReply({ jobs: [serverJob({ id: "fresh", status: "done" })], count: 1 });
+    }
+    return jsonReply(OK_STATUS);
+  };
+  STATE.status.value = OK_STATUS;
+  STATE.station.value = OK_STATION;
+  renderOverview();
+  assert.match(textOf($("#warnings")), /failed/i);
+
+  await loadJobs();
+  for (let i = 0; i < RECENT_JOBS; i++) finishJob(recordJob("job " + i), "done", "ok");
+  renderOverview();
+  assert.equal($("#warnings-state").dataset.state, "empty");
 });

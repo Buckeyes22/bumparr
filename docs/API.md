@@ -547,15 +547,72 @@ closes any modal it had open, and pauses and detaches its media.
   media, and pack relaxations, and reuse the same inspector. It is GET-only: it
   does not call station `advance()`, write play history, or mutate
   `play_count`/`last_played`.
-- **Station** (`#/station`) — `/api/station`: now/next per channel, conform
-  progress, the handoff URLs, and **Conform now**
-  (`POST /api/station/conform`).
-- **Operations** (`#/operations`) — the **ask bar** (`POST /api/request` with
-  polling; the way to pull in URLs, request card kinds, or search by vibe
-  without touching the API), one click per management endpoint (generate the
-  card kinds, recapture live cams / run the fetch queue via `/api/sources/*`,
-  preview or run the starter seeds, tidy, revive), and the **action output**
-  log.
+- **Station** (`#/station`) — `/api/station`. Each channel states one condition
+  in the operator's own words, mapped from `state`/`reason` and never from a
+  parsed sentence: active and playing, **"Using slate — all playable candidates
+  are currently gated."**, **"Idle — no playlist client has requested this
+  channel recently."**, **"Unavailable — conform at least one eligible item."**,
+  and — because ffmpeg's absence is that last state's cause rather than another
+  symptom of it — **"Cannot conform — ffmpeg is unavailable in the service."**
+  when `ffmpeg` is `false`. A read that failed says **"Station status
+  unavailable; last successful update was …"** and keeps the last good body on
+  screen. Each channel also shows now/next with their times and the remaining
+  duration, `last_playlist_request` and `lookahead_seconds` (absent in an older
+  build, so reported as unavailable rather than as a zero) — reading them never
+  sets them. The four handoff URLs (`channel_m3u`, `guide_xml`, `live`,
+  `standby`) are read-only fields with a **Copy** control: the Clipboard API
+  where the browser grants it, a selection to copy by hand where it does not,
+  and a visible sentence either way; focusing a field still selects it. A
+  channel is previewable only where `video.canPlayType("application/vnd.apple.
+  mpegurl")` is truthy — Chromium and Firefox generally answer `""` — and then
+  only behind an explicit **Open preview**, under a note that opening it makes
+  this page a real playlist client that may advance and report playout. Where
+  the browser cannot play HLS the offer is the URL and *Open in external player
+  (VLC, mpv, IINA)*, never a broken `<video>`; no remote HLS library is loaded
+  in either case. The preview element is built by the press, never by a render,
+  is muted with `preload="none"` and never autoplays, lives outside the region
+  the 20-second refresh redraws, and is detached on close and on leaving the
+  view. The **Conform** panel shows conformed/eligible, pending, ffmpeg and the
+  `last_conform` sweep (its age and its conformed/failed/pruned/skipped counts;
+  `null` reads as "no sweep has finished in this service yet", an absent key as
+  unavailable), says that conforming can be slow, and carries **Conform now**
+  (`POST /api/station/conform`), which disables only itself.
+- **Operations** (`#/operations`) — opens with the unauthenticated-API warning,
+  then groups every action by what it costs, each group stating its
+  requirements before execution: **1 Add material** — the ask bar
+  (`POST /api/request` with polling) and the starter seeds; **2 Generate cards**
+  — every kind `POST /api/generate/{kind}` accepts, badged grounded, model or
+  needs-network, 20 items per run; **3 Refresh sources** — `/api/sources/*`;
+  **4 Prepare output** — `POST /api/render/cards` and `POST /api/station/conform`;
+  **5 Maintenance** — `/api/pool/tidy` and `/api/pool/revive`, each with the
+  endpoint's own `dry_run` preview first. Only the starter *run* stops to
+  confirm; routine refresh and maintenance do not. Destructive work is linked,
+  never duplicated: bulk kind deletion stays in the Library's danger zone, and
+  `bumparr.prune --apply` / `--drop-category` are named as CLI-only. Starting a
+  job disables only the duplicate of that action — every button that starts the
+  same work carries the same job key, so the Station's **Conform now** and this
+  view's **Conform station** lock together and nothing else does — so unrelated
+  controls stay usable within the server's own concurrency. A `429`
+  (`{"error": "job capacity reached"}`) is reported as the server declining to
+  start, not as the work failing, and never costs the operator the text they
+  typed.
+- **Recent jobs** — one list from two registries, shown five-deep on the
+  Overview and in full on Operations: `GET /api/jobs?limit=20` merged by job id
+  with the jobs this page started (which knows a label before the POST answers
+  and covers the synchronous actions the registry never sees). The server wins
+  on status and result. Each row carries the action, its created and updated
+  ages, an icon-word-colour status, and — on Operations — the bounded raw
+  result or error in an expandable block, plus **Retry** only where repeating
+  is safe (source refreshes, render, conform, tidy, revive, generate) and never
+  for the starter, an ingest of arbitrary text, or anything that deletes. Every
+  working job in the list is polled at `GET /api/request/{id}` every three
+  seconds until `done` or `error`, whoever started it; a lost read keeps the
+  row `status unknown` and backs off to ten seconds rather than inventing a
+  failure; a `404` ends the poll as expired and is never reported as success;
+  no five-minute cap is imposed. Reaching a terminal state refreshes the pool
+  counts, the station and the library listing. A poll never outlives the view
+  that started it, and a surface that starts a job takes it over from the
+  background watch rather than polling it twice.
 - **Shell** — the header carries the service status pill, compact profile
   validity, the number of jobs this page is still waiting on, and how old the
   last read is; the footer carries the version (or "version not reported" — the
@@ -567,9 +624,10 @@ closes any modal it had open, and pauses and detaches its media.
   read never clears known-good content. Overview and Station refresh every 20 s
   while the tab is visible, and at once when it becomes visible again.
 
-Jobs listed on the overview are only the ones this page started; there is no
-server-side jobs list yet, and the empty state says so rather than implying the
-server has been idle.
+The jobs list says which registries it could read: before `GET /api/jobs`
+answers it reports only what this page started and says so, and once it has
+answered an empty list is the server's own answer rather than a page that has
+been idle.
 
 The dashboard persists nothing of its own — no accounts, no stored responses —
 and is a thin client over the endpoints in this file, so anything the UI can do,

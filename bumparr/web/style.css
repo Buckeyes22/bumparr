@@ -54,32 +54,51 @@ header { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-4);
   background:var(--surface-1); border-bottom:2px solid var(--accent); }
 .brand { font-size:1.4rem; font-weight:800; letter-spacing:.02em; color:var(--accent); }
 .tag { color:var(--muted); font-size:.85rem; }
-.panelnav { display:flex; flex-wrap:wrap; gap:var(--space-2); }
-.panelnav a { color:var(--muted); text-decoration:none; font-size:.8rem;
-  border:1px solid var(--border); border-radius:999px;
-  padding:var(--space-1) var(--space-3); }
-.panelnav a:hover { color:var(--text); border-color:var(--accent); }
-.pill { margin-left:auto; background:var(--bg); border:1px solid var(--border);
+.headmeta { margin-left:auto; display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--space-3); }
+.pill { background:var(--bg); border:1px solid var(--border);
   border-radius:999px; padding:var(--space-1) var(--space-3); font-size:.8rem; }
+.hmeta { color:var(--muted); font-size:.78rem; font-family:var(--font-mono); }
 
-main { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-4);
-  padding:var(--space-6); max-width:1200px; margin:0 auto; }
+/* Sidebar on the desktop, a scrolling tab row on a phone. Never a hover menu:
+   every workflow stays one visible click away on both. */
+.shell { display:grid; grid-template-columns:190px minmax(0,1fr); gap:var(--space-6);
+  align-items:start; max-width:1400px; margin:0 auto;
+  padding:var(--space-6) var(--space-6) var(--space-4); }
+.viewnav { display:flex; flex-direction:column; gap:var(--space-1);
+  position:sticky; top:var(--space-4); }
+.viewnav a { display:flex; align-items:center; min-height:44px;
+  padding:var(--space-2) var(--space-3); color:var(--muted); text-decoration:none;
+  border-left:3px solid transparent; border-radius:var(--radius-sm);
+  transition:background-color .15s ease, color .15s ease; }
+.viewnav a:hover { color:var(--text); background:var(--surface-1); }
+.viewnav a[aria-current="page"] { color:var(--text); background:var(--surface-2);
+  border-left-color:var(--accent); font-weight:600; }
+
+main { display:block; min-width:0; }
+.view { display:flex; flex-direction:column; gap:var(--space-4); }
+.viewhead { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-3); }
+.viewtools { display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--space-2); margin-left:auto; }
+.viewgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  gap:var(--space-4); align-items:start; }
+.note { color:var(--muted); font-size:.85rem; }
 .panel { background:var(--surface-1); border:1px solid var(--border);
   border-radius:var(--radius-md); padding:var(--space-4); min-width:0; }
-.panel.wide { grid-column:1 / -1; }
+.viewgrid .panel.wide { grid-column:1 / -1; }
 .panel-head { display:flex; flex-wrap:wrap; align-items:center;
   gap:var(--space-3); margin-bottom:var(--space-4); }
 .panel-tools { display:flex; flex-wrap:wrap; align-items:center;
   gap:var(--space-2); margin-left:auto; }
-h2 { font-size:1rem; text-transform:uppercase; letter-spacing:.08em;
+h2 { font-size:1.15rem; letter-spacing:.01em; }
+h3 { font-size:1rem; text-transform:uppercase; letter-spacing:.08em;
   color:var(--muted); margin-bottom:var(--space-4); }
-.panel-head h2 { margin-bottom:0; }
-h3 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
+h4 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
   color:var(--muted); margin:var(--space-4) 0 var(--space-2); }
 
 /* The live region is the primary short-result surface; the log is scrollback. */
-.live-region { grid-column:1 / -1; min-height:1.4em; color:var(--text);
-  font-size:.85rem; }
+.live-region { min-height:1.4em; color:var(--text); font-size:.85rem;
+  margin-bottom:var(--space-3); }
 
 /* Status: icon and word carry the meaning, colour only reinforces it. */
 .badge { display:inline-flex; align-items:center; gap:var(--space-2);
@@ -101,10 +120,51 @@ h3 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
 .panel-state-msg { color:var(--muted); font-size:.85rem; }
 .panel-retry { min-height:44px; }
 
-.totals { display:flex; flex-wrap:wrap; gap:var(--space-6); margin-bottom:var(--space-4); }
-.totals .num { font-size:2rem; font-weight:800; font-variant-numeric:tabular-nums; }
+.totals { display:flex; flex-wrap:wrap; gap:var(--space-4) var(--space-6);
+  margin-bottom:var(--space-4); }
+.totals .num { font-size:1.8rem; font-weight:800; font-variant-numeric:tabular-nums; }
 .totals .num small { display:block; font-size:.7rem; font-weight:400; color:var(--muted);
   text-transform:uppercase; letter-spacing:.08em; }
+.totals-missing { width:100%; color:var(--muted); font-size:.75rem;
+  font-family:var(--font-mono); overflow-wrap:anywhere; }
+
+/* Warnings come before the healthy detail: one line, one link, one fix. */
+.warnings { list-style:none; display:flex; flex-direction:column; gap:var(--space-1); }
+.warning { display:flex; align-items:flex-start; gap:var(--space-2); }
+.warning-icon { color:var(--warning); font-weight:700; line-height:1.6; }
+.warning-link { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-2);
+  flex:1; min-width:0; color:var(--text); text-decoration:none;
+  padding:var(--space-2); min-height:44px; border-radius:var(--radius-sm);
+  border:1px solid transparent; }
+.warning-link:hover { border-color:var(--accent); background:var(--surface-2); }
+.warning-msg { overflow-wrap:anywhere; }
+.warning-go { color:var(--accent); font-size:.78rem; text-transform:uppercase;
+  letter-spacing:.06em; white-space:nowrap; }
+
+/* A labelled fact. Values that can be an id, a URL or a server string wrap
+   rather than pushing the panel sideways. */
+.summary { display:flex; flex-direction:column; gap:var(--space-1); }
+.summary-row { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  align-items:baseline; font-size:.85rem; }
+.summary-row .lbl { min-width:6.5rem; color:var(--muted); }
+.summary-row .val { font-family:var(--font-mono); overflow-wrap:anywhere;
+  min-width:0; }
+
+.nowcards { display:flex; flex-wrap:wrap; gap:var(--space-2); margin-top:var(--space-3); }
+.nowcard { flex:1; min-width:0; background:var(--surface-2); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:var(--space-2); }
+.nowcard-ch { display:block; color:var(--muted); font-size:.7rem;
+  text-transform:uppercase; letter-spacing:.08em; }
+.nowcard-now { display:block; font-size:.8rem; font-family:var(--font-mono);
+  overflow-wrap:anywhere; }
+
+/* Jobs this page started. The server keeps no list yet, so this one says so. */
+.joblist { list-style:none; display:flex; flex-direction:column; gap:var(--space-2); }
+.jobrow { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-3);
+  padding-bottom:var(--space-2); border-bottom:1px solid var(--border); }
+.jobrow-age { color:var(--muted); font-size:.75rem; font-family:var(--font-mono); }
+.jobrow-result { color:var(--muted); font-size:.75rem; font-family:var(--font-mono);
+  overflow-wrap:anywhere; min-width:0; flex:1; }
 
 .bars .bar { display:flex; align-items:center; gap:var(--space-2); margin:var(--space-1) 0; }
 .bars .bar .name { width:70px; color:var(--muted); font-size:.8rem; }
@@ -172,9 +232,13 @@ button:disabled { opacity:.55; cursor:wait; }
   background:var(--scrim); border-color:var(--accent); color:var(--accent); }
 .pv-card .pv-enable:hover { background:var(--accent); color:var(--bg); }
 
-footer { text-align:center; padding:var(--space-6); color:var(--muted); font-size:.8rem;
+footer { display:flex; flex-wrap:wrap; justify-content:center; gap:var(--space-2) var(--space-6);
+  padding:var(--space-6); color:var(--muted); font-size:.8rem;
   border-top:1px solid var(--border); margin-top:var(--space-4); }
 footer a { color:var(--accent); }
+.fver { font-family:var(--font-mono); }
+/* Hiding a control is not authorization: the API is open, and says so here. */
+.notice { color:var(--warning); }
 
 /* Browse UI */
 .search-label, .ask-label { color:var(--muted); font-size:.78rem;
@@ -224,11 +288,32 @@ footer a { color:var(--accent); }
   border:1px solid var(--border); border-radius:var(--radius-sm); padding:var(--space-1); }
 .station .muted, .station-body .muted { color:var(--muted); }
 
-/* One column early, so 320px and 200% zoom keep every action reachable
-   without the page itself scrolling sideways. */
-@media (max-width: 900px) {
-  main { grid-template-columns:1fr; padding:var(--space-3); }
+/* Below 760px the sidebar becomes a horizontally scrolling tab row under the
+   header. Still every view, still one visible tap each — nothing moves behind
+   a hover or a menu. */
+@media (max-width: 760px) {
+  .shell { grid-template-columns:1fr; gap:var(--space-4); padding:var(--space-3); }
   header { padding:var(--space-3); }
-  .pill { margin-left:0; }
-  .panel-tools { margin-left:0; }
+  .headmeta { margin-left:0; }
+  .viewnav { position:static; flex-direction:row; overflow-x:auto;
+    gap:var(--space-2); padding-bottom:var(--space-1);
+    border-bottom:1px solid var(--border); }
+  .viewnav a { white-space:nowrap; border-left:none;
+    border-bottom:3px solid transparent; border-radius:0; }
+  .viewnav a[aria-current="page"] { border-left-color:transparent;
+    border-bottom-color:var(--accent); }
+  .panel-tools, .viewtools { margin-left:0; }
+}
+
+/* One column of controls, and anything that can be an id or a URL wraps
+   instead of scrolling the page sideways: 320px and 200% zoom stay usable. */
+@media (max-width: 480px) {
+  .viewgrid { grid-template-columns:1fr; }
+  .viewtools, .panel-tools, .action-group { width:100%; }
+  .viewtools > button, .action-group > button, .action-group > .linkbtn { flex:1; }
+  .ask-row { flex-direction:column; align-items:stretch; }
+  .summary-row, .station-row, .station-url { flex-direction:column;
+    align-items:stretch; gap:var(--space-1); }
+  .summary-row .lbl, .station-row .lbl, .station-url .lbl { min-width:0; }
+  .search { width:100%; }
 }

@@ -12,124 +12,197 @@
   <header>
     <h1 class="brand">▮ Bumparr</h1>
     <p class="tag">bumper generator for the *arr stack</p>
-    <nav class="panelnav" aria-label="Dashboard panels">
-      <a href="#panel-pool">Pool</a>
-      <a href="#panel-station">Station</a>
-      <a href="#panel-actions">Actions</a>
-      <a href="#panel-preview">Preview</a>
-      <a href="#panel-browse">Browse</a>
-    </nav>
-    <div id="status-pill" class="pill">…</div>
+    <div class="headmeta">
+      <div id="status-pill" class="pill">…</div>
+      <div id="header-profile" class="hmeta"></div>
+      <div id="header-jobs" class="hmeta"></div>
+      <div id="header-refresh" class="hmeta"></div>
+    </div>
   </header>
 
-  <main id="main" tabindex="-1">
-    <!-- Primary short feedback. Panels keep their own explicit state region. -->
-    <p id="live-region" class="live-region" role="status" aria-live="polite"></p>
+  <div class="shell">
+    <!-- Hash routes, no server routes and no router library. The active view
+         carries aria-current="page"; below 760px this becomes a scrolling
+         tab row under the header rather than a sidebar. -->
+    <nav id="viewnav" class="viewnav" aria-label="Views">
+      <a href="#/overview" data-view="overview">Overview</a>
+      <a href="#/library" data-view="library">Library</a>
+      <a href="#/composer" data-view="composer">Composer</a>
+      <a href="#/station" data-view="station">Station</a>
+      <a href="#/operations" data-view="operations">Operations</a>
+    </nav>
 
-    <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
-    <section class="panel wide askbar" id="panel-ask" aria-labelledby="h-ask">
-      <h2 id="h-ask">Add to the rotation</h2>
-      <label class="ask-label" for="ask">Describe what to pull in</label>
-      <div class="ask-row">
-        <input id="ask" class="ask" autocomplete="off"
-          placeholder="e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
-        <button id="ask-go">＋ Add</button>
-      </div>
-      <div id="ask-result" class="ask-result"></div>
-      <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
-    </section>
+    <main id="main" tabindex="-1">
+      <!-- Primary short feedback. Panels keep their own explicit state region. -->
+      <p id="live-region" class="live-region" role="status" aria-live="polite"></p>
 
-    <!-- top row: pool stats + actions -->
-    <section class="panel" id="panel-pool" aria-labelledby="h-pool">
-      <h2 id="h-pool">Pool</h2>
-      <div id="pool-state" class="panel-state"></div>
-      <div id="totals" class="totals"></div>
-      <div id="by-type" class="bars"></div>
-      <div id="memory-status" class="memory-status"></div>
-    </section>
+      <!-- Triage: warnings first, healthy detail after. Reads only
+           GET /api/status and GET /api/station, so opening it never creates or
+           advances a station timeline. The default view ships visible and the
+           other four hidden, so a page whose script never ran still shows a
+           shell rather than nothing at all. -->
+      <section class="view" id="view-overview" aria-labelledby="h-overview">
+        <div class="viewhead">
+          <h2 id="h-overview">Overview</h2>
+        </div>
+        <div id="pool-state" class="panel-state"></div>
 
-    <section class="panel" id="panel-station" aria-labelledby="h-station">
-      <h2 id="h-station">Station</h2>
-      <div id="station-state" class="panel-state"></div>
-      <div id="station" class="station"></div>
-      <div class="action-group">
-        <button data-station="conform">Conform now <em>(prepare the pool for the live channels)</em></button>
-      </div>
-    </section>
+        <section class="panel wide" id="panel-warnings" aria-labelledby="h-warnings">
+          <h3 id="h-warnings">Needs attention</h3>
+          <div id="warnings-state" class="panel-state"></div>
+          <ul id="warnings" class="warnings"></ul>
+        </section>
 
-    <section class="panel" id="panel-actions" aria-labelledby="h-actions">
-      <h2 id="h-actions">Actions</h2>
-      <div id="actions-state" class="panel-state"></div>
-      <div class="actions">
-        <div class="action-group">
-          <span class="lbl">Generate cards</span>
-          <button data-gen="trivia">Trivia <em>(grounded)</em></button>
-          <button data-gen="fun_facts">Fun facts <em>(grounded)</em></button>
-          <button data-gen="on_this_day">On this day</button>
-          <button data-gen="psa">PSAs <em>(model)</em></button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Refresh sources</span>
-          <button data-src="capture-windows">Recapture live cams</button>
-          <button data-src="fetch-queue">Run fetch queue</button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Starter pack</span>
-          <button data-starter="dry">Preview seeds</button>
-          <button data-starter="run">Seed the pool <em>(uses your API keys)</em></button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Maintenance</span>
-          <button data-maint="tidy">Tidy up <em>(empty dirs, 0-byte files)</em></button>
-          <button data-maint="revive">Recheck retired <em>(restore playable)</em></button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Consume</span>
-          <a class="linkbtn" href="/playlist.m3u" target="_blank">playlist.m3u</a>
-          <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
-        </div>
-      </div>
-      <h3 id="h-log">Action output</h3>
-      <pre id="log" class="log" aria-labelledby="h-log" tabindex="0">ready.</pre>
-    </section>
+        <div class="viewgrid">
+          <section class="panel" id="panel-service" aria-labelledby="h-service">
+            <h3 id="h-service">Service</h3>
+            <div id="service-summary" class="summary"></div>
+          </section>
 
-    <!-- read-only preview: one item or a duration pack. Never advances playout. -->
-    <section class="panel wide" id="panel-preview" aria-labelledby="h-preview">
-      <div class="panel-head">
-        <h2 id="h-preview">Preview</h2>
-        <div class="panel-tools">
-          <button id="preview-one" class="mini">one item</button>
-          <button data-pack="15" class="mini">15s</button>
-          <button data-pack="30" class="mini">30s</button>
-          <button data-pack="60" class="mini">60s</button>
-          <button data-pack="90" class="mini">90s</button>
-        </div>
-      </div>
-      <div id="preview-state" class="panel-state"></div>
-      <div id="preview-summary"></div>
-      <div id="preview-grid" class="grid"></div>
-    </section>
+          <section class="panel" id="panel-pool" aria-labelledby="h-pool">
+            <h3 id="h-pool">Pool</h3>
+            <div id="totals" class="totals"></div>
+            <div id="by-type" class="bars"></div>
+          </section>
 
-    <!-- browser: filter by category, see everything -->
-    <section class="panel wide" id="panel-browse" aria-labelledby="h-browse">
-      <div class="panel-head">
-        <h2 id="h-browse">Browse the pool</h2>
-        <div class="panel-tools">
-          <label class="search-label" for="search">Filter by title</label>
-          <input id="search" class="search" placeholder="e.g. harbour" />
-          <button id="shuffle" class="mini">⟳ shuffle preview</button>
+          <section class="panel" id="panel-ov-station" aria-labelledby="h-ov-station">
+            <h3 id="h-ov-station">Station</h3>
+            <div id="ov-station-state" class="panel-state"></div>
+            <div id="ov-station" class="summary"></div>
+            <div id="ov-now" class="nowcards"></div>
+          </section>
+
+          <section class="panel" id="panel-config" aria-labelledby="h-config">
+            <h3 id="h-config">Configuration</h3>
+            <div id="config-summary" class="summary"></div>
+            <div id="memory-status" class="memory-status"></div>
+          </section>
+
+          <section class="panel wide" id="panel-jobs" aria-labelledby="h-jobs">
+            <h3 id="h-jobs">Recent jobs</h3>
+            <div id="jobs-state" class="panel-state"></div>
+            <ul id="jobs-list" class="joblist"></ul>
+          </section>
         </div>
-      </div>
-      <div id="filters" class="filters"></div>
-      <div id="browse-state" class="panel-state"></div>
-      <div id="grid" class="grid"></div>
-      <div id="more-row"><button id="more" class="mini" hidden>load more</button></div>
-    </section>
-  </main>
+      </section>
+
+      <!-- Curate: filter the pool, act on single rows. -->
+      <section class="view" id="view-library" aria-labelledby="h-library" hidden>
+        <div class="viewhead">
+          <h2 id="h-library">Library</h2>
+          <div class="viewtools">
+            <label class="search-label" for="search">Filter by title</label>
+            <input id="search" class="search" placeholder="e.g. harbour" />
+            <button id="shuffle" class="mini">⟳ shuffle preview</button>
+          </div>
+        </div>
+        <div class="panel wide">
+          <div id="filters" class="filters"></div>
+          <div id="browse-state" class="panel-state"></div>
+          <div id="grid" class="grid"></div>
+          <div id="more-row"><button id="more" class="mini" hidden>load more</button></div>
+        </div>
+      </section>
+
+      <!-- Review sequences: read-only preview of one item or a duration pack. -->
+      <section class="view" id="view-composer" aria-labelledby="h-composer" hidden>
+        <div class="viewhead">
+          <h2 id="h-composer">Composer</h2>
+          <div class="viewtools">
+            <button id="preview-one" class="mini">one item</button>
+            <button data-pack="15" class="mini">15s</button>
+            <button data-pack="30" class="mini">30s</button>
+            <button data-pack="60" class="mini">60s</button>
+            <button data-pack="90" class="mini">90s</button>
+          </div>
+        </div>
+        <p class="note">Read-only: composing a preview never advances the live channels
+          and never writes play history.</p>
+        <div class="panel wide">
+          <div id="preview-state" class="panel-state"></div>
+          <div id="preview-summary"></div>
+          <div id="preview-grid" class="grid"></div>
+        </div>
+      </section>
+
+      <!-- Operate the HLS station. -->
+      <section class="view" id="view-station" aria-labelledby="h-station" hidden>
+        <div class="viewhead">
+          <h2 id="h-station">Station</h2>
+          <div class="viewtools">
+            <button data-station="conform">Conform now <em>(prepare the pool for the live channels)</em></button>
+          </div>
+        </div>
+        <div class="panel wide">
+          <div id="station-state" class="panel-state"></div>
+          <div id="station" class="station"></div>
+        </div>
+      </section>
+
+      <!-- Create and maintain: everything that starts a job. -->
+      <section class="view" id="view-operations" aria-labelledby="h-operations" hidden>
+        <div class="viewhead">
+          <h2 id="h-operations">Operations</h2>
+        </div>
+
+        <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
+        <section class="panel wide askbar" id="panel-ask" aria-labelledby="h-ask">
+          <h3 id="h-ask">Add to the rotation</h3>
+          <label class="ask-label" for="ask">Describe what to pull in</label>
+          <div class="ask-row">
+            <input id="ask" class="ask" autocomplete="off"
+              placeholder="e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
+            <button id="ask-go">＋ Add</button>
+          </div>
+          <div id="ask-result" class="ask-result"></div>
+          <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
+        </section>
+
+        <section class="panel wide" id="panel-actions" aria-labelledby="h-actions">
+          <h3 id="h-actions">Actions</h3>
+          <div id="actions-state" class="panel-state"></div>
+          <div class="actions">
+            <div class="action-group">
+              <span class="lbl">Generate cards</span>
+              <button data-gen="trivia">Trivia <em>(grounded)</em></button>
+              <button data-gen="fun_facts">Fun facts <em>(grounded)</em></button>
+              <button data-gen="on_this_day">On this day</button>
+              <button data-gen="psa">PSAs <em>(model)</em></button>
+            </div>
+            <div class="action-group">
+              <span class="lbl">Refresh sources</span>
+              <button data-src="capture-windows">Recapture live cams</button>
+              <button data-src="fetch-queue">Run fetch queue</button>
+            </div>
+            <div class="action-group">
+              <span class="lbl">Starter pack</span>
+              <button data-starter="dry">Preview seeds</button>
+              <button data-starter="run">Seed the pool <em>(uses your API keys)</em></button>
+            </div>
+            <div class="action-group">
+              <span class="lbl">Maintenance</span>
+              <button data-maint="tidy">Tidy up <em>(empty dirs, 0-byte files)</em></button>
+              <button data-maint="revive">Recheck retired <em>(restore playable)</em></button>
+            </div>
+            <div class="action-group">
+              <span class="lbl">Consume</span>
+              <a class="linkbtn" href="/playlist.m3u" target="_blank">playlist.m3u</a>
+              <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
+            </div>
+          </div>
+          <h4 id="h-log">Action output</h4>
+          <pre id="log" class="log" aria-labelledby="h-log" tabindex="0">ready.</pre>
+        </section>
+      </section>
+    </main>
+  </div>
 
   <footer>
-    Bumparr —
-    AGPL-3.0, source: <a href="https://github.com/mikemcg94/bumparr" target="_blank" rel="noopener">github.com/mikemcg94/bumparr</a>
+    <p id="footer-version" class="fver">version not reported</p>
+    <p class="notice">Unprotected operator API — do not expose publicly</p>
+    <p>Bumparr — AGPL-3.0, source:
+      <a href="https://github.com/mikemcg94/bumparr" target="_blank" rel="noopener">github.com/mikemcg94/bumparr</a>
+      · <a href="/docs">API documentation</a></p>
   </footer>
 
   <script src="/web/app.js"></script>

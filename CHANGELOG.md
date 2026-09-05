@@ -20,6 +20,48 @@
   one card (404 unknown, 400 non-card, before any job starts) instead of a
   batch pass; `bumparr.render_cards`'s CLI gained a matching `--id` flag.
 
+**Operator dashboard: five views and a triage overview**
+- The dashboard is now five hash-routed views — Overview, Library, Composer,
+  Station, Operations — instead of one long column of panels. Every capability
+  from the old page has exactly one home: the ask bar, the action buttons and
+  the output log are Operations; the pool counts are Overview; browse is
+  Library; the item/pack preview is Composer; the station panel and **Conform
+  now** are Station. An unknown or empty hash is replaced (not pushed) with
+  `#/overview`, the skip link's `#main` is still an ordinary in-page jump, and
+  deep links, back and forward all work because the hash picks the view and
+  page state alone decides what it shows. Below 760px the sidebar becomes a
+  horizontally scrolling tab row; below 480px controls go to one column and ids
+  and URLs wrap. Nothing hides behind a hover.
+- Library filters travel in the hash query
+  (`#/library?state=parked&kind=trivia&type=card&q=harbour`) and are read when
+  the view is entered, so an overview warning can link straight to the rows it
+  counted. `state` and `type` are checked against what `GET /api/bumpers`
+  accepts and an unknown value is dropped rather than forwarded; the listing now
+  uses the server's own `state` filter (the same SQL `/api/status` counts with)
+  instead of `enabled=false`.
+- The Overview is a triage view: actionable warnings before healthy detail, each
+  derived from an explicit API field — no playable items, unrendered cards, a
+  conform backlog, missing ffmpeg, an invalid or fallen-back channel profile or
+  music manifest, and a failed job — each linking to the view that can fix it.
+  Below them: service, pool counts (total, playable, parked, dead, unrendered,
+  kinds), the station summary with compact now cards, configuration
+  (profile/music source and validity, channel memory) and the five most recent
+  jobs. A count this build of the server does not report is shown as "Not
+  available in this version." and never as a zero. Overview reads are
+  `GET /api/status` and `GET /api/station` only, so opening it cannot create or
+  advance a station timeline.
+- The header now carries the service pill, profile validity, the number of jobs
+  this page is still waiting on, and the age of the last read; the footer
+  carries the version (or "version not reported"), the *unprotected operator
+  API* notice and a link to `/docs`. Jobs started from this page are listed on
+  the overview with an honest empty state — there is no server-side jobs list
+  yet, so it says "No jobs started from this page" rather than implying the
+  server has been idle.
+- The 20-second refresh now belongs to the two views that show live figures and
+  reads only what they show. Leaving a view stops its clock and aborts the reads
+  it left in flight, so a cancelled read can no longer leave a panel waiting on
+  a request that no longer exists.
+
 **Operator dashboard: truthful states and accessible foundations**
 - Every panel (Pool, Station, Preview, Browse) now renders exactly one explicit
   state: loading, populated, useful empty, error with Retry, or last-known

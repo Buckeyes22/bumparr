@@ -20,6 +20,21 @@ const REFRESH_MS = 20000;
 const JOB_POLL_MS = 3000;
 const JOB_BACKOFF_MS = 10000;
 const MAX_NOTICES = 20;
+const MAX_JOBS = 20;                // jobs this page started, newest first
+const RECENT_JOBS = 5;              // how many of them the overview shows
+const MAX_FILTER_TEXT = 100;        // /api/bumpers caps `q` at 100 characters
+
+// The five views. A hash naming anything else is not a view.
+const ROUTES = ["overview", "library", "composer", "station", "operations"];
+const DEFAULT_ROUTE = "overview";
+// What /api/bumpers?state= and ?type= actually accept. A hash may say anything,
+// so it is checked against these rather than forwarded on trust.
+const LIBRARY_STATES = ["all", "playable", "parked", "dead", "unrendered"];
+const LIBRARY_TYPES = ["video", "card", "stream", "image"];
+
+// Said, once, wherever this build of the server does not report a field. Never
+// a zero, a dash, or an invented default.
+const NOT_AVAILABLE = "Not available in this version.";
 
 // One explicit state object, divided by concern. The DOM is never the state:
 // every render below can be repeated from this object alone.
@@ -30,7 +45,7 @@ const MAX_NOTICES = 20;
 // shuffle draw (they have different empty messages).
 function initialState() {
   return {
-    route: "overview",
+    route: DEFAULT_ROUTE,
     status: { value: null, loading: false, error: null, updatedAt: null },
     station: { value: null, loading: false, error: null, updatedAt: null },
     library: {
@@ -43,7 +58,9 @@ function initialState() {
       placement: "any", types: [], result: null, loading: false, error: null,
       updatedAt: null, retry: null, loadingLabel: "",
     },
-    jobs: { items: [], polling: new Map(), error: null },
+    // Jobs THIS page started, newest first. There is no server jobs list yet,
+    // so this registry is the whole truth and says so when it is empty.
+    jobs: { items: [], error: null },
     notices: [],
   };
 }
@@ -52,7 +69,15 @@ const STATE = initialState();
 
 let searchTimer = null;
 let libraryAbort = null;
+let statusAbort = null;
+let stationAbort = null;
 let refreshTimer = null;
+// What has actually been entered, as opposed to STATE.route (what is drawn).
+// Re-entering the same route with the same query is a no-op, which is what
+// keeps location.replace()'s own hashchange from loading everything twice.
+let activeRoute = null;
+let activeQuery = "";
+let jobSeq = 0;
 // One counter per job surface: a superseded wait abandons its poll and stops
 // writing, so it can neither overwrite newer feedback nor poll forever.
 let askGeneration = 0;
@@ -74,6 +99,17 @@ const makeEl = (tag, cls, text) => {
 
 function setBusy(el, busy) {
   if (el && el.setAttribute) el.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+// In-page links only. Every href handed to this comes from a literal route
+// table in this file — never from an API string — so no scheme can arrive
+// from the server through it.
+function makeLink(href, text, cls) {
+  const a = document.createElement("a");
+  if (cls) a.className = cls;
+  a.href = href;
+  if (text !== undefined) a.textContent = String(text);
+  return a;
 }
 
 const now = () => Date.now();
@@ -175,10 +211,216 @@ async function api(path, options) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Routing
+// 4. Routing and shell chrome
 // ---------------------------------------------------------------------------
-// The dashboard is one page today; STATE.route names the only view. Hash
-// routing, aria-current and per-route teardown arrive in the routing slice.
+// Five hash views, no server routes and no router library. The hash says which
+// view is on screen; STATE says what it shows. Nothing is ever read back out of
+// the DOM, so a deep link, a back button and a first paint all render the same
+// way — and every view can be re-rendered at any time without a reload.
+//
+// Each view registers `enter` (paint from STATE, then read what it needs) and
+// `exit` (give back what it holds). Later slices hang media, dialogs and
+// pollers off the same `exit` hook; the shared teardown below already stops the
+// 20-second clock and cancels reads that are still in flight.
+
+const VIEWS = {
+  overview: { enter: enterOverview, exit: exitOverview },
+  library: { enter: enterLibrary, exit: exitLibrary },
+  composer: { enter: enterComposer, exit: exitComposer },
+  station: { enter: enterStation, exit: exitStation },
+  operations: { enter: enterOperations, exit: exitOperations },
+};
+
+const currentHash = () =>
+  (typeof location !== "undefined" && location && location.hash) || "";
+
+// `#/library?state=parked` → {route:"library", params}. An unknown or empty
+// path is reported as route:null so the caller can normalize it; the query is
+// a URLSearchParams so no hand-rolled splitting can mis-decode a value.
+function parseHash(hash) {
+  const raw = String(hash === undefined || hash === null ? "" : hash).replace(/^#/, "");
+  const cut = raw.indexOf("?");
+  const path = (cut === -1 ? raw : raw.slice(0, cut)).replace(/^\/+/, "");
+  const name = path.split("/")[0].toLowerCase();
+  return {
+    route: ROUTES.indexOf(name) === -1 ? null : name,
+    params: new URLSearchParams(cut === -1 ? "" : raw.slice(cut + 1)),
+  };
+}
+
+// "#main" is the skip link, not a view. A hash with no leading slash that names
+// an element really in the document is an in-page jump: the browser handles it
+// and the router leaves the current view alone. Anything else is a bad route.
+function isFragmentLink(hash) {
+  const raw = String(hash === undefined || hash === null ? "" : hash).replace(/^#/, "");
+  if (!raw || raw.charAt(0) === "/" || raw.indexOf("?") !== -1) return false;
+  return Boolean(typeof document !== "undefined" && document.getElementById &&
+                 document.getElementById(raw));
+}
+
+// The one entry point: called at boot and on every hashchange.
+function applyHash(hash) {
+  const raw = hash === undefined ? currentHash() : hash;
+  const parsed = parseHash(raw);
+  if (parsed.route) return enterRoute(parsed.route, parsed.params);
+  // Before the first view is entered even a fragment has to land somewhere.
+  if (activeRoute && isFragmentLink(raw)) return null;
+  // replace(), not assign(): a typo in the address bar must not become a stop
+  // on the way back. The hashchange this fires re-enters the same route with
+  // the same query, which enterRoute treats as a no-op.
+  if (typeof location !== "undefined" && location && location.replace) {
+    location.replace("#/" + DEFAULT_ROUTE);
+  }
+  return enterRoute(DEFAULT_ROUTE, new URLSearchParams(""));
+}
+
+function enterRoute(name, params) {
+  const query = params ? params.toString() : "";
+  if (activeRoute === name && activeQuery === query) return null;
+  if (activeRoute) exitRoute(activeRoute);
+  activeRoute = name;
+  activeQuery = query;
+  STATE.route = name;
+  renderChrome();
+  const view = VIEWS[name];
+  return view && view.enter ? view.enter(params || new URLSearchParams("")) : null;
+}
+
+// Shared teardown first — the departed view's clock and its in-flight reads —
+// then whatever that view holds itself.
+function exitRoute(name) {
+  stopRefresh();
+  abortReads();
+  const view = VIEWS[name];
+  if (view && view.exit) view.exit();
+}
+
+function abortReads() {
+  [statusAbort, stationAbort, libraryAbort].forEach((c) => { if (c) c.abort(); });
+  statusAbort = null;
+  stationAbort = null;
+  libraryAbort = null;
+}
+
+function startRefresh() {
+  if (refreshTimer === null) refreshTimer = setInterval(refreshTick, REFRESH_MS);
+}
+
+function stopRefresh() {
+  if (refreshTimer !== null) { clearInterval(refreshTimer); refreshTimer = null; }
+  return null;
+}
+
+// Only the active view is shown, and only its link is current. Both are driven
+// from STATE.route, so they cannot disagree with what was rendered.
+function renderNav() {
+  ROUTES.forEach((name) => {
+    const view = $("#view-" + name);
+    if (view) view.hidden = name !== STATE.route;
+  });
+  $$("#viewnav [data-view]").forEach((link) => {
+    if (link.dataset.view === STATE.route) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+}
+
+// Header and footer: true on every view, so they are rendered from STATE
+// rather than owned by one of them. `at` is only for tests, which need a fixed
+// clock to assert an age.
+function renderChrome(at) {
+  renderNav();
+  renderStatusPill();
+  renderHeaderMeta(at);
+  renderFooter();
+}
+
+function renderHeaderMeta(at) {
+  const profileEl = $("#header-profile");
+  if (profileEl) {
+    const profile = STATE.status.value && STATE.status.value.profile;
+    if (!profile || typeof profile !== "object") {
+      profileEl.replaceChildren(makeEl("span", "hmeta-text", "profile · " + NOT_AVAILABLE));
+    } else {
+      const bad = profile.valid === false || profile.source === "fallback-after-error";
+      profileEl.replaceChildren(statusBadge(bad ? "attention" : "healthy",
+        "profile · " + String(profile.source == null ? "unknown source" : profile.source)));
+    }
+  }
+  const jobsEl = $("#header-jobs");
+  if (jobsEl) {
+    const running = STATE.jobs.items.filter((job) => job.status === "working").length;
+    jobsEl.textContent = running === 1 ? "1 job running" : running + " jobs running";
+  }
+  const refreshEl = $("#header-refresh");
+  if (refreshEl) {
+    refreshEl.textContent = STATE.status.updatedAt
+      ? "updated " + formatAge(STATE.status.updatedAt, at)
+      : "not read yet";
+  }
+}
+
+// The server ships no version string today, so the footer says exactly that
+// rather than printing an invented one.
+function renderFooter() {
+  const el = $("#footer-version");
+  if (!el) return;
+  const version = STATE.status.value && STATE.status.value.version;
+  const usable = (typeof version === "string" || typeof version === "number") &&
+    String(version).trim() !== "";
+  el.textContent = usable ? "version " + String(version).trim() : "version not reported";
+}
+
+// --- per-view enter/exit -----------------------------------------------------
+
+// A view that only needs the header's copy of /api/status does not re-read it.
+function ensureStatus() {
+  if (STATE.status.value || STATE.status.loading) return null;
+  return loadStatus();
+}
+
+// Overview reads GET /api/status and GET /api/station and nothing else: no
+// station timeline is created or advanced by opening it.
+function enterOverview() {
+  renderOverview();
+  startRefresh();
+  return Promise.all([loadStatus(), loadStation()]);
+}
+
+function exitOverview() { return null; }
+
+function enterLibrary(params) {
+  applyLibraryQuery(params);
+  renderFilters();
+  renderLibrary();
+  renderLibraryState();
+  return Promise.all([ensureStatus(), loadGrid(true)]);
+}
+
+function exitLibrary() {
+  if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
+  return null;
+}
+
+function enterComposer() {
+  renderComposerState();
+  return ensureStatus();
+}
+
+function exitComposer() { return null; }
+
+function enterStation() {
+  renderStationState();
+  startRefresh();
+  return Promise.all([ensureStatus(), loadStation()]);
+}
+
+function exitStation() { return null; }
+
+function enterOperations() {
+  return ensureStatus();
+}
+
+function exitOperations() { return null; }
 
 // ---------------------------------------------------------------------------
 // 5. Shared components: badges, panel states, notices, cards
@@ -281,6 +523,14 @@ function renderPanelState(el, options) {
     el.append(button);
   }
   return el;
+}
+
+// One labelled fact. Used by every summary block so a missing value reads the
+// same way everywhere it appears.
+function summaryRow(label, value) {
+  const row = makeEl("div", "summary-row");
+  row.append(makeEl("span", "lbl", label), makeEl("span", "val", value));
+  return row;
 }
 
 // The tail of the last action, kept for scrollback.
@@ -455,16 +705,39 @@ function renderStatusPill() {
   pill.replaceChildren(statusBadge(s.total > 0 ? "healthy" : "attention", detail));
 }
 
+// Counts a build of the server actually reported, and the names of the ones it
+// did not. A field that is absent is never shown as a zero: "0 parked" and "no
+// idea how many are parked" are different answers to a morning health check.
+function poolCounts(s) {
+  const status = s && typeof s === "object" ? s : {};
+  const boxes = [];
+  const missing = [];
+  [[status.total, "total"], [status.playable_now, "playable now"],
+   [status.parked, "parked"], [status.dead, "dead"],
+   [status.unrendered, "unrendered"]].forEach(([value, label]) => {
+    if (typeof value === "number" && isFinite(value)) boxes.push({ n: value, label });
+    else missing.push(label);
+  });
+  if (status.by_kind && typeof status.by_kind === "object") {
+    boxes.push({ n: Object.keys(status.by_kind).length, label: "kinds" });
+  } else missing.push("kinds");
+  return { boxes, missing };
+}
+
 function renderTotals(s) {
   const totals = $("#totals");
   if (!totals) return;
-  totals.replaceChildren();
-  [[s.total, "total"], [s.playable_now, "playable now"],
-   [Object.keys(s.by_kind || {}).length, "kinds"]].forEach(([n, label]) => {
+  const counts = poolCounts(s);
+  const nodes = counts.boxes.map(({ n, label }) => {
     const box = makeEl("div", "num", n);
     box.appendChild(makeEl("small", "", label));
-    totals.appendChild(box);
+    return box;
   });
+  if (counts.missing.length) {
+    nodes.push(makeEl("div", "totals-missing",
+      counts.missing.join(" · ") + " — " + NOT_AVAILABLE));
+  }
+  totals.replaceChildren(...nodes);
 }
 
 function renderByType(s) {
@@ -503,6 +776,183 @@ function renderMemory(s) {
     "memory · " + refresh + " · " + kindText + " · " + msgState + disabled));
 }
 
+// Configuration is file-owned: this reports what the server loaded and never
+// offers to change it. `source` is a server-controlled string, so it goes
+// through textContent like any other API value.
+function configLines(s) {
+  const status = s && typeof s === "object" ? s : {};
+  const say = (part) => String(part.source == null ? "unknown source" : part.source) +
+    (part.valid === false ? " · invalid, running the shipped default" : " · valid");
+  const lines = [];
+  const profile = status.profile;
+  if (profile && typeof profile === "object") {
+    lines.push({
+      label: "profile", text: say(profile),
+      level: profile.valid === false || profile.source === "fallback-after-error"
+        ? "attention" : "healthy",
+    });
+  } else {
+    lines.push({ label: "profile", text: NOT_AVAILABLE, level: null });
+  }
+  const music = status.music;
+  if (music && typeof music === "object") {
+    const beds = typeof music.enabled_beds === "number" ? music.enabled_beds : null;
+    lines.push({
+      label: "music", level: music.valid === false ||
+        music.source === "fallback-after-error" ? "attention" : "healthy",
+      text: say(music) +
+        (beds === null ? "" : " · " + beds + " bed" + (beds === 1 ? "" : "s")) +
+        (music.compatibility ? " · compatibility mode" : ""),
+    });
+  } else {
+    lines.push({ label: "music", text: NOT_AVAILABLE, level: null });
+  }
+  return lines;
+}
+
+function renderConfig() {
+  const el = $("#config-summary");
+  if (!el) return;
+  el.replaceChildren(...configLines(STATE.status.value).map((line) => {
+    const row = makeEl("div", "summary-row");
+    row.append(makeEl("span", "lbl", line.label));
+    row.append(line.level ? statusBadge(line.level, line.text)
+                          : makeEl("span", "val", line.text));
+    return row;
+  }));
+}
+
+function renderService() {
+  const el = $("#service-summary");
+  if (!el) return;
+  const s = STATE.status;
+  const level = s.error ? (s.value ? "attention" : "offline")
+                        : (s.value ? "healthy" : "working");
+  const detail = s.error ? s.error
+    : (s.value ? "answering on this host" : "reading the service…");
+  const brand = s.value && s.value.brand;
+  const version = s.value && s.value.version;
+  el.replaceChildren(
+    statusBadge(level, detail),
+    summaryRow("brand", brand == null || brand === "" ? NOT_AVAILABLE : String(brand)),
+    summaryRow("version",
+      version === undefined || version === null || version === ""
+        ? "not reported" : String(version)),
+    summaryRow("last refresh",
+      s.updatedAt ? formatAge(s.updatedAt) : "not read yet"));
+}
+
+// A compact now card per channel. Built from the station body the overview
+// already read: it never asks the station for a new item, so looking at the
+// overview cannot advance playout.
+function nowCardEl(card) {
+  const box = makeEl("div", "nowcard");
+  box.append(makeEl("span", "nowcard-ch", card.channel),
+             makeEl("span", "nowcard-now", card.detail));
+  return box;
+}
+
+function renderOvStation() {
+  const el = $("#ov-station");
+  const s = STATE.station.value;
+  if (el) {
+    if (!s) {
+      el.replaceChildren(summaryRow("station", "not read yet"));
+    } else {
+      const state = stationState(s);
+      el.replaceChildren(
+        statusBadge(state.level, state.detail),
+        summaryRow("ffmpeg", s.ffmpeg === false ? "not found"
+          : (s.ffmpeg === true ? "found" : NOT_AVAILABLE)),
+        summaryRow("conformed", (s.conformed || 0) + " / " + (s.eligible || 0)),
+        summaryRow("pending", typeof s.pending === "number"
+          ? String(s.pending) : NOT_AVAILABLE));
+    }
+  }
+  const nowEl = $("#ov-now");
+  if (nowEl) nowEl.replaceChildren(...stationNow(s).map(nowCardEl));
+}
+
+// Every warning below is decided by an explicit field, never by reading a
+// human sentence, and a field this build of the server does not send raises
+// nothing at all. Each one links to the view that can actually fix it.
+function overviewWarnings(status, station, jobs) {
+  const s = status && typeof status === "object" ? status : {};
+  const st = station && typeof station === "object" ? station : {};
+  const list = [];
+  const add = (id, href, message, action) => list.push({ id, href, message, action });
+
+  if (s.playable_now === 0) {
+    add("no-playable", "#/library?state=playable",
+        "Nothing in the pool is playable right now.", "Open the library");
+  }
+  if (typeof s.unrendered === "number" && s.unrendered > 0) {
+    add("unrendered", "#/library?state=unrendered",
+        s.unrendered + " card(s) have no rendered media yet.", "Open the library");
+  }
+  if (typeof st.pending === "number" && st.pending > 0) {
+    add("conform-backlog", "#/station",
+        st.pending + " item(s) are waiting to be conformed.", "Open the station");
+  }
+  if (st.ffmpeg === false) {
+    add("ffmpeg", "#/station",
+        "ffmpeg was not found, so nothing can be conformed.", "Open the station");
+  }
+  const profile = s.profile;
+  if (profile && typeof profile === "object" &&
+      (profile.valid === false || profile.source === "fallback-after-error")) {
+    add("profile", "#/station",
+        "The channel profile in use is " + String(profile.source) +
+        ", not the operator's file.", "Open the station");
+  }
+  const music = s.music;
+  if (music && typeof music === "object" &&
+      (music.valid === false || music.source === "fallback-after-error")) {
+    add("music", "#/station",
+        "The music manifest in use is " + String(music.source) +
+        ", not the operator's file.", "Open the station");
+  }
+  const failed = (Array.isArray(jobs) ? jobs : [])
+    .find((job) => job && job.status === "error");
+  if (failed) {
+    add("failed-job", "#/operations",
+        "A job started from this page failed: " + String(failed.label) + ".",
+        "Open operations");
+  }
+  return list;
+}
+
+function warningEl(warning) {
+  const li = makeEl("li", "warning");
+  const icon = makeEl("span", "warning-icon", "▲");
+  icon.setAttribute("aria-hidden", "true");
+  // One link per warning, and its text says both the trouble and where the fix
+  // is, so the accessible name is not a bare "here".
+  const link = makeLink(warning.href, undefined, "warning-link");
+  link.append(makeEl("span", "warning-msg", warning.message),
+              makeEl("span", "warning-go", warning.action));
+  li.append(icon, link);
+  return li;
+}
+
+// Warnings come before the healthy detail, and an overview with nothing wrong
+// says so rather than showing an empty box.
+function renderWarnings() {
+  const warnings = overviewWarnings(STATE.status.value, STATE.station.value,
+                                    STATE.jobs.items);
+  const list = $("#warnings");
+  if (list) list.replaceChildren(...warnings.map(warningEl));
+  const el = $("#warnings-state");
+  if (!el) return null;
+  if (!STATE.status.value && !STATE.station.value) {
+    return renderPanelState(el, { state: "loading" });
+  }
+  if (!warnings.length) {
+    return renderPanelState(el, { state: "empty", message: "Nothing needs attention." });
+  }
+  return renderPanelState(el, { state: "populated" });
+}
+
 function renderOverviewState() {
   const el = $("#pool-state");
   const s = STATE.status;
@@ -527,19 +977,29 @@ function renderOverviewState() {
 function renderOverview() {
   const s = STATE.status.value;
   if (s) { renderTotals(s); renderByType(s); renderMemory(s); }
-  renderStatusPill();
+  renderService();
+  renderConfig();
+  renderOvStation();
+  renderWarnings();
+  renderJobs();
+  renderChrome();
   renderOverviewState();
 }
 
 async function loadStatus() {
+  if (statusAbort) statusAbort.abort();
+  statusAbort = new AbortController();
   STATE.status.loading = true;
   renderOverviewState();
   let s;
   try {
-    s = await api("/api/status");
+    s = await api("/api/status", { signal: statusAbort.signal });
   } catch (err) {
-    if (isApiAbort(err)) return null;
+    // A cancelled read is not a failure: it leaves the last known counts and
+    // the panel state exactly as they were, but it must not leave the panel
+    // believing a read is still on its way.
     STATE.status.loading = false;
+    if (isApiAbort(err)) return null;
     STATE.status.error = err.message;
     renderOverview();
     return null;
@@ -559,11 +1019,46 @@ async function loadStatus() {
 
 const poolKinds = () => (STATE.status.value && STATE.status.value.by_kind) || {};
 const filtersActive = () => Boolean(STATE.library.filters.kind) ||
-  Boolean(STATE.library.filters.q) || STATE.library.filters.state === "parked";
+  Boolean(STATE.library.filters.q) || Boolean(STATE.library.filters.type) ||
+  STATE.library.filters.state !== "all";
+
+// `#/library?state=parked&kind=trivia&type=card&q=harbour`. The hash is
+// operator input, not API output: `state` and `type` are checked against what
+// the endpoint accepts (an unknown one is dropped, never forwarded), and the
+// free-text fields are bounded to the length the server documents.
+function applyLibraryQuery(params) {
+  const query = params && typeof params.get === "function"
+    ? params : new URLSearchParams("");
+  const lib = STATE.library;
+  const f = lib.filters;
+  const state = query.get("state");
+  const type = query.get("type");
+  const kind = query.get("kind");
+  const q = query.get("q");
+  const before = JSON.stringify([f.state, f.type, f.kind, f.q]);
+  f.state = LIBRARY_STATES.indexOf(String(state)) === -1 ? "all" : String(state);
+  f.type = LIBRARY_TYPES.indexOf(String(type)) === -1 ? null : String(type);
+  f.kind = kind ? String(kind).slice(0, MAX_FILTER_TEXT) : null;
+  f.q = q ? String(q).slice(0, MAX_FILTER_TEXT) : "";
+  lib.offset = 0;
+  // Coming back to the same filters repaints the rows that answer them. A
+  // different hash is a different question, and the old answer is dropped
+  // rather than shown under the new filter for a moment.
+  if (JSON.stringify([f.state, f.type, f.kind, f.q]) !== before) {
+    lib.items = [];
+    lib.hasMore = false;
+    lib.error = null;
+    lib.updatedAt = null;
+    lib.source = "listing";
+  }
+  const search = $("#search");
+  if (search) search.value = f.q;
+}
 
 function clearFilters() {
   STATE.library.filters.kind = null;
   STATE.library.filters.q = "";
+  STATE.library.filters.type = null;
   STATE.library.filters.state = "all";
   const search = $("#search");
   if (search) search.value = "";
@@ -719,7 +1214,10 @@ function libraryParams(offset) {
   const f = STATE.library.filters;
   if (f.kind) params.set("kind", f.kind);
   if (f.type) params.set("type", f.type);
-  if (f.state === "parked") params.set("enabled", "false");
+  // One vocabulary for both ends: `state` is the server's own filter, using the
+  // same SQL /api/status counts parked/dead/unrendered with, so a link from an
+  // overview warning lands on exactly the rows that warning counted.
+  if (f.state && f.state !== "all") params.set("state", f.state);
   if (f.q) params.set("q", f.q);
   return params;
 }
@@ -738,8 +1236,12 @@ async function loadGrid(reset) {
   try {
     d = await api("/api/bumpers?" + libraryParams(offset), { signal: libraryAbort.signal });
   } catch (err) {
-    if (isApiAbort(err) || generation !== lib.generation) return null;
+    // A superseded read leaves every flag to the newer one. A cancelled-but-
+    // current read (the view was left) only clears `loading`, so a later visit
+    // does not find the panel waiting on a request that no longer exists.
+    if (generation !== lib.generation) return null;
     lib.loading = false;
+    if (isApiAbort(err)) return null;
     lib.error = err.message;
     renderLibraryState();
     return null;
@@ -921,6 +1423,28 @@ function stationState(s) {
   return { level: "healthy", detail: conformed };
 }
 
+// What each channel is playing, from the body the page already holds. Read
+// only: nothing here asks the station for the next item.
+function stationNow(s) {
+  const channels = s && typeof s === "object" ? s.channels : null;
+  return ["live", "standby"].map((channel) => {
+    if (!channels || typeof channels !== "object") {
+      return { channel, level: "offline", detail: "the station could not be read" };
+    }
+    const now_ = (channels[channel] || {}).now;
+    if (!now_ || typeof now_ !== "object") {
+      return { channel, level: "attention", detail: "off air" };
+    }
+    const left = Math.max(0, Math.round((now_.ends_at || 0) - Date.now() / 1000));
+    const kind = now_.kind == null ? "" : String(now_.kind);
+    return {
+      channel, level: "healthy",
+      detail: String(now_.title == null ? "" : now_.title) +
+        (kind ? " · " + kind : "") + " · " + left + "s left",
+    };
+  });
+}
+
 function stationEl(s) {
   const root = makeEl("div", "station-body");
   const state = stationState(s);
@@ -958,34 +1482,46 @@ function stationEl(s) {
   return root;
 }
 
+// The station body is shown twice — in full on the Station view, in summary on
+// the Overview — so one read decides the state of both regions and neither can
+// disagree with the other about how old the content is.
+const STATION_STATE_REGIONS = ["#station-state", "#ov-station-state"];
+
 function renderStationState() {
-  const el = $("#station-state");
   const st = STATE.station;
-  if (st.loading && !st.value) return renderPanelState(el, { state: "loading" });
-  if (st.error && st.value) {
-    return renderPanelState(el, {
-      state: "stale", message: st.error, updatedAt: st.updatedAt,
-      onAction: () => { loadStation(); },
-    });
-  }
-  if (st.error) {
-    return renderPanelState(el, {
-      state: "error", message: st.error, onAction: () => { loadStation(); },
-    });
-  }
-  if (!st.value) return renderPanelState(el, { state: "loading" });
-  return renderPanelState(el, { state: "populated" });
+  let opts;
+  if (st.loading && !st.value) opts = { state: "loading" };
+  else if (st.error && st.value) {
+    opts = { state: "stale", message: st.error, updatedAt: st.updatedAt,
+             onAction: () => { loadStation(); } };
+  } else if (st.error) {
+    opts = { state: "error", message: st.error, onAction: () => { loadStation(); } };
+  } else if (!st.value) opts = { state: "loading" };
+  else opts = { state: "populated" };
+  let rendered = null;
+  STATION_STATE_REGIONS.forEach((sel) => {
+    rendered = renderPanelState($(sel), opts) || rendered;
+  });
+  return rendered;
+}
+
+function renderStation() {
+  const el = $("#station");
+  if (el && STATE.station.value) el.replaceChildren(stationEl(STATE.station.value));
+  renderOvStation();
 }
 
 async function loadStation() {
+  if (stationAbort) stationAbort.abort();
+  stationAbort = new AbortController();
   STATE.station.loading = true;
   renderStationState();
   let s;
   try {
-    s = await api("/api/station");
+    s = await api("/api/station", { signal: stationAbort.signal });
   } catch (err) {
-    if (isApiAbort(err)) return null;
     STATE.station.loading = false;
+    if (isApiAbort(err)) return null;
     STATE.station.error = err.message;
     renderStationState();
     return null;
@@ -994,8 +1530,7 @@ async function loadStation() {
   STATE.station.error = null;
   STATE.station.value = s && typeof s === "object" ? s : {};
   STATE.station.updatedAt = now();
-  const el = $("#station");
-  if (el) el.replaceChildren(stationEl(STATE.station.value));
+  renderStation();
   renderStationState();
   return s;
 }
@@ -1016,6 +1551,67 @@ const MAINT = {
 
 const JOB_STOPPED = "stopped checking — the job may still be running";
 const JOB_FORGOTTEN = "status unknown: the server no longer tracks this job";
+
+// --- jobs this page started --------------------------------------------------
+// There is no server-side jobs list yet, so this registry is only what this tab
+// kicked off. The empty state says exactly that rather than implying the server
+// has been idle. A later slice merges a real GET /api/jobs into the same list.
+
+const JOB_LEVELS = { working: "working", done: "healthy", error: "failed",
+                     unknown: "attention" };
+const JOB_STATUSES = ["working", "done", "error", "unknown"];
+
+function recordJob(label) {
+  const at = now();
+  const record = { id: "page-" + (++jobSeq), label: String(label), status: "working",
+                   startedAt: at, updatedAt: at, result: "" };
+  STATE.jobs.items.unshift(record);
+  if (STATE.jobs.items.length > MAX_JOBS) STATE.jobs.items.length = MAX_JOBS;
+  renderJobs();
+  renderChrome();
+  return record;
+}
+
+function finishJob(record, status, result) {
+  if (!record) return null;
+  record.status = JOB_STATUSES.indexOf(status) === -1 ? "unknown" : status;
+  record.result = result === undefined || result === null ? "" : String(result);
+  record.updatedAt = now();
+  renderJobs();
+  renderChrome();
+  return record;
+}
+
+const recentJobs = (items, limit) =>
+  (Array.isArray(items) ? items : []).slice(0, limit || RECENT_JOBS);
+
+function jobRowEl(job) {
+  const li = makeEl("li", "jobrow");
+  li.append(statusBadge(JOB_LEVELS[job.status] || "attention", job.label));
+  li.append(makeEl("span", "jobrow-age", formatAge(job.updatedAt)));
+  const result = humanMessage(job.result, "");
+  if (result) li.append(makeEl("span", "jobrow-result", result));
+  return li;
+}
+
+function renderJobs() {
+  const items = recentJobs(STATE.jobs.items);
+  const list = $("#jobs-list");
+  if (list) list.replaceChildren(...items.map(jobRowEl));
+  const el = $("#jobs-state");
+  if (!el) return null;
+  if (!items.length) {
+    return renderPanelState(el, {
+      state: "empty", message: "No jobs started from this page",
+    });
+  }
+  return renderPanelState(el, { state: "populated" });
+}
+
+// "unknown" is not "failed": a lost status read may well have been a job that
+// finished. Only an outright error is recorded as one.
+const jobOutcome = (status) =>
+  status === "error" ? "error" : (status === "unknown" ? "unknown" : "done");
 
 // A job POST returns immediately; polling owns the long wait, so no clock is
 // imposed on the server's own duration and no five-minute success is invented.
@@ -1110,6 +1706,7 @@ async function doAction(url, label) {
   const btns = $$(".actions button");
   const state = $("#actions-state");
   const mine = ++actionGeneration;
+  const record = recordJob(label);
   const current = () => mine === actionGeneration;
   // The panel is held only while the operator is actually being made to wait.
   // The moment a status read is lost the buttons come back, so the escape from
@@ -1121,6 +1718,7 @@ async function doAction(url, label) {
   try {
     let r = await api(url, { method: "POST", timeout: 0 });
     if (r.job_id) {
+      record.id = String(r.job_id);
       r = await watchJob(r, {
         superseded: () => !current(),
         release,
@@ -1136,11 +1734,15 @@ async function doAction(url, label) {
     const msg = typeof result === "string" ? result : JSON.stringify(result);
     // "unknown" is not "failed": the run may well have completed.
     const mark = r.status === "error" ? "✗ " : (r.status === "unknown" ? "▲ " : "✓ ");
+    // Recorded whether or not this surface is still the current one: the job
+    // ran, and the overview's recent list is about jobs, not about panels.
+    finishJob(record, jobOutcome(r.status), msg);
     if (current()) {
       announce(mark + label + ": " + msg.trim().split("\n").slice(-2).join(" ") +
                (r.status === "unknown" ? " — run it again to check" : ""));
     }
   } catch (err) {
+    finishJob(record, "error", err.message);
     if (current()) announce("✗ " + label + " failed: " + err.message);
   }
   release();
@@ -1157,9 +1759,12 @@ async function submitAsk() {
   // the newest one is allowed to write to the result line.
   const mine = ++askGeneration;
   const current = () => mine === askGeneration;
+  const record = recordJob("add: " + text.slice(0, 60));
   btn.disabled = true; inp.disabled = true;
   out.replaceChildren(statusBadge("working", "downloads and captures can take a bit"));
   const finish = (level, msg) => {
+    finishJob(record, level === "healthy" ? "done"
+      : (level === "attention" ? "unknown" : "error"), msg);
     if (!current()) return;
     out.replaceChildren(statusBadge(level, msg));
     announce(msg);
@@ -1176,6 +1781,7 @@ async function submitAsk() {
     });
   } catch (err) { return finish("failed", err.message); }
   if (!job.job_id) return finish(job.status === "error" ? "failed" : "healthy", job.result || "done");
+  record.id = String(job.job_id);
   inp.value = "";
   // The same poller the Actions panel uses: never a false success, never a
   // failure invented from a lost read, and never a form left disabled.
@@ -1202,10 +1808,14 @@ const isVisible = () => typeof document === "undefined" ||
   document.visibilityState === undefined || document.visibilityState === "visible";
 
 // The 20-second refresh does nothing while the tab is hidden; coming back
-// refreshes at once rather than waiting out the rest of the interval.
+// refreshes at once rather than waiting out the rest of the interval. Only the
+// two views that show live figures have a clock at all, and each reads only
+// what it actually shows.
 async function refreshTick() {
   if (!isVisible()) return null;
-  return Promise.all([loadStatus(), loadStation()]);
+  if (STATE.route === "overview") return Promise.all([loadStatus(), loadStation()]);
+  if (STATE.route === "station") return loadStation();
+  return null;
 }
 
 async function handleVisibilityChange() {
@@ -1233,10 +1843,13 @@ function boot() {
     b.addEventListener("click", () => previewPack(b.dataset.pack)));
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
-  loadStatus();
-  loadGrid(true);
-  loadStation();
-  refreshTimer = setInterval(refreshTick, REFRESH_MS);
+  // Anchors carry the routes, so a click is an ordinary in-page hash change:
+  // no listener, no preventDefault, and no reload. Back and forward arrive
+  // here the same way a deep link does.
+  if (typeof window !== "undefined" && window.addEventListener) {
+    window.addEventListener("hashchange", () => { applyHash(); });
+  }
+  applyHash();
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,20 +1862,32 @@ if (COMMONJS) {
   module.exports = {
     // constants
     PAGE, API_TIMEOUT_MS, SEARCH_DEBOUNCE_MS, REFRESH_MS, JOB_POLL_MS, STATE,
+    ROUTES, DEFAULT_ROUTE, LIBRARY_STATES, LIBRARY_TYPES, NOT_AVAILABLE,
     // helpers
-    makeEl, api, isApiAbort, humanMessage, formatAge, formatDuration,
+    makeEl, makeLink, api, isApiAbort, humanMessage, formatAge, formatDuration,
+    // routing and shell
+    parseHash, applyHash, enterRoute, exitRoute, VIEWS, renderChrome, renderNav,
     // components
     statusBadge, renderPanelState, cardEl, packSummaryEl, renderPackPreview,
-    freshnessLine, stationEl, stationState,
+    freshnessLine, stationEl, stationState, stationNow, summaryRow,
+    // overview
+    overviewWarnings, poolCounts, configLines, renderOverview,
+    // jobs started from this page
+    recordJob, finishJob, recentJobs, renderJobs,
     // behaviour
     loadStatus, loadGrid, loadStation, scheduleSearch, shufflePreview,
-    clearFilters, renderFilters, previewPack, previewOne, pollJob, doAction,
-    enableBumper, deleteBumper, announce, refreshTick, handleVisibilityChange,
-    submitAsk,
+    clearFilters, renderFilters, applyLibraryQuery, previewPack, previewOne,
+    pollJob, doAction, enableBumper, deleteBumper, announce, refreshTick,
+    handleVisibilityChange, submitAsk,
     resetStateForTests() {
       if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
-      if (refreshTimer !== null) { clearInterval(refreshTimer); refreshTimer = null; }
+      stopRefresh();
       libraryAbort = null;
+      statusAbort = null;
+      stationAbort = null;
+      activeRoute = null;
+      activeQuery = "";
+      jobSeq = 0;
       askGeneration = 0;
       actionGeneration = 0;
       Object.assign(STATE, initialState());

@@ -134,6 +134,8 @@ class FakeNode {
 
 // A stand-in for index.html: only the ids/hooks app.js reaches for, in the same
 // nesting, so a selector that would miss in the browser also misses here.
+// Keep this in step with bumparr/web/index.html — every element app.js reaches
+// for must exist here, in the same view, or a test proves nothing.
 function buildDocument() {
   const el = (tag, props, kids) => {
     const node = new FakeNode(tag);
@@ -145,66 +147,119 @@ function buildDocument() {
     return node;
   };
   const panel = (id, kids) => el("section", { id, className: "panel" }, kids);
+  // index.html ships the default view visible and the rest hidden, so a page
+  // whose script never ran still shows the overview shell.
+  const view = (id, kids) => el("section",
+    { id, className: "view", hidden: id !== "view-overview" }, kids);
+  const navLink = (name) => el("a", { href: "#/" + name, data: { view: name } });
   const body = el("body", {}, [
     el("a", { className: "skip-link" }),
     el("header", {}, [
       el("h1", { className: "brand", textContent: "Bumparr" }),
-      el("nav", { className: "panelnav" }),
-      el("div", { id: "status-pill", className: "pill" }),
-    ]),
-    el("main", { id: "main" }, [
-      el("p", { id: "live-region", className: "live-region" }),
-      panel("panel-ask", [
-        el("input", { id: "ask", value: "" }),
-        el("button", { id: "ask-go" }),
-        el("div", { id: "ask-result" }),
-      ]),
-      panel("panel-pool", [
-        el("div", { id: "pool-state", className: "panel-state" }),
-        el("div", { id: "totals" }),
-        el("div", { id: "by-type" }),
-        el("div", { id: "memory-status" }),
-      ]),
-      panel("panel-station", [
-        el("div", { id: "station-state", className: "panel-state" }),
-        el("div", { id: "station" }),
-        el("div", { className: "action-group" }, [
-          el("button", { data: { station: "conform" } }),
-        ]),
-      ]),
-      panel("panel-actions", [
-        el("div", { id: "actions-state", className: "panel-state" }),
-        el("div", { className: "actions" }, [
-          el("button", { data: { gen: "trivia" } }),
-          el("button", { data: { src: "fetch-queue" } }),
-          el("button", { data: { starter: "dry" } }),
-          el("button", { data: { maint: "tidy" } }),
-        ]),
-        el("pre", { id: "log", className: "log" }),
-      ]),
-      panel("panel-preview", [
-        el("button", { id: "preview-one" }),
-        el("button", { data: { pack: "30" } }),
-        el("div", { id: "preview-state", className: "panel-state" }),
-        el("div", { id: "preview-summary" }),
-        el("div", { id: "preview-grid", className: "grid" }),
-      ]),
-      panel("panel-browse", [
-        el("input", { id: "search", value: "" }),
-        el("button", { id: "shuffle" }),
-        el("div", { id: "filters" }),
-        el("div", { id: "browse-state", className: "panel-state" }),
-        el("div", { id: "grid", className: "grid" }),
-        el("button", { id: "more", hidden: true }),
+      el("div", { className: "headmeta" }, [
+        el("div", { id: "status-pill", className: "pill" }),
+        el("div", { id: "header-profile", className: "hmeta" }),
+        el("div", { id: "header-jobs", className: "hmeta" }),
+        el("div", { id: "header-refresh", className: "hmeta" }),
       ]),
     ]),
-    el("footer", {}),
+    el("div", { className: "shell" }, [
+      el("nav", { id: "viewnav", className: "viewnav" },
+         ["overview", "library", "composer", "station", "operations"].map(navLink)),
+      el("main", { id: "main" }, [
+        el("p", { id: "live-region", className: "live-region" }),
+        view("view-overview", [
+          el("div", { id: "pool-state", className: "panel-state" }),
+          panel("panel-warnings", [
+            el("div", { id: "warnings-state", className: "panel-state" }),
+            el("ul", { id: "warnings", className: "warnings" }),
+          ]),
+          el("div", { className: "viewgrid" }, [
+            panel("panel-service", [el("div", { id: "service-summary" })]),
+            panel("panel-pool", [
+              el("div", { id: "totals" }),
+              el("div", { id: "by-type" }),
+            ]),
+            panel("panel-ov-station", [
+              el("div", { id: "ov-station-state", className: "panel-state" }),
+              el("div", { id: "ov-station" }),
+              el("div", { id: "ov-now" }),
+            ]),
+            panel("panel-config", [
+              el("div", { id: "config-summary" }),
+              el("div", { id: "memory-status" }),
+            ]),
+            panel("panel-jobs", [
+              el("div", { id: "jobs-state", className: "panel-state" }),
+              el("ul", { id: "jobs-list", className: "joblist" }),
+            ]),
+          ]),
+        ]),
+        view("view-library", [
+          el("div", { className: "viewtools" }, [
+            el("input", { id: "search", value: "" }),
+            el("button", { id: "shuffle" }),
+          ]),
+          el("div", { className: "panel wide" }, [
+            el("div", { id: "filters" }),
+            el("div", { id: "browse-state", className: "panel-state" }),
+            el("div", { id: "grid", className: "grid" }),
+            el("button", { id: "more", hidden: true }),
+          ]),
+        ]),
+        view("view-composer", [
+          el("div", { className: "viewtools" }, [
+            el("button", { id: "preview-one" }),
+            el("button", { data: { pack: "30" } }),
+          ]),
+          el("div", { className: "panel wide" }, [
+            el("div", { id: "preview-state", className: "panel-state" }),
+            el("div", { id: "preview-summary" }),
+            el("div", { id: "preview-grid", className: "grid" }),
+          ]),
+        ]),
+        view("view-station", [
+          el("div", { className: "viewtools" }, [
+            el("button", { data: { station: "conform" } }),
+          ]),
+          el("div", { className: "panel wide" }, [
+            el("div", { id: "station-state", className: "panel-state" }),
+            el("div", { id: "station" }),
+          ]),
+        ]),
+        view("view-operations", [
+          panel("panel-ask", [
+            el("input", { id: "ask", value: "" }),
+            el("button", { id: "ask-go" }),
+            el("div", { id: "ask-result" }),
+          ]),
+          panel("panel-actions", [
+            el("div", { id: "actions-state", className: "panel-state" }),
+            el("div", { className: "actions" }, [
+              el("button", { data: { gen: "trivia" } }),
+              el("button", { data: { src: "fetch-queue" } }),
+              el("button", { data: { starter: "dry" } }),
+              el("button", { data: { maint: "tidy" } }),
+            ]),
+            el("pre", { id: "log", className: "log" }),
+          ]),
+        ]),
+      ]),
+    ]),
+    el("footer", {}, [el("p", { id: "footer-version" })]),
   ]);
   return body;
 }
 
 let BODY = buildDocument();
 const docListeners = new Map();
+// The hash the router reads and rewrites. `replace` records what it was asked
+// to do, so an unknown route can be shown to normalize without a real browser.
+const replaced = [];
+global.location = {
+  hash: "",
+  replace(url) { replaced.push(String(url)); this.hash = String(url); },
+};
 
 global.document = {
   visibilityState: "visible",
@@ -228,7 +283,10 @@ const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
         renderPanelState, statusBadge, formatAge, formatDuration, loadGrid,
         loadStatus, scheduleSearch, refreshTick, handleVisibilityChange,
         announce, STATE, API_TIMEOUT_MS, SEARCH_DEBOUNCE_MS, REFRESH_MS,
-        doAction, submitAsk, resetStateForTests } = app;
+        doAction, submitAsk, resetStateForTests,
+        ROUTES, DEFAULT_ROUTE, parseHash, applyHash, VIEWS, overviewWarnings,
+        poolCounts, configLines, stationNow, recentJobs, recordJob, finishJob,
+        renderChrome, renderJobs, renderOverview } = app;
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -259,6 +317,8 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 test.beforeEach(() => {
   BODY = buildDocument();
   global.confirm = () => true;
+  global.location.hash = "";
+  replaced.length = 0;
   if (resetStateForTests) resetStateForTests();
 });
 test.afterEach(() => { delete global.fetch; });
@@ -1126,7 +1186,9 @@ test("library reads ask for one bounded page and stay GETs", async () => {
   assert.match(calls[0].url, /limit=24/);
   assert.match(calls[0].url, /kind=psa%22\+onload%3D%22x/);
   assert.match(calls[0].url, /q=a%26b%3Dc/);
-  assert.match(calls[0].url, /enabled=false/);
+  // The server's own `state` filter, sharing its SQL with /api/status's counts,
+  // so an overview warning and the listing it links to cannot disagree.
+  assert.match(calls[0].url, /state=parked/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1173,4 +1235,503 @@ test("short results are announced to assistive technology as well as logged", ()
   assert.equal(live.children.length, 0);
   assert.ok(logText().includes(hostile));
   assert.equal(globalThis.pwned, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Routing: hash views, aria-current, deep links, per-route teardown
+// ---------------------------------------------------------------------------
+
+const OK_STATUS = {
+  brand: "Bumparr", total: 6, playable_now: 5, parked: 1, dead: 0, unrendered: 0,
+  by_kind: { psa: 3, trivia: 3 }, by_type: { card: 6 },
+  profile: { version: 1, valid: true, source: "shipped-default" },
+  music: { version: 1, valid: true, source: "shipped-default",
+           enabled_beds: 2, compatibility: false },
+  memory: { refresh_seconds: 3600, enabled_kinds: ["previously_on"],
+            channel: "station:live", messages: { valid: true } },
+};
+const OK_STATION = {
+  ffmpeg: true, conformed: 3, eligible: 3, pending: 0, urls: {},
+  channels: { live: { now: null, next: null }, standby: { now: null, next: null } },
+};
+
+// Answers every read a view can make, so a test can assert on which ones a
+// route actually issued rather than on a hand-fed single reply.
+function stubRoutes(over) {
+  const o = over || {};
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    calls.push({ url: u, method: (opts && opts.method) || "GET" });
+    if (u.startsWith("/api/status")) return jsonReply(Object.assign({}, OK_STATUS, o.status));
+    if (u.startsWith("/api/station")) return jsonReply(Object.assign({}, OK_STATION, o.station));
+    if (u.startsWith("/api/bumpers")) {
+      return jsonReply(o.bumpers || { count: 0, total: 0, bumpers: [] });
+    }
+    return jsonReply({});
+  };
+  return calls;
+}
+
+const navLinks = () => $("#viewnav").children;
+const currentNav = () => navLinks().filter((a) => a.getAttribute("aria-current") === "page")
+  .map((a) => a.dataset.view);
+const shownViews = () => ROUTES.filter((name) => $("#view-" + name).hidden === false);
+
+test("an unknown hash lands on the overview without adding a history entry", async () => {
+  stubRoutes();
+  await applyHash("#/nowhere");
+  assert.equal(STATE.route, DEFAULT_ROUTE);
+  assert.deepEqual(replaced, ["#/overview"], "the URL is corrected in place, not pushed");
+  assert.deepEqual(shownViews(), ["overview"]);
+});
+
+test("an empty hash lands on the overview", async () => {
+  stubRoutes();
+  await applyHash("");
+  assert.equal(STATE.route, "overview");
+  assert.deepEqual(shownViews(), ["overview"]);
+});
+
+test("the active view is the only one shown and the only one marked current", async () => {
+  stubRoutes();
+  await applyHash("#/station");
+  assert.deepEqual(currentNav(), ["station"]);
+  assert.deepEqual(shownViews(), ["station"]);
+
+  await applyHash("#/library");
+  assert.deepEqual(currentNav(), ["library"], "aria-current moves rather than accumulating");
+  assert.deepEqual(shownViews(), ["library"]);
+});
+
+test("a deep link into the library reads its filters from the hash query", async () => {
+  const calls = stubRoutes();
+  await applyHash("#/library?state=parked&kind=trivia&type=card&q=harbour");
+  assert.deepEqual(STATE.library.filters,
+                   { q: "harbour", kind: "trivia", type: "card", state: "parked" });
+  assert.equal($("#search").value, "harbour", "the visible control agrees with the filter");
+  const listing = calls.find((c) => c.url.startsWith("/api/bumpers"));
+  assert.equal(listing.method, "GET");
+  assert.match(listing.url, /state=parked/);
+  assert.match(listing.url, /kind=trivia/);
+  assert.match(listing.url, /type=card/);
+  assert.match(listing.url, /q=harbour/);
+});
+
+test("a hostile hash query cannot invent a filter the API does not have", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=40">';
+  const calls = stubRoutes();
+  await applyHash("#/library?state=" + encodeURIComponent(hostile) +
+                  "&type=" + encodeURIComponent("javascript:alert(1)") +
+                  "&kind=" + encodeURIComponent(hostile) +
+                  "&q=" + encodeURIComponent(hostile));
+  assert.equal(STATE.library.filters.state, "all", "an unknown state is not passed on");
+  assert.equal(STATE.library.filters.type, null, "an unknown type is not passed on");
+  const listing = calls.find((c) => c.url.startsWith("/api/bumpers"));
+  assert.doesNotMatch(listing.url, /<img/);
+  assert.match(listing.url, /kind=%3Cimg/);
+  assert.equal(descendants($("#view-library")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("the overview reads nothing but the pool and the station", async () => {
+  const calls = stubRoutes();
+  await applyHash("#/overview");
+  assert.ok(calls.length >= 2);
+  assert.ok(calls.every((c) => c.method === "GET"), "the overview never writes");
+  assert.ok(calls.every((c) => /^\/api\/(status|station)($|\?)/.test(c.url)),
+            "the overview reads only /api/status and /api/station: " + JSON.stringify(calls));
+  assert.ok(calls.every((c) => !c.url.includes("advance")));
+});
+
+test("leaving a view stops its refresh and aborts the reads it left behind", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const signals = [];
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    signals.push({ url: String(url), signal: opts.signal });
+    opts.signal.addEventListener("abort", () => {
+      const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+    });
+  });
+  applyHash("#/overview");
+  await flush();
+  assert.ok(signals.length >= 2, "the overview started its reads");
+  assert.ok(signals.every((s) => s.signal.aborted === false));
+
+  applyHash("#/operations");
+  await flush();
+  assert.ok(signals.every((s) => s.signal.aborted),
+            "an in-flight read is cancelled when its view goes away");
+  const before = signals.length;
+  t.mock.timers.tick(REFRESH_MS * 3);
+  await flush();
+  assert.equal(signals.length, before, "the departed view's 20s refresh is cleared");
+});
+
+test("the overview refreshes on its own clock only while it is the visible view", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const calls = stubRoutes();
+  await applyHash("#/overview");
+  const first = calls.length;
+  t.mock.timers.tick(REFRESH_MS);
+  await flush();
+  assert.ok(calls.length > first, "the overview keeps itself up to date");
+});
+
+test("a view is re-rendered from state, never rebuilt from what the DOM still holds",
+     async () => {
+  stubRoutes({ bumpers: { count: 1, total: 1, bumpers: [
+    { id: "a", type: "card", kind: "psa", title: "kept", payload: { text: "kept" } }] } });
+  await applyHash("#/library");
+  assert.equal($("#grid").children.length, 1);
+
+  await applyHash("#/overview");
+  $("#grid").replaceChildren();
+  global.fetch = async (url) => {
+    if (String(url).startsWith("/api/bumpers")) throw new Error("down");
+    return jsonReply(String(url).startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  await applyHash("#/library");
+  assert.equal($("#grid").children.length, 1, "the rows come back from STATE, not the DOM");
+  assert.equal($("#browse-state").dataset.state, "stale");
+});
+
+// ---------------------------------------------------------------------------
+// Overview: warnings, counts, configuration, now cards
+// ---------------------------------------------------------------------------
+
+test("overview warnings are derived from explicit fields and each links to the fix", () => {
+  const warnings = overviewWarnings(
+    { playable_now: 0, unrendered: 3,
+      profile: { valid: false, source: "fallback-after-error" },
+      music: { valid: false, source: "custom" } },
+    { ffmpeg: false, pending: 5 },
+    [{ id: "j1", label: "generate trivia", status: "error", result: "boom" }]);
+  assert.deepEqual(warnings.map((w) => w.id),
+                   ["no-playable", "unrendered", "conform-backlog", "ffmpeg",
+                    "profile", "music", "failed-job"]);
+  assert.deepEqual(warnings.map((w) => w.href),
+                   ["#/library?state=playable", "#/library?state=unrendered",
+                    "#/station", "#/station", "#/station", "#/station", "#/operations"]);
+});
+
+test("a healthy service raises no warnings and a missing field invents none", () => {
+  assert.deepEqual(overviewWarnings(OK_STATUS, OK_STATION, []), []);
+  assert.deepEqual(overviewWarnings({}, {}, []), [],
+                   "an older server that reports nothing is not an alarm");
+  assert.deepEqual(overviewWarnings(null, null, null), []);
+});
+
+test("a warning built from a hostile field stays text and keeps a safe link", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=41">';
+  STATE.status.value = Object.assign({}, OK_STATUS, {
+    playable_now: 0,
+    profile: { valid: false, source: hostile },
+  });
+  STATE.status.updatedAt = 1000;
+  renderOverview();
+  const list = $("#warnings");
+  assert.ok(list.children.length >= 2);
+  const links = descendants(list).filter((n) => n.tagName === "A");
+  assert.deepEqual(links.map((a) => a.href),
+                   ["#/library?state=playable", "#/station"]);
+  assert.ok(textOf(list).includes(hostile), "the server's own words are shown, as text");
+  assert.equal(descendants(list).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("a clean overview says so instead of showing an empty warnings box", () => {
+  STATE.status.value = OK_STATUS;
+  STATE.station.value = OK_STATION;
+  renderOverview();
+  assert.equal($("#warnings-state").dataset.state, "empty");
+  assert.match(textOf($("#warnings-state")), /Nothing needs attention/i);
+  assert.equal($("#warnings").children.length, 0);
+});
+
+test("pool counts never invent a field the server did not send", () => {
+  const full = poolCounts({ total: 10, playable_now: 4, parked: 3, dead: 2,
+                            unrendered: 1, by_kind: { psa: 1 } });
+  assert.deepEqual(full.boxes.map((b) => b.label),
+                   ["total", "playable now", "parked", "dead", "unrendered", "kinds"]);
+  assert.deepEqual(full.boxes.map((b) => b.n), [10, 4, 3, 2, 1, 1]);
+  assert.deepEqual(full.missing, []);
+
+  const older = poolCounts({ total: 10, playable_now: 4, by_kind: {} });
+  assert.deepEqual(older.missing, ["parked", "dead", "unrendered"]);
+  assert.ok(!older.boxes.some((b) => b.label === "parked"));
+});
+
+test("a missing count is reported as unavailable, not as a zero", () => {
+  STATE.status.value = { total: 10, playable_now: 4, by_kind: {}, by_type: {} };
+  renderOverview();
+  assert.match(textOf($("#totals")), /Not available in this version/);
+  assert.equal($("#totals").children.filter((n) => n.className === "num").length, 3,
+               "only the counts the server actually sent get a number");
+});
+
+test("configuration reports source and validity, or says the field is missing", () => {
+  const lines = configLines(OK_STATUS);
+  assert.deepEqual(lines.map((l) => l.label), ["profile", "music"]);
+  assert.match(lines[0].text, /shipped-default/);
+  assert.equal(lines[0].level, "healthy");
+  assert.match(lines[1].text, /2 bed/);
+
+  const none = configLines({});
+  assert.deepEqual(none.map((l) => l.text),
+                   ["Not available in this version.", "Not available in this version."]);
+});
+
+test("configuration keeps a hostile source string as text", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=42">';
+  STATE.status.value = Object.assign({}, OK_STATUS, {
+    profile: { version: 1, valid: false, source: hostile },
+  });
+  renderOverview();
+  assert.ok(textOf($("#config-summary")).includes(hostile));
+  assert.equal(descendants($("#config-summary")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("now cards report what is on air without asking the station to advance", () => {
+  const cards = stationNow({ channels: {
+    live: { now: { title: "Ident", kind: "station_id", ends_at: 0 } },
+    standby: { now: null },
+  } });
+  assert.deepEqual(cards.map((c) => c.channel), ["live", "standby"]);
+  assert.match(cards[0].detail, /Ident/);
+  assert.match(cards[1].detail, /off air/);
+  assert.deepEqual(stationNow(null).map((c) => c.detail),
+                   ["the station could not be read", "the station could not be read"]);
+});
+
+test("a now card keeps a hostile title as text", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=43">';
+  STATE.station.value = { ffmpeg: true, conformed: 1, eligible: 1, pending: 0,
+    channels: { live: { now: { title: hostile, kind: "psa", ends_at: 0 } },
+                standby: { now: null } } };
+  STATE.status.value = OK_STATUS;
+  renderOverview();
+  assert.ok(textOf($("#ov-now")).includes(hostile));
+  assert.equal(descendants($("#ov-now")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("the overview station summary marks known data stale rather than blanking it",
+     async () => {
+  global.fetch = async () => jsonReply(OK_STATION);
+  await app.loadStation();
+  assert.equal($("#ov-station-state").dataset.state, "populated");
+  const summary = textOf($("#ov-station"));
+  assert.match(summary, /3 \/ 3 conformed/);
+
+  global.fetch = async () => { throw new Error("down"); };
+  await app.loadStation();
+  assert.equal($("#ov-station-state").dataset.state, "stale");
+  assert.equal($("#station-state").dataset.state, "stale");
+  assert.equal(textOf($("#ov-station")), summary, "the last known summary stays on screen");
+});
+
+// ---------------------------------------------------------------------------
+// Jobs this page started: header count, recent list, warning
+// ---------------------------------------------------------------------------
+
+test("the recent jobs list is honest about having none", () => {
+  renderJobs();
+  assert.equal($("#jobs-state").dataset.state, "empty");
+  assert.match(textOf($("#jobs-state")), /No jobs started from this page/);
+  assert.equal($("#jobs-list").children.length, 0);
+});
+
+test("recent jobs are newest first and bounded to five", () => {
+  for (let i = 0; i < 7; i++) finishJob(recordJob("job " + i), "done", "ok");
+  const recent = recentJobs(STATE.jobs.items);
+  assert.equal(recent.length, 5);
+  assert.deepEqual(recent.map((j) => j.label),
+                   ["job 6", "job 5", "job 4", "job 3", "job 2"]);
+  renderJobs();
+  assert.equal($("#jobs-list").children.length, 5);
+  assert.equal($("#jobs-state").dataset.state, "populated");
+});
+
+test("a job's label and result reach the list as text, never as markup", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=44">';
+  finishJob(recordJob(hostile), "error", hostile);
+  renderJobs();
+  assert.ok(textOf($("#jobs-list")).includes(hostile));
+  assert.equal(descendants($("#jobs-list")).filter((n) => n.tagName === "IMG").length, 0);
+  assert.match(textOf($("#jobs-list")), /Failed/);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("the header counts the jobs this page is still waiting on", () => {
+  const a = recordJob("first");
+  recordJob("second");
+  renderChrome();
+  assert.match(textOf($("#header-jobs")), /2 jobs running/);
+  finishJob(a, "done", "ok");
+  renderChrome();
+  assert.match(textOf($("#header-jobs")), /1 job running/);
+});
+
+test("an action registers the job it started and the outcome it got", async () => {
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") return jsonReply({ status: "done", result: "made 20" });
+    return jsonReply(String(url).startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  await doAction("/api/generate/trivia?n=20", "generate trivia");
+  assert.equal(STATE.jobs.items.length, 1);
+  assert.equal(STATE.jobs.items[0].label, "generate trivia");
+  assert.equal(STATE.jobs.items[0].status, "done");
+  assert.match(String(STATE.jobs.items[0].result), /made 20/);
+  assert.deepEqual(overviewWarnings(OK_STATUS, OK_STATION, STATE.jobs.items), [],
+                   "a job that worked is not a warning");
+});
+
+test("a failed job becomes an overview warning that points at Operations", async () => {
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") throw new TypeError("Failed to fetch");
+    return jsonReply(String(url).startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+  await doAction("/api/generate/trivia?n=20", "generate trivia");
+  assert.equal(STATE.jobs.items[0].status, "error");
+  const warnings = overviewWarnings(OK_STATUS, OK_STATION, STATE.jobs.items);
+  assert.deepEqual(warnings.map((w) => w.id), ["failed-job"]);
+  assert.equal(warnings[0].href, "#/operations");
+});
+
+// ---------------------------------------------------------------------------
+// Header and footer chrome
+// ---------------------------------------------------------------------------
+
+test("the footer reports no version rather than inventing one", () => {
+  STATE.status.value = OK_STATUS;
+  renderChrome();
+  assert.equal($("#footer-version").textContent, "version not reported");
+  STATE.status.value = Object.assign({}, OK_STATUS, { version: "1.4.0" });
+  renderChrome();
+  assert.equal($("#footer-version").textContent, "version 1.4.0");
+});
+
+test("the header shows profile validity and how old the last read is", () => {
+  STATE.status.value = OK_STATUS;
+  STATE.status.updatedAt = 1000;
+  renderChrome(121000);
+  assert.match(textOf($("#header-profile")), /Healthy/);
+  assert.match(textOf($("#header-profile")), /shipped-default/);
+  assert.match(textOf($("#header-refresh")), /2m ago/);
+
+  STATE.status.value = Object.assign({}, OK_STATUS, {
+    profile: { version: 1, valid: false, source: "fallback-after-error" } });
+  renderChrome(121000);
+  assert.match(textOf($("#header-profile")), /Attention/);
+});
+
+test("the header says when the server does not report a profile at all", () => {
+  STATE.status.value = { total: 1, playable_now: 1, by_kind: {}, by_type: {} };
+  renderChrome();
+  assert.match(textOf($("#header-profile")), /Not available in this version/);
+});
+
+test("every route has a nav link and a view to show", () => {
+  assert.deepEqual(navLinks().map((a) => a.dataset.view), ROUTES);
+  assert.deepEqual(navLinks().map((a) => a.href), ROUTES.map((n) => "#/" + n));
+  ROUTES.forEach((name) => {
+    assert.ok($("#view-" + name), "index.html is missing #view-" + name);
+  });
+});
+
+test("the service summary and the shell keep hostile server strings as text", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=45">';
+  STATE.status.value = { brand: hostile, version: hostile, total: 1, playable_now: 1,
+                         by_kind: {}, by_type: {},
+                         profile: { version: 1, valid: true, source: hostile } };
+  STATE.status.updatedAt = 1000;
+  renderOverview();
+  const shell = [$("#service-summary"), $("#header-profile"), $("#footer-version")];
+  shell.forEach((el) => {
+    assert.equal(descendants(el).filter((n) => n.tagName === "IMG").length, 0);
+  });
+  assert.ok(textOf($("#service-summary")).includes(hostile));
+  assert.ok(textOf($("#header-profile")).includes(hostile));
+  assert.equal($("#footer-version").textContent, "version " + hostile);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("a station read that never answers leaves the overview honest, not blank", async () => {
+  stubRoutes();
+  await applyHash("#/overview");
+  const populated = textOf($("#ov-station"));
+
+  global.fetch = async () => { throw new Error("down"); };
+  await app.loadStation();
+  assert.equal($("#ov-station-state").dataset.state, "stale");
+  assert.equal(textOf($("#ov-station")), populated);
+  assert.match(textOf($("#ov-station-state")), /last known data/i);
+});
+
+test("the composer and operations views ask for nothing that could advance playout",
+     async () => {
+  const calls = stubRoutes();
+  await applyHash("#/composer");
+  await applyHash("#/operations");
+  assert.ok(calls.every((c) => c.method === "GET"));
+  assert.ok(calls.every((c) => c.url.startsWith("/api/status")),
+            "entering a view reads the header's status and nothing else: " +
+            JSON.stringify(calls));
+});
+
+test("back and forward between two deep links restore both filter sets", async () => {
+  const calls = stubRoutes();
+  await applyHash("#/library?state=parked");
+  assert.equal(STATE.library.filters.state, "parked");
+  await applyHash("#/library?kind=trivia");
+  assert.equal(STATE.library.filters.state, "all", "the new hash owns every filter");
+  assert.equal(STATE.library.filters.kind, "trivia");
+  await applyHash("#/library?state=parked");
+  assert.equal(STATE.library.filters.state, "parked");
+  assert.equal(STATE.library.filters.kind, null);
+  const listings = calls.filter((c) => c.url.startsWith("/api/bumpers"));
+  assert.equal(listings.length, 3, "each hash change re-reads its own page");
+});
+
+test("re-entering the view already on screen does no work", async () => {
+  const calls = stubRoutes();
+  await applyHash("#/library?state=parked");
+  const before = calls.length;
+  await applyHash("#/library?state=parked");
+  assert.equal(calls.length, before, "clicking the current link does not re-read");
+});
+
+test("the skip link is an in-page jump, not an unknown route", async () => {
+  stubRoutes();
+  await applyHash("#/station");
+  replaced.length = 0;
+  assert.equal(applyHash("#main"), null, "a fragment that names a real element is left alone");
+  assert.deepEqual(replaced, [], "and the view it was used from is not taken away");
+  assert.deepEqual(shownViews(), ["station"]);
+
+  await applyHash("#not-an-element");
+  assert.deepEqual(replaced, ["#/overview"], "a fragment naming nothing is a bad route");
+  assert.deepEqual(shownViews(), ["overview"]);
+});
+
+test("a different set of filters does not show the previous answer's rows", async () => {
+  stubRoutes({ bumpers: { count: 1, total: 1, bumpers: [
+    { id: "a", type: "card", kind: "psa", title: "trivia row", payload: { text: "row" } }] } });
+  await applyHash("#/library?kind=trivia");
+  assert.equal($("#grid").children.length, 1);
+
+  let release;
+  global.fetch = (url) => new Promise((resolve) => {
+    if (String(url).startsWith("/api/bumpers")) { release = resolve; return; }
+    resolve(jsonReply(OK_STATUS));
+  });
+  applyHash("#/library?kind=psa");
+  await flush();
+  assert.equal($("#grid").children.length, 0,
+               "rows answering the old filter are not shown under the new one");
+  assert.equal($("#browse-state").dataset.state, "loading");
+  release(jsonReply({ count: 0, total: 0, bumpers: [] }));
+  await flush();
 });

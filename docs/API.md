@@ -417,31 +417,69 @@ here when the cam isn't CORS-direct.
 accessibility rules, and visual tokens are specified in
 [FRONTEND_PLAN.md](FRONTEND_PLAN.md).
 
-- **Ask bar** — the `POST /api/request` flow with polling; the way to pull in
-  URLs, request card kinds, or search by vibe without touching the API.
-- **Pool** — `/api/status` counts and type bars; **Browse the pool** —
-  `/api/bumpers` with text filter, kind filters, a **parked only** chip
-  (`?enabled=false`, combining with the kind and text filters rather than
-  replacing them), shuffle preview, per-item delete, and a per-item **enable**
-  button that appears only on rows the listing reports as parked (`POST
-  /api/pool/enable`, relaying any `warning` to the log). The shuffle preview
-  reads `/api/bumpers/random`, which returns only live rows and no `enabled`
-  key, so no card there carries the button.
-- **Preview** — one item (`GET /api/bumpers/random?count=1&explain=true`) and
-  15/30/60/90-second packs (`GET /api/bumpers/fill?seconds=N&explain=true`).
-  Cards show creative data, provenance, freshness (channel / generated /
-  valid-until / parked), factors, media, and pack relaxations.
-  Enable/delete are reused. Preview is GET-only: it does not call station
-  `advance()`, write play history, or mutate `play_count`/`last_played`.
-  DOM is created with text/property assignment, never HTML interpolation.
-- **Actions** — one click per management endpoint: generate the card kinds,
-  recapture live cams / run the fetch queue (`/api/sources/*`), preview or run
-  the starter seeds, tidy, and revive.
-- **Status** — short results are announced in an `aria-live` region at the top
-  of the page; the **Log** keeps the tail of the last action's output. Every
-  panel renders one explicit state: loading, populated, useful empty, error with
-  Retry, or last-known content marked stale with its update time. A failed read
-  never clears known-good content.
+Navigation is hash-driven — five views, no server routes and no router library:
+`#/overview`, `#/library`, `#/composer`, `#/station`, `#/operations`. An unknown
+or empty hash is *replaced* with `#/overview` (replaced, not pushed, so a typo
+never becomes a stop on the way back); a plain fragment such as the skip link's
+`#main` is left to the browser. Deep links and back/forward work because the
+hash decides which view is shown and the page's own state decides what it holds,
+so every view can be re-rendered without a reload. Library filters travel in the
+hash query — `#/library?state=parked&kind=trivia&type=card&q=harbour` — and are
+read on entry; `state` and `type` are checked against the values
+`GET /api/bumpers` accepts and an unknown one is dropped rather than forwarded.
+Leaving a view stops its refresh clock and aborts the reads it left in flight.
+
+- **Overview** (`#/overview`) — triage. Reads `GET /api/status` and
+  `GET /api/station`, and nothing else, so opening it never creates or advances
+  a station timeline. Actionable warnings come first, each derived from an
+  explicit field — never from a parsed human string — and each linking to the
+  view that can fix it: no playable items (`playable_now == 0`), unrendered
+  cards (`unrendered > 0`), a conform backlog (`station.pending > 0`), missing
+  ffmpeg (`station.ffmpeg === false`), a channel profile or music manifest that
+  is invalid or fell back, and a job started from this page that failed. A
+  field this build of the server does not send raises no warning and is shown as
+  "Not available in this version." rather than as a zero. Then the healthy
+  detail: service (brand, version, last refresh), pool counts (total, playable,
+  parked, dead, unrendered, kinds and the type bars), the station summary with
+  compact now cards per channel, configuration (profile and music-manifest
+  source/validity, plus channel memory) and the five most recent jobs.
+- **Library** (`#/library`) — `/api/bumpers` with a text filter, kind filters, a
+  **parked only** chip and the hash-query filters above (`state` composes with
+  kind and text rather than replacing them), shuffle preview, per-item delete,
+  and a per-item **enable** button that appears only on rows the listing reports
+  as parked (`POST /api/pool/enable`, relaying any `warning` to the log). The
+  shuffle preview reads `/api/bumpers/random`, which returns only live rows and
+  no `enabled` key, so no card there carries the button.
+- **Composer** (`#/composer`) — one item
+  (`GET /api/bumpers/random?count=1&explain=true`) and 15/30/60/90-second packs
+  (`GET /api/bumpers/fill?seconds=N&explain=true`). Cards show creative data,
+  provenance, freshness (channel / generated / valid-until / parked), factors,
+  media, and pack relaxations. Enable/delete are reused. It is GET-only: it does
+  not call station `advance()`, write play history, or mutate
+  `play_count`/`last_played`.
+- **Station** (`#/station`) — `/api/station`: now/next per channel, conform
+  progress, the handoff URLs, and **Conform now**
+  (`POST /api/station/conform`).
+- **Operations** (`#/operations`) — the **ask bar** (`POST /api/request` with
+  polling; the way to pull in URLs, request card kinds, or search by vibe
+  without touching the API), one click per management endpoint (generate the
+  card kinds, recapture live cams / run the fetch queue via `/api/sources/*`,
+  preview or run the starter seeds, tidy, revive), and the **action output**
+  log.
+- **Shell** — the header carries the service status pill, compact profile
+  validity, the number of jobs this page is still waiting on, and how old the
+  last read is; the footer carries the version (or "version not reported" — the
+  server ships no version string), the *unprotected operator API* notice and a
+  link to `/docs`.
+- **States** — short results are announced in an `aria-live` region; every
+  region renders one explicit state: loading, populated, useful empty, error
+  with Retry, or last-known content marked stale with its update time. A failed
+  read never clears known-good content. Overview and Station refresh every 20 s
+  while the tab is visible, and at once when it becomes visible again.
+
+Jobs listed on the overview are only the ones this page started; there is no
+server-side jobs list yet, and the empty state says so rather than implying the
+server has been idle.
 
 The dashboard persists nothing of its own — no accounts, no stored responses —
 and is a thin client over the endpoints in this file, so anything the UI can do,

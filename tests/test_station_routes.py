@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -106,6 +107,143 @@ class Routes(unittest.TestCase):
                     break
         self.assertEqual(st["status"], "done"); sweep.assert_called_once()
         self.assertEqual(sweep.call_args.kwargs.get("limit"), 5)
+
+    def test_channel_state_unavailable_when_nothing_conformed(self):
+        with mock.patch.object(conform, "load_index", return_value={}):
+            s = self.client.get("/api/station").json()
+        for name in ("live", "standby"):
+            self.assertEqual(s["channels"][name]["state"], "unavailable")
+            self.assertEqual(s["channels"][name]["reason"], "nothing_conformed")
+
+    def test_channel_state_idle_when_conformed_but_no_timeline(self):
+        index = {"a": idx("a", "k-a", [4.0])}
+        with mock.patch.object(conform, "load_index", return_value=index):
+            s = self.client.get("/api/station").json()
+        for name in ("live", "standby"):
+            self.assertEqual(s["channels"][name]["state"], "idle")
+            self.assertEqual(s["channels"][name]["reason"], "no_recent_client")
+
+    def test_channel_state_active_playing_for_an_ordinary_item(self):
+        now = time.time()
+        ch = playout.get("live")
+        ch.timeline.append(playout.Entry(now - 1, "a", "k-a", [4.0, 4.0], 8.0, "Ident", "station_id"))
+        index = {"a": idx("a", "k-a", [4.0, 4.0])}
+        with mock.patch.object(conform, "load_index", return_value=index):
+            s = self.client.get("/api/station").json()
+        live = s["channels"]["live"]
+        self.assertEqual(live["state"], "active")
+        self.assertEqual(live["reason"], "playing")
+        self.assertEqual(live["now"]["id"], "a")
+
+    def test_channel_state_active_slate_when_now_is_the_slate(self):
+        now = time.time()
+        ch = playout.get("live")
+        ch.timeline.append(playout.Entry(now - 1, playout.SLATE_ID, "slate", [4.0], 4.0,
+                                         "Brand", playout.SLATE_ID))
+        index = {"slate": idx("slate", "slate", [4.0])}
+        with mock.patch.object(conform, "load_index", return_value=index):
+            s = self.client.get("/api/station").json()
+        live = s["channels"]["live"]
+        self.assertEqual(live["state"], "active")
+        self.assertEqual(live["reason"], "slate")
+
+    def test_channel_diagnostics_last_playlist_request_and_lookahead(self):
+        with mock.patch.object(conform, "load_index", return_value={}):
+            s = self.client.get("/api/station").json()
+        expected_lookahead = config.STATION_WINDOW_SEGMENTS * config.STATION_SEGMENT_SECONDS
+        for name in ("live", "standby"):
+            self.assertIsNone(s["channels"][name]["last_playlist_request"])
+            self.assertEqual(s["channels"][name]["lookahead_seconds"], expected_lookahead)
+
+        marker = time.time() - 30
+        playout.get("live").last_playlist_request = marker
+        with mock.patch.object(conform, "load_index", return_value={}):
+            s = self.client.get("/api/station").json()
+        self.assertEqual(s["channels"]["live"]["last_playlist_request"], marker)
+
+    def test_status_does_not_change_last_playlist_request_or_lookahead(self):
+        """Reading /api/station must not itself set last_playlist_request — only
+        an actual playlist request (Channel.advance) may do that."""
+        with mock.patch.object(conform, "load_index", return_value={}):
+            self.client.get("/api/station")
+        self.assertIsNone(playout.get("live").last_playlist_request)
+        self.assertIsNone(playout.get("standby").last_playlist_request)
+
+    def test_status_purity_with_existing_channel_state(self):
+        """/api/station must not change timeline length, reported,
+        last_playlist_request, or play_history rows for a channel that
+        already has state, on top of the existing empty-channel purity check."""
+        now = time.time()
+        ch = playout.get("live")
+        ch.timeline.append(playout.Entry(now - 5, "a", "k-a", [4.0, 4.0, 2.0], 10.0, "Ident", "station_id"))
+        ch.reported = 1
+        ch.last_playlist_request = now - 2
+        with db.conn() as c:
+            c.execute("INSERT INTO play_history(channel_id, playable_id, played_at) VALUES (?,?,?)",
+                      ("station:live", "a", now - 5))
+            c.execute("UPDATE playables SET play_count=1, last_played=? WHERE id='a'", (now - 5,))
+            c.commit()
+
+        before_len = len(ch.timeline)
+        before_reported = ch.reported
+        before_lpr = ch.last_playlist_request
+        with db.conn() as c:
+            before_rows = [tuple(r) for r in c.execute(
+                "SELECT channel_id, playable_id, played_at FROM play_history ORDER BY id").fetchall()]
+
+        index = {"a": idx("a", "k-a", [4.0, 4.0, 2.0])}
+        with mock.patch.object(conform, "load_index", return_value=index):
+            with mock.patch("bumparr.station.routes.time.time", return_value=now + 1):
+                s = self.client.get("/api/station").json()
+            with mock.patch("bumparr.station.routes.time.time", return_value=now + 5000):
+                self.client.get("/api/station")
+
+        self.assertEqual(len(ch.timeline), before_len)
+        self.assertEqual(ch.reported, before_reported)
+        self.assertEqual(ch.last_playlist_request, before_lpr)
+        with db.conn() as c:
+            after_rows = [tuple(r) for r in c.execute(
+                "SELECT channel_id, playable_id, played_at FROM play_history ORDER BY id").fetchall()]
+        self.assertEqual(after_rows, before_rows)
+        self.assertEqual(s["channels"]["live"]["state"], "active")
+        self.assertEqual(s["channels"]["live"]["last_playlist_request"], before_lpr)
+
+    def test_last_conform_is_null_before_any_sweep_then_populated(self):
+        original = conform._LAST_SWEEP
+        conform._LAST_SWEEP = None
+        self.addCleanup(setattr, conform, "_LAST_SWEEP", original)
+
+        with mock.patch.object(conform, "load_index", return_value={}):
+            s = self.client.get("/api/station").json()
+        self.assertIsNone(s["last_conform"])
+
+        with mock.patch.object(conform, "ffmpeg_path", return_value=None):
+            conform.sweep()
+
+        with mock.patch.object(conform, "load_index", return_value={}):
+            s = self.client.get("/api/station").json()
+        self.assertIsNotNone(s["last_conform"])
+        self.assertEqual(set(s["last_conform"]),
+                         {"at", "conformed", "failed", "pruned", "skipped", "ffmpeg"})
+        self.assertFalse(s["last_conform"]["ffmpeg"])
+
+    def test_last_conform_busy_early_return_does_not_overwrite(self):
+        original = conform._LAST_SWEEP
+        conform._LAST_SWEEP = None
+        self.addCleanup(setattr, conform, "_LAST_SWEEP", original)
+
+        with mock.patch.object(conform, "ffmpeg_path", return_value=None):
+            conform.sweep()
+        recorded = conform.last_sweep()
+        self.assertIsNotNone(recorded)
+
+        self.assertTrue(conform._LOCK.acquire(blocking=False))
+        try:
+            busy_stats = conform.sweep()
+        finally:
+            conform._LOCK.release()
+        self.assertTrue(busy_stats.get("busy"))
+        self.assertEqual(conform.last_sweep(), recorded)
 
 
 if __name__ == "__main__":

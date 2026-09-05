@@ -208,7 +208,13 @@ class Channel:
             return "\n".join(lines) + "\n"
 
     def snapshot(self, now):
-        """Return current timeline state without extending or reporting it."""
+        """Return current timeline state without extending or reporting it.
+
+        Additive: `last_playlist_request` and `lookahead_seconds` ride along
+        with `now`/`next` so a single call under the channel lock gives a
+        diagnostic view (`/api/station`) everything it needs without a second
+        lock acquisition or a separate method.
+        """
         with self.lock:
             cur = next((e for e in self.timeline if e.start <= now < e.end), None)
             nxt = next((e for e in self.timeline if e.start > now), None)
@@ -216,7 +222,9 @@ class Channel:
             def shape(e):
                 return e and {"id": e.item_id, "title": e.title, "kind": e.kind,
                               "started_at": e.start, "ends_at": e.end}
-            return {"now": shape(cur), "next": shape(nxt)}
+            return {"now": shape(cur), "next": shape(nxt),
+                    "last_playlist_request": self.last_playlist_request,
+                    "lookahead_seconds": self.lookahead}
 
     def active_keys(self):
         with self.lock:

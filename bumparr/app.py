@@ -1133,6 +1133,62 @@ def request_status(job_id: str):
     return j
 
 
+def _truncate(s, limit):
+    s = str(s)
+    return s[:limit] + "…" if len(s) > limit else s
+
+
+def _bound_result(result, limit=2000):
+    """Cap a job result for the response only; the registry keeps the real value.
+
+    A string is clipped outright; a dict keeps its shape but clips string
+    values at the top level and one level into any nested dict (batch/render
+    jobs report `{ok, stdout, stderr}`-shaped results, occasionally nesting
+    once more); anything else (list, number, exception text, ...) becomes its
+    `str()`, clipped the same way. `None` (a job still `working`) stays `None`
+    rather than becoming the misleading string ``"None"``.
+    """
+    if result is None:
+        return None
+    if isinstance(result, str):
+        return result[:limit]
+    if isinstance(result, dict):
+        out = {}
+        for k, v in result.items():
+            if isinstance(v, str):
+                out[k] = v[:limit]
+            elif isinstance(v, dict):
+                out[k] = {kk: (vv[:limit] if isinstance(vv, str) else vv)
+                          for kk, vv in v.items()}
+            else:
+                out[k] = v
+        return out
+    return str(result)[:limit]
+
+
+@app.get("/api/jobs")
+def list_jobs(limit: int = Query(20, ge=1, le=50)):
+    """Read-only view of the background action registry, newest first.
+
+    Pure: never starts, cancels, or mutates a job — it only prunes entries
+    that have already expired, the same housekeeping every registry read
+    already does (see `_prune_jobs`). Every value is bounded for transport
+    (see `_bound_result`); truncation happens only in this response, never in
+    `_JOBS` itself, so a job's own `/api/request/{job_id}` poll is unaffected.
+    Never includes `worker_active` or any other internal bookkeeping key.
+    """
+    _prune_jobs()
+    with _JOB_LOCK:
+        snapshot = [(jid, dict(job)) for jid, job in _JOBS.items()]
+    snapshot.sort(key=lambda kv: kv[1].get("created_at", 0), reverse=True)
+    jobs = [{"id": jid, "request": _truncate(job.get("request", ""), 120),
+             "status": job.get("status"), "created_at": job.get("created_at"),
+             "updated_at": job.get("updated_at"),
+             "result": _bound_result(job.get("result"))}
+            for jid, job in snapshot[:limit]]
+    return {"jobs": jobs, "count": len(jobs)}
+
+
 @app.post("/api/sources/{action}")
 async def source_action(action: str):
     """Run a source maintenance pass now.

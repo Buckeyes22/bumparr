@@ -395,3 +395,100 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
     border-radius:0; border:none; }
   dialog.dlg[role="dialog"] { top:0; left:0; transform:none; box-shadow:none; }
 }
+
+/* ---- F3 composer ---- */
+
+/* Controls first: presets, then the four bounded fields, then the optional
+   type filter. Every one is a labelled native control. */
+.cmp-presets { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-bottom:var(--space-3); }
+.cmp-presets button[aria-pressed="true"] { border-color:var(--accent);
+  color:var(--accent); background:var(--surface-3); }
+.cmpbar { display:flex; flex-wrap:wrap; align-items:flex-end;
+  gap:var(--space-3); margin-bottom:var(--space-3); }
+.cmpbar input, .cmpbar select { background:var(--bg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:.85rem;
+  padding:var(--space-2); min-width:140px; min-height:44px; }
+[aria-invalid="true"] { border-color:var(--danger); }
+
+.cmp-types { border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-3); margin-bottom:var(--space-3);
+  display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-3); }
+.cmp-types legend { color:var(--muted); font-size:.72rem;
+  text-transform:uppercase; letter-spacing:.06em; padding:0 var(--space-1); }
+.cmp-note { color:var(--muted); font-size:.78rem; }
+.cmp-types .cmp-note { flex-basis:100%; }
+
+/* What is wrong, in words, beside the button it disables. */
+.cmp-validation { display:flex; flex-direction:column; gap:var(--space-1);
+  margin-bottom:var(--space-3); }
+.cmp-invalid { color:var(--danger); font-size:.85rem; }
+#cmp-go { min-height:44px; padding:0 var(--space-6); font-weight:700;
+  border-color:var(--accent); color:var(--accent); }
+#cmp-go:hover:not(:disabled) { background:var(--accent); color:var(--bg); }
+
+/* The one summary line, in the same monospace as every other figure. */
+.cmp-summary { font-family:var(--font-mono); font-size:.9rem;
+  overflow-wrap:anywhere; }
+.cmp-count, .cmp-progress { color:var(--muted); font-size:.8rem;
+  font-family:var(--font-mono); margin-top:var(--space-1);
+  overflow-wrap:anywhere; }
+
+/* A relaxed rule is editorial news, so it is a panel with sentences in it. */
+.cmp-attn, .cmp-stale { border:1px solid var(--warning); border-radius:var(--radius-sm);
+  padding:var(--space-3); margin-top:var(--space-3); }
+.cmp-relax { list-style:disc; margin:var(--space-2) 0 0 var(--space-4);
+  font-size:.85rem; display:flex; flex-direction:column; gap:var(--space-1); }
+.cmp-relax li { margin-left:var(--space-2); }
+.cmp-stale .cmp-note { margin-top:var(--space-2); }
+
+/* Playback: four named controls, all of them real tap targets. */
+.cmp-playback { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-top:var(--space-3); }
+.cmp-playback button { min-height:44px; padding:0 var(--space-4); }
+
+/* One medium at a time lives here, under the item it belongs to. */
+.cmp-stage { margin-top:var(--space-3); background:var(--surface-2);
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-3); min-height:120px; }
+.cmp-stage:empty { display:none; }
+.cmp-stage-label { color:var(--muted); font-size:.78rem;
+  margin-bottom:var(--space-2); overflow-wrap:anywhere; }
+.cmp-stage video, .cmp-stage img { width:100%; max-height:320px;
+  object-fit:contain; background:var(--bg); display:block; }
+.cmp-textcard { display:flex; align-items:center; justify-content:center;
+  text-align:center; padding:var(--space-6); background:var(--surface-3);
+  border-radius:var(--radius-sm); }
+.cmp-textcard .tc { font-size:.9rem; white-space:pre-line; line-height:1.35; }
+
+/* The break as an editorial unit: a horizontal row that scrolls inside itself
+   rather than sideways, relative width by duration with a floor under it, and
+   the length written out as text whatever the width says. */
+.cmp-timeline { display:flex; gap:var(--space-2); list-style:none;
+  margin-top:var(--space-4); overflow-x:auto; padding-bottom:var(--space-2);
+  align-items:stretch; }
+.cmp-item { flex:1 1 0; min-width:170px; background:var(--surface-2);
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-2); display:flex; flex-direction:column; gap:var(--space-1); }
+.cmp-item[aria-current="true"] { border-color:var(--accent); background:var(--surface-3); }
+.cmp-head { display:flex; justify-content:space-between; gap:var(--space-2);
+  font-family:var(--font-mono); font-size:.72rem; }
+.cmp-order { color:var(--accent); font-weight:700; }
+.cmp-dur { color:var(--muted); }
+.cmp-title { font-size:.85rem; overflow-wrap:anywhere; }
+.cmp-item .summary-row { font-size:.7rem; gap:var(--space-1); }
+.cmp-item .summary-row .lbl { min-width:4.5rem; }
+.cmp-inspect { margin-top:auto; min-height:44px; }
+
+/* Below 760px the timeline is an ordered stack: still numbered, still in the
+   server's order, nothing behind a swipe. */
+@media (max-width: 760px) {
+  .cmp-timeline { flex-direction:column; overflow-x:visible; }
+  .cmp-item { min-width:0; }
+}
+
+@media (max-width: 480px) {
+  .cmpbar { flex-direction:column; align-items:stretch; }
+  .cmpbar input, .cmpbar select { width:100%; min-width:0; }
+  .cmp-presets button, .cmp-playback button { flex:1; }
+}

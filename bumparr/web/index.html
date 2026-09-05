@@ -159,25 +159,95 @@
         </section>
       </section>
 
-      <!-- Review sequences: read-only preview of one item or a duration pack. -->
+      <!-- Review sequences. The server composes the break; this view asks for
+           one, shows it in the order it came back, and plays it locally. Every
+           request it makes is a GET: nothing here advances the live channels
+           or writes play history. -->
       <section class="view" id="view-composer" aria-labelledby="h-composer" hidden>
         <div class="viewhead">
           <h2 id="h-composer">Composer</h2>
-          <div class="viewtools">
-            <button id="preview-one" class="mini">one item</button>
-            <button data-pack="15" class="mini">15s</button>
-            <button data-pack="30" class="mini">30s</button>
-            <button data-pack="60" class="mini">60s</button>
-            <button data-pack="90" class="mini">90s</button>
+        </div>
+        <p class="note">Read-only: composing a break and playing it back here never
+          advances the live channels and never writes play history.</p>
+
+        <section class="panel wide" id="panel-compose" aria-labelledby="h-compose">
+          <h3 id="h-compose">Break to fill</h3>
+          <div class="cmp-presets" role="group" aria-label="Duration presets">
+            <button type="button" class="mini" data-preset="15">15s</button>
+            <button type="button" class="mini" data-preset="30">30s</button>
+            <button type="button" class="mini" data-preset="60">60s</button>
+            <button type="button" class="mini" data-preset="90">90s</button>
           </div>
-        </div>
-        <p class="note">Read-only: composing a preview never advances the live channels
-          and never writes play history.</p>
-        <div class="panel wide">
-          <div id="preview-state" class="panel-state"></div>
-          <div id="preview-summary"></div>
-          <div id="preview-grid" class="grid"></div>
-        </div>
+          <div class="cmpbar">
+            <p class="field">
+              <label for="cmp-seconds">Seconds to fill</label>
+              <input id="cmp-seconds" type="number" inputmode="decimal" autocomplete="off"
+                     min="0.1" max="86400" step="0.1" value="30" />
+            </p>
+            <p class="field">
+              <label for="cmp-tolerance">Tolerance (seconds)</label>
+              <input id="cmp-tolerance" type="number" inputmode="decimal" autocomplete="off"
+                     min="0" max="3600" step="0.1" value="1.5" />
+            </p>
+            <p class="field">
+              <label for="cmp-max-items">Maximum items</label>
+              <input id="cmp-max-items" type="number" inputmode="numeric" autocomplete="off"
+                     min="1" max="40" step="1" value="8" />
+            </p>
+            <p class="field">
+              <label for="cmp-placement">Placement</label>
+              <select id="cmp-placement">
+                <option value="any">Any</option>
+                <option value="open">Open</option>
+                <option value="inside">Inside</option>
+                <option value="close">Close</option>
+              </select>
+            </p>
+          </div>
+          <fieldset class="cmp-types">
+            <legend>Allowed types</legend>
+            <p class="cmp-note">Tick none to let the server choose from every type.</p>
+            <p class="field field-check">
+              <input id="cmp-type-video" type="checkbox" data-cmptype="video" />
+              <label for="cmp-type-video">Video</label>
+            </p>
+            <p class="field field-check">
+              <input id="cmp-type-card" type="checkbox" data-cmptype="card" />
+              <label for="cmp-type-card">Card</label>
+            </p>
+            <p class="field field-check">
+              <input id="cmp-type-image" type="checkbox" data-cmptype="image" />
+              <label for="cmp-type-image">Image</label>
+            </p>
+            <p class="field field-check">
+              <input id="cmp-type-stream" type="checkbox" data-cmptype="stream" />
+              <label for="cmp-type-stream">Stream</label>
+            </p>
+          </fieldset>
+          <!-- Filled by app.js when a control is out of range; the Compose
+               button is disabled for exactly as long as it has anything in it,
+               so an invalid request is never sent. -->
+          <div id="cmp-validation" class="cmp-validation" hidden></div>
+          <button id="cmp-go" type="button">Compose break</button>
+        </section>
+
+        <section class="panel wide" id="panel-break" aria-labelledby="h-break">
+          <h3 id="h-break">Composed break</h3>
+          <div id="composer-state" class="panel-state"></div>
+          <p id="composer-summary" class="cmp-summary"></p>
+          <p id="composer-count" class="cmp-count"></p>
+          <div id="composer-attention" class="cmp-attn" hidden></div>
+          <div id="composer-stale" class="cmp-stale" hidden></div>
+          <div class="cmp-playback" role="group" aria-label="Sequence playback">
+            <button id="cmp-play" type="button" disabled>▶ Play sequence</button>
+            <button id="cmp-prev" type="button" disabled>◀ Previous</button>
+            <button id="cmp-next" type="button" disabled>Next ▶</button>
+            <button id="cmp-stop" type="button" disabled>■ Stop</button>
+          </div>
+          <p id="cmp-progress" class="cmp-progress"></p>
+          <div id="composer-stage" class="cmp-stage"></div>
+          <ol id="composer-timeline" class="cmp-timeline"></ol>
+        </section>
       </section>
 
       <!-- Operate the HLS station. -->

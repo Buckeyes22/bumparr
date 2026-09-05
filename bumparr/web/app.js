@@ -102,6 +102,11 @@ function initialState() {
       seconds: 30, tolerance: 1.5, maxItems: 8,
       placement: "any", types: [], result: null, loading: false, error: null,
       updatedAt: null, retry: null, loadingLabel: "",
+      // The composed break is the server's; `stale` says a row under it moved
+      // and it has to be composed again rather than patched up here.
+      stale: false,
+      // Where the local preview has got to. `index` is -1 while stopped.
+      playback: { index: -1, playing: false, startedAt: null, elapsed: 0, duration: 0 },
     },
     // Jobs THIS page started, newest first. There is no server jobs list yet,
     // so this registry is the whole truth and says so when it is empty.
@@ -453,6 +458,11 @@ function abortReads() {
     libraryAbort = null;
     STATE.library.loading = false;
   }
+  if (composerAbort) {
+    composerAbort.abort();
+    composerAbort = null;
+    STATE.composer.loading = false;
+  }
   // A route-level read like any other: an answer arriving after the view is
   // gone must not write into the dialog it was opened from.
   if (inspectorAbort) {
@@ -586,12 +596,15 @@ function exitLibrary() {
 }
 
 function enterComposer() {
-  renderComposerState();
+  readComposerControls();
+  renderComposer();
   return ensureStatus();
 }
 
-// The composer draws the same cards the library does, so it holds media too.
-function exitComposer() { return releaseMedia($("#preview-grid")); }
+// A sequence is the one thing on this page that runs by itself: leaving takes
+// its timers, its readout and the medium on its stage with it. The fill read is
+// cancelled by abortReads with every other route-level read.
+function exitComposer() { return stopComposerPlayback(); }
 
 function enterStation() {
   renderStationState();
@@ -2466,100 +2479,575 @@ async function inspectorJob(options) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Composer / playback preview  (read-only: never advances playout)
+// 8. Composer / playback  (read-only: never advances playout)
 // ---------------------------------------------------------------------------
+// The server composes the break; this file asks for one, shows it in the order
+// it came back in, and plays it locally. Nothing here re-implements
+// compose_break, re-sorts it, or substitutes an item when a row is disabled: a
+// composition the pool has moved under is marked stale and composed again.
 
-function packSummaryEl(d) {
-  const root = makeEl("div", "pack-summary");
-  if (!d || typeof d !== "object") {
-    root.append(makeEl("div", "preview-err", "preview failed: empty response"));
-    return root;
-  }
-  const count = d.count || 0;
-  root.append(makeEl("div", "",
-    "Requested " + d.requested + "s | Composed " + d.total + "s | Gap " + d.gap +
-    "s | " + (d.exact ? "Within tolerance" : "Outside tolerance") +
-    " | " + count + " item(s)"));
-  const relaxed = (d.composition && d.composition.relaxed_rules) || [];
-  if (relaxed.length) {
-    root.append(makeEl("div", "attn pv-relax", "Relaxed: " + relaxed.join(", ")));
-  }
-  if (!count) {
-    root.append(makeEl("div", "empty", d.note || "nothing in this pack"));
-  }
-  return root;
+const COMPOSER_PRESETS = [15, 30, 60, 90];
+const COMPOSER_PLACEMENTS = ["any", "open", "inside", "close"];
+const COMPOSER_TYPES = ["video", "card", "image", "stream"];
+// Exactly what GET /api/bumpers/fill documents, so an out-of-range control is
+// refused here rather than by a 422 the operator has to interpret.
+const MAX_FILL_SECONDS = 86400;
+const MAX_FILL_TOLERANCE = 3600;
+const MAX_FILL_ITEMS = 40;
+const COMPOSER_TICK_MS = 1000;
+
+// The server's relaxation tokens, said in words. A rule was bent to fill the
+// gap and the operator has to be able to read which, so this is a panel, never
+// a tooltip. A token this build sends that is not listed is shown as it arrived.
+const RELAXED_TEXT = {
+  exit_ident: "The break could not end on a station ident.",
+  energy_jump: "Adjacent items jump in energy more than the profile prefers.",
+  same_family: "Two adjacent items share a visual family.",
+  text_run: "Text-heavy cards run back to back.",
+  same_music: "Adjacent items share a music bed.",
+};
+
+const STALE_TEXT = "Stale — recompose to reflect changes";
+
+let composerAbort = null;
+let composerTimer = null;   // a payload-only card's own clock
+let composerTick = null;    // the elapsed/remaining readout
+let composerMedia = null;   // the element the sequence is playing, if any
+let composerEnded = null;   // its `ended` listener, so it can be taken off again
+
+const composerItems = () => {
+  const d = STATE.composer.result;
+  return d && Array.isArray(d.bumpers) ? d.bumpers : [];
+};
+
+// A blank field is not a zero: "" would read as 0 and quietly send a tolerance
+// nobody typed, so it is NaN here and the control says it is invalid.
+function fillNumber(value) {
+  const raw = typeof value === "string" ? value.trim() : value;
+  if (raw === "" || raw === null || raw === undefined) return NaN;
+  const n = Number(raw);
+  return isFinite(n) ? n : NaN;
 }
 
-function renderPackPreview(d) {
-  const summary = $("#preview-summary");
-  if (summary) summary.replaceChildren(packSummaryEl(d));
-  fillGrid($("#preview-grid"), ((d && d.bumpers) || []).map((row) => cardEl(row)));
+// composerProblems(controls) -> {field: sentence}. Pure; every bound is the
+// endpoint's own, and only an empty object lets a request be built at all.
+function composerProblems(controls) {
+  const c = controls || {};
+  const out = {};
+  const seconds = fillNumber(c.seconds);
+  if (!(seconds > 0) || seconds > MAX_FILL_SECONDS) {
+    out.seconds = "Seconds to fill must be more than 0 and at most 86400.";
+  }
+  const tolerance = fillNumber(c.tolerance);
+  if (!(tolerance >= 0) || tolerance > MAX_FILL_TOLERANCE) {
+    out.tolerance = "Tolerance must be between 0 and 3600 seconds.";
+  }
+  const maxItems = fillNumber(c.maxItems);
+  if (!(maxItems >= 1) || maxItems > MAX_FILL_ITEMS || Math.floor(maxItems) !== maxItems) {
+    out.maxItems = "Maximum items must be a whole number from 1 to 40.";
+  }
+  if (COMPOSER_PLACEMENTS.indexOf(String(c.placement)) === -1) {
+    out.placement = "Placement must be any, open, inside or close.";
+  }
+  const types = Array.isArray(c.types) ? c.types : [];
+  if (types.some((t) => COMPOSER_TYPES.indexOf(String(t)) === -1)) {
+    out.types = "Only video, card, image and stream can be asked for.";
+  }
+  return out;
+}
+
+// The fill query, built through URLSearchParams so no value can smuggle a
+// separator. Ticking no type at all means every type, which is what leaving
+// `types` off says — sending all four would say the same thing more loudly.
+function composerParams(controls) {
+  const c = controls || {};
+  const params = new URLSearchParams();
+  params.set("seconds", String(fillNumber(c.seconds)));
+  params.set("tolerance", String(fillNumber(c.tolerance)));
+  params.set("max_items", String(fillNumber(c.maxItems)));
+  params.set("placement", String(c.placement));
+  const types = (Array.isArray(c.types) ? c.types : [])
+    .filter((t) => COMPOSER_TYPES.indexOf(String(t)) !== -1);
+  if (types.length) params.set("types", types.join(","));
+  params.set("explain", "true");
+  return params;
+}
+
+/**
+ * gapLabel(requested, total, exact) ->
+ *   "Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance"
+ *
+ * Pure. `gap = requested - total`: positive is underfilled, negative
+ * overfilled, and the sign is always written out. "Within tolerance" is the
+ * server's own `exact` — comparing the gap with zero here would call a
+ * perfectly good break a bad one. A figure this build does not send reads
+ * "Not available in this version." rather than as a zero.
+ */
+function gapLabel(requested, total, exact) {
+  const req = fillNumber(requested);
+  const tot = fillNumber(total);
+  const parts = [
+    "Requested " + (isFinite(req) ? req.toFixed(1) + "s" : NOT_AVAILABLE),
+    "Composed " + (isFinite(tot) ? tot.toFixed(1) + "s" : NOT_AVAILABLE),
+  ];
+  if (isFinite(req) && isFinite(tot)) {
+    // Rounded before the sign is read, so an overfill too small to show does
+    // not print as "-0.0s".
+    const gap = Math.round((req - tot) * 10) / 10;
+    parts.push("Gap " + (gap < 0 ? "-" : "+") + Math.abs(gap).toFixed(1) + "s");
+  } else {
+    parts.push("Gap " + NOT_AVAILABLE);
+  }
+  parts.push(typeof exact === "boolean"
+    ? (exact ? "Within tolerance" : "Outside tolerance") : NOT_AVAILABLE);
+  return parts.join(" | ");
+}
+
+// A minute-long clip is not sixty times the width of a one-second card: the
+// share is bounded, and CSS keeps a floor under it, so every item stays
+// readable however long it is. The length is written out as text regardless.
+function durationShare(seconds) {
+  const n = Number(seconds);
+  if (!isFinite(n) || n <= 0) return 1;
+  return Math.max(1, Math.min(6, Math.round((n / 5) * 100) / 100));
+}
+
+// --- controls ---------------------------------------------------------------
+
+// Operator input, not response data: the fields are the operator's while they
+// are being typed in, so they are read into STATE here (on every change, on
+// entry, and once more before a request is built) and nothing writes them back
+// except a preset, whose whole job is to fill the seconds field in. Nothing
+// rendered is ever read back out of the DOM — a browser that restores form
+// values across a reload would otherwise show one duration and send another.
+function readComposerControls() {
+  const c = STATE.composer;
+  const value = (sel) => { const el = $(sel); return el ? el.value : ""; };
+  c.seconds = value("#cmp-seconds");
+  c.tolerance = value("#cmp-tolerance");
+  c.maxItems = value("#cmp-max-items");
+  c.placement = value("#cmp-placement");
+  c.types = $$("#view-composer [data-cmptype]")
+    .filter((box) => box.checked)
+    .map((box) => String(box.dataset.cmptype));
+  return c;
+}
+
+function setComposerPreset(value) {
+  const n = Number(value);
+  if (COMPOSER_PRESETS.indexOf(n) === -1) return null;
+  STATE.composer.seconds = n;
+  const el = $("#cmp-seconds");
+  if (el) el.value = String(n);
+  renderComposerControls();
+  return n;
+}
+
+// Invalid controls name themselves in words, next to the button they disable.
+// Nothing is sent while anything is listed here.
+function renderComposerControls() {
+  const c = STATE.composer;
+  const problems = composerProblems(c);
+  const mark = (sel, key) => {
+    const el = $(sel);
+    if (!el) return;
+    if (problems[key]) el.setAttribute("aria-invalid", "true");
+    else el.removeAttribute("aria-invalid");
+  };
+  mark("#cmp-seconds", "seconds");
+  mark("#cmp-tolerance", "tolerance");
+  mark("#cmp-max-items", "maxItems");
+  mark("#cmp-placement", "placement");
+  const said = $("#cmp-validation");
+  const lines = Object.keys(problems).map((key) => problems[key]);
+  if (said) {
+    said.replaceChildren(...lines.map((line) => makeEl("p", "cmp-invalid", line)));
+    said.hidden = lines.length === 0;
+  }
+  const go = $("#cmp-go");
+  if (go) go.disabled = lines.length > 0 || c.loading;
+  const seconds = fillNumber(c.seconds);
+  $$("#view-composer [data-preset]").forEach((button) => {
+    button.setAttribute("aria-pressed",
+      Number(button.dataset.preset) === seconds ? "true" : "false");
+  });
+  return said;
+}
+
+// --- the composed break ------------------------------------------------------
+
+// One composed item, in the server's own order. Family, audio, role and brand
+// mode are the vocabulary the profile composed by, so they are on the item
+// itself rather than a click away.
+function timelineItemEl(b, index, count) {
+  const row = b && typeof b === "object" ? b : {};
+  const cr = row.creative && typeof row.creative === "object" ? row.creative : {};
+  const li = makeEl("li", "cmp-item");
+  li.dataset.order = String(index + 1);
+  li.style.flexGrow = String(durationShare(row.duration));
+  const head = makeEl("div", "cmp-head");
+  head.append(makeEl("span", "cmp-order", String(index + 1) + " of " + count),
+              makeEl("span", "cmp-dur",
+                     row.type === "stream" ? "LIVE" : formatDuration(row.duration)));
+  const roles = (Array.isArray(cr.roles) ? cr.roles : [])
+    .filter((r) => r !== undefined && r !== null && r !== "").map(String);
+  li.append(head, makeEl("p", "cmp-title", fieldText(row.title, "untitled")),
+            summaryRow("kind", fieldText(row.kind)),
+            summaryRow("family", fieldText(cr.family)),
+            summaryRow("audio", fieldText(cr.audio)),
+            summaryRow("role", roles.length ? roles.join(", ") : NOT_AVAILABLE),
+            summaryRow("brand mode", fieldText(cr.brand_mode)));
+  if (row.id !== undefined && row.id !== null && String(row.id) !== "") {
+    const inspect = makeButton("Inspect", "cmp-inspect mini",
+      () => { openInspector(row.id, { invoker: inspect, onMutate: markComposerStale }); },
+      "Inspect " + rowLabel(row));
+    li.append(inspect);
+  }
+  return li;
+}
+
+// Which rules the composer had to bend, in plain sentences. A relaxation is
+// editorial news, so it is an Attention panel on the page and never a tooltip.
+function renderComposerAttention() {
+  const el = $("#composer-attention");
+  if (!el) return null;
+  const d = STATE.composer.result;
+  const composition = d && typeof d.composition === "object" ? d.composition : null;
+  const rules = composition && Array.isArray(composition.relaxed_rules)
+    ? composition.relaxed_rules : [];
+  el.hidden = rules.length === 0;
+  if (!rules.length) { el.replaceChildren(); return el; }
+  const list = makeEl("ul", "cmp-relax");
+  rules.forEach((rule) => {
+    list.append(makeEl("li", "", RELAXED_TEXT[String(rule)] || String(rule)));
+  });
+  el.replaceChildren(
+    statusBadge("attention", "The profile's rules were relaxed to fill this gap"),
+    list);
+  return el;
+}
+
+// The pack the server composed is the pack it composed. Disabling, enabling,
+// rendering or deleting a row through the inspector does not let this page swap
+// in a replacement: the break is marked stale and Play is disabled until the
+// operator asks the server for a new one.
+function markComposerStale(kind, id) {
+  const c = STATE.composer;
+  if (!c.result) return null;
+  c.stale = true;
+  stopComposerPlayback();
+  // The timeline itself is left exactly as it is — nothing is substituted, and
+  // rebuilding it would throw away the Inspect button the still-open dialog has
+  // to hand focus back to when it closes.
+  renderComposerStale();
+  renderComposerPlayback();
+  announce(STALE_TEXT + " (" + String(kind) + " · " + String(id) + ")");
+  return kind;
+}
+
+function renderComposerStale() {
+  const el = $("#composer-stale");
+  if (!el) return null;
+  const stale = Boolean(STATE.composer.stale);
+  el.hidden = !stale;
+  el.replaceChildren(...(stale ? [
+    statusBadge("attention", STALE_TEXT),
+    makeEl("p", "cmp-note",
+      "An item changed while this break was on screen. Bumparr does not " +
+      "substitute one item for another — press Compose break for a new sequence."),
+  ] : []));
+  return el;
+}
+
+function renderComposerBreak() {
+  const d = STATE.composer.result;
+  const items = composerItems();
+  const summary = $("#composer-summary");
+  if (summary) {
+    summary.textContent = d ? gapLabel(d.requested, d.total, d.exact) : "";
+  }
+  const count = $("#composer-count");
+  if (count) {
+    count.textContent = d
+      ? items.length + " item(s), in the order the server composed them."
+      : "";
+  }
+  renderComposerAttention();
+  fillGrid($("#composer-timeline"),
+           items.map((row, at) => timelineItemEl(row, at, items.length)));
+  return items.length;
 }
 
 function renderComposerState() {
-  const el = $("#preview-state");
+  const el = $("#composer-state");
   const c = STATE.composer;
   // Every composer read is one the operator asked for, so "loading" cannot
-  // flicker on a background refresh; and never previewed is empty, not loading.
+  // flicker on a background refresh; and never composed is empty, not loading.
   if (c.loading) return renderPanelState(el, { state: "loading", message: c.loadingLabel });
   if (!c.error && !c.result) {
-    return renderPanelState(el, { state: "empty", message: "Nothing previewed yet." });
+    return renderPanelState(el, { state: "empty",
+      message: "Nothing composed yet — choose a duration and press Compose break." });
+  }
+  if (!c.error && !composerItems().length) {
+    // The server's own note says why nothing fit; there is no client-side
+    // second guess at a pool it can see and this page cannot.
+    return renderPanelState(el, { state: "empty",
+      message: humanMessage(c.result && c.result.note,
+                            "Nothing in the pool fits this break.") });
   }
   return renderPanelState(el, readState(
     { value: c.result, error: c.error, updatedAt: c.updatedAt },
     c.retry || undefined));
 }
 
-// The preview is GET-only. It never calls station advance(), writes play
-// history, or touches play_count/last_played.
-async function runPreview(path, loadingLabel, render) {
+// The one request this view makes, and a GET built from validated controls. It
+// never calls station advance(), writes play history, or touches
+// play_count/last_played.
+async function composeBreak() {
   const c = STATE.composer;
+  readComposerControls();
+  const problems = composerProblems(c);
+  if (Object.keys(problems).length) {
+    // Nothing is sent from an invalid form. The fields say what is wrong and
+    // Compose stays disabled until they are right.
+    renderComposerControls();
+    announce("compose blocked: " + Object.keys(problems).map((k) => problems[k]).join(" "));
+    return null;
+  }
+  // A new composition is a new sequence: whatever was playing stops first.
+  stopComposerPlayback();
+  c.stale = false;
+  if (composerAbort) composerAbort.abort();
+  composerAbort = new AbortController();
   c.loading = true;
-  c.loadingLabel = loadingLabel;
-  c.retry = () => runPreview(path, loadingLabel, render);
-  renderComposerState();
+  c.loadingLabel = "composing a " + fillNumber(c.seconds) + "s break…";
+  c.retry = () => composeBreak();
+  renderComposer();
   let d;
   try {
-    d = await api(path);
+    d = await api("/api/bumpers/fill?" + composerParams(c).toString(),
+                  { signal: composerAbort.signal });
   } catch (err) {
     c.loading = false;
+    // A cancelled read (the view was left) leaves the last good break alone.
+    if (isApiAbort(err)) { renderComposer(); return null; }
     c.error = err.message;
-    renderComposerState();
+    renderComposer();
     return null;
   }
   c.loading = false;
   c.error = null;
-  c.result = d;
+  c.result = d && typeof d === "object" ? d : null;
   c.updatedAt = now();
-  render(d);
-  renderComposerState();
+  renderComposer();
   return d;
 }
 
-function previewPack(seconds) {
-  STATE.composer.seconds = seconds;
-  return runPreview(
-    "/api/bumpers/fill?seconds=" + encodeURIComponent(seconds) + "&explain=true",
-    "composing " + seconds + "s pack…",
-    renderPackPreview);
+// --- local sequential playback ----------------------------------------------
+// One medium at a time, advancing on the medium's own `ended` where it has one
+// and on the item's declared duration where it does not. Nothing is reported
+// back to the server: this is a preview, not a playout.
+
+// The stage element for one item, plus the medium to wait on if it has one.
+// A live stream is never opened by the sequence — it keeps its own Play button
+// and the warning that pressing it makes this page a real client.
+function stagePlayer(b) {
+  const row = b && typeof b === "object" ? b : {};
+  if (row.type === "stream") return { node: streamPreview(row), medium: null };
+  if (row.type === "image" && hasMedia(row)) return { node: imagePreview(row), medium: null };
+  if (hasMedia(row) && (row.type === "video" || row.type === "card")) {
+    const v = mediaVideo(row.media_url, "Playing " + rowLabel(row));
+    return { node: v, medium: v };
+  }
+  const p = row.payload && typeof row.payload === "object" ? row.payload : {};
+  const text = Array.isArray(p.lines) ? p.lines.join("\n")
+    : String(p.number || p.text || row.title || "");
+  const card = makeEl("div", "cmp-textcard");
+  card.append(makeEl("div", "tc", text));
+  return { node: card, medium: null };
 }
 
-function previewOne() {
-  return runPreview(
-    "/api/bumpers/random?count=1&explain=true",
-    "loading one item…",
-    (d) => {
-      const summary = $("#preview-summary");
-      const grid = $("#preview-grid");
-      if (summary) {
-        summary.replaceChildren(makeEl("div", "pack-summary",
-          d && d.count ? "one item" : "nothing to preview"));
-      }
-      fillGrid(grid, ((d && d.bumpers) || []).map((row) => cardEl(row)));
-      if (grid && !(d && d.count)) {
-        grid.appendChild(makeEl("div", "empty", "nothing here yet"));
-      }
-    });
+// Timers off, medium detached, stage emptied — without touching where the
+// sequence had got to, which is what Next and Previous need kept.
+function releaseComposerStage() {
+  if (composerTimer !== null) { clearTimeout(composerTimer); composerTimer = null; }
+  if (composerTick !== null) { clearInterval(composerTick); composerTick = null; }
+  if (composerMedia && composerEnded && composerMedia.removeEventListener) {
+    composerMedia.removeEventListener("ended", composerEnded);
+  }
+  composerMedia = null;
+  composerEnded = null;
+  const stage = $("#composer-stage");
+  if (stage) { releaseMedia(stage); stage.replaceChildren(); }
+  return null;
+}
+
+// The full stop: nothing playing, nothing counting, and back to the top.
+function stopComposerPlayback() {
+  releaseComposerStage();
+  const p = STATE.composer.playback;
+  p.index = -1;
+  p.playing = false;
+  p.startedAt = null;
+  p.elapsed = 0;
+  p.duration = 0;
+  return null;
+}
+
+function playbackLine() {
+  const items = composerItems();
+  const p = STATE.composer.playback;
+  if (!items.length) return "Nothing composed yet.";
+  if (p.index < 0) return "Stopped · " + items.length + " item(s) in this break.";
+  const head = "Item " + (p.index + 1) + " of " + items.length;
+  const elapsed = Math.max(0, Math.round(p.elapsed));
+  if (!(p.duration > 0)) return head + " · " + elapsed + "s elapsed · length not reported";
+  return head + " · " + elapsed + "s elapsed · " +
+    Math.max(0, Math.round(p.duration - p.elapsed)) + "s remaining";
+}
+
+function renderComposerPlayback() {
+  const c = STATE.composer;
+  const p = c.playback;
+  const items = composerItems();
+  // A stale break is not played: the sequence on screen is no longer the
+  // sequence the server would compose.
+  const can = items.length > 0 && !c.stale && !c.loading;
+  const set = (sel, disabled) => { const el = $(sel); if (el) el.disabled = disabled; };
+  set("#cmp-play", !can);
+  set("#cmp-prev", !can);
+  set("#cmp-next", !can);
+  set("#cmp-stop", p.index < 0);
+  const line = $("#cmp-progress");
+  if (line) line.textContent = playbackLine();
+  const list = $("#composer-timeline");
+  Array.from((list && list.children) || []).forEach((li, at) => {
+    if (at === p.index) li.setAttribute("aria-current", "true");
+    else li.removeAttribute("aria-current");
+  });
+  return line;
+}
+
+function renderComposer() {
+  renderComposerControls();
+  renderComposerBreak();
+  renderComposerStale();
+  renderComposerPlayback();
+  renderComposerState();
+  return null;
+}
+
+// The elapsed/remaining readout, from the wall clock rather than the medium, so
+// a card with no medium at all counts the same way a video does.
+function startComposerTick() {
+  if (composerTick !== null) clearInterval(composerTick);
+  composerTick = setInterval(() => {
+    const p = STATE.composer.playback;
+    if (!p.playing || p.startedAt === null) return;
+    p.elapsed = (now() - p.startedAt) / 1000;
+    renderComposerPlayback();
+  }, COMPOSER_TICK_MS);
+  return composerTick;
+}
+
+// Put item `index` on the stage and start it. Past either end is the end of the
+// break, not a wrap: the sequence stops there.
+function playComposerAt(index) {
+  const c = STATE.composer;
+  const items = composerItems();
+  const p = c.playback;
+  if (!items.length || c.stale) {
+    stopComposerPlayback();
+    renderComposerPlayback();
+    return null;
+  }
+  const at = Math.trunc(Number(index));
+  if (!isFinite(at) || at < 0 || at >= items.length) {
+    stopComposerPlayback();
+    renderComposerPlayback();
+    announce("preview sequence finished — nothing was written to play history");
+    return null;
+  }
+  releaseComposerStage();
+  const b = items[at] || {};
+  const duration = Number(b.duration);
+  p.index = at;
+  p.playing = true;
+  p.startedAt = now();
+  p.elapsed = 0;
+  p.duration = isFinite(duration) && duration > 0 ? duration : 0;
+  const built = stagePlayer(b);
+  const stage = $("#composer-stage");
+  if (stage) {
+    stage.replaceChildren(
+      makeEl("p", "cmp-stage-label",
+             "Item " + (at + 1) + " of " + items.length + " · " + rowLabel(b)),
+      built.node);
+  }
+  if (built.medium) {
+    composerMedia = built.medium;
+    composerEnded = () => { advanceComposer(1); };
+    composerMedia.addEventListener("ended", composerEnded);
+    claimMedia(composerMedia);
+    if (typeof composerMedia.play === "function") {
+      const started = composerMedia.play();
+      if (started && started.catch) started.catch(() => {});
+    }
+  } else if (p.duration > 0) {
+    // A payload-only card has nothing to fire `ended`, so its declared
+    // duration is the clock. A live stream with no declared length holds here
+    // until Next: this page never opens one by itself.
+    composerTimer = setTimeout(() => {
+      composerTimer = null;
+      advanceComposer(1);
+    }, p.duration * 1000);
+  }
+  startComposerTick();
+  renderComposerPlayback();
+  announce("previewing item " + (at + 1) + " of " + items.length + ": " + rowLabel(b));
+  return at;
+}
+
+// Previous and Next are the sequence's controls whether or not it is running:
+// from stopped, Next starts at the top.
+function advanceComposer(delta) {
+  const p = STATE.composer.playback;
+  const step = Number(delta) < 0 ? -1 : 1;
+  const from = p.index < 0 ? (step > 0 ? -1 : 0) : p.index;
+  return playComposerAt(from + step);
+}
+
+const playComposerSequence = () => playComposerAt(0);
+
+function stopComposerSequence() {
+  stopComposerPlayback();
+  renderComposerPlayback();
+  announce("preview stopped");
+  return null;
+}
+
+// Wired once at boot. Values are read out of the fields as they change; only a
+// preset ever writes one back.
+function wireComposer() {
+  const on = (sel, type, fn) => { const el = $(sel); if (el) el.addEventListener(type, fn); };
+  const reread = () => { readComposerControls(); renderComposerControls(); };
+  $$("#view-composer [data-preset]").forEach((button) => {
+    button.addEventListener("click", () => { setComposerPreset(button.dataset.preset); });
+  });
+  ["#cmp-seconds", "#cmp-tolerance", "#cmp-max-items"].forEach((sel) => {
+    on(sel, "input", reread);
+    on(sel, "change", reread);
+  });
+  on("#cmp-placement", "change", reread);
+  $$("#view-composer [data-cmptype]").forEach((box) => {
+    box.addEventListener("change", reread);
+  });
+  on("#cmp-go", "click", () => { composeBreak(); });
+  on("#cmp-play", "click", () => { playComposerSequence(); });
+  on("#cmp-prev", "click", () => { advanceComposer(-1); });
+  on("#cmp-next", "click", () => { advanceComposer(1); });
+  on("#cmp-stop", "click", () => { stopComposerSequence(); });
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2999,10 +3487,7 @@ function boot() {
   on("#clear-filters", "click", () => { clearFilters(); });
   on("#drop-kind", "click", () => { dropKind(); });
   on("#inspector-close", "click", () => { closeInspector(); });
-  const previewOneBtn = $("#preview-one");
-  if (previewOneBtn) previewOneBtn.addEventListener("click", previewOne);
-  $$("[data-pack]").forEach((b) =>
-    b.addEventListener("click", () => previewPack(b.dataset.pack)));
+  wireComposer();
 
   document.addEventListener("visibilitychange", handleVisibilityChange);
   // Anchors carry the routes, so a click is an ordinary in-page hash change:
@@ -3031,7 +3516,7 @@ if (COMMONJS) {
     // routing and shell
     parseHash, applyHash, enterRoute, exitRoute, VIEWS, renderChrome, renderNav,
     // components
-    statusBadge, renderPanelState, cardEl, packSummaryEl, renderPackPreview,
+    statusBadge, renderPanelState, cardEl,
     freshnessLine, stationEl, stationState, stationNow, summaryRow, poolState,
     confirmDialog, closeAllDialogs,
     // overview
@@ -3046,14 +3531,18 @@ if (COMMONJS) {
     openInspector, closeInspector, renderInspector,
     enableBumper, disableBumper, deleteBumper,
     // behaviour
-    loadStatus, loadStation, previewPack, previewOne,
+    loadStatus, loadStation,
     pollJob, doAction, announce, refreshTick,
     handleVisibilityChange, submitAsk,
+    // composer
+    gapLabel, composerProblems, composerParams, composeBreak, readComposerControls, setComposerPreset, renderComposer, timelineItemEl, playComposerSequence, advanceComposer, stopComposerPlayback, markComposerStale, playbackLine, wireComposer, RELAXED_TEXT, STALE_TEXT, COMPOSER_PRESETS,
     resetStateForTests() {
       if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
       stopRefresh();
+      stopComposerPlayback();
       closeAllDialogs();
       libraryAbort = null;
+      composerAbort = null;
       statusAbort = null;
       stationAbort = null;
       inspectorAbort = null;

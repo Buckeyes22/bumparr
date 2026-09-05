@@ -540,13 +540,32 @@ closes any modal it had open, and pauses and detaches its media.
   exactly before its confirm button works. A `cleanup_failed` response keeps
   the inspector open carrying that news, because it is the only surface that
   said so.
-- **Composer** (`#/composer`) — one item
-  (`GET /api/bumpers/random?count=1&explain=true`) and 15/30/60/90-second packs
-  (`GET /api/bumpers/fill?seconds=N&explain=true`). Cards show creative data,
-  provenance, freshness (channel / generated / valid-until / parked), factors,
-  media, and pack relaxations, and reuse the same inspector. It is GET-only: it
-  does not call station `advance()`, write play history, or mutate
-  `play_count`/`last_played`.
+- **Composer** (`#/composer`) — review a break as an editorial unit. Labelled
+  controls (15/30/60/90-second presets, a custom duration `0 < s <= 86400`,
+  tolerance `0..3600` defaulting to 1.5, maximum items `1..40` defaulting to 8,
+  placement any/open/inside/close, and optional video/card/image/stream
+  checkboxes — ticking none asks for every type) build one request:
+  `GET /api/bumpers/fill?seconds&tolerance&max_items&placement&types&explain=true`.
+  Anything out of the range the endpoint documents disables **Compose break**
+  and is named in words, so an invalid request is never sent. Composition is
+  never reproduced in the browser: the answer is rendered in the server's order,
+  as a horizontal timeline on desktop and an ordered stack below 760px, each
+  item carrying its order number, title, kind, family, duration, audio, role,
+  brand mode and an **Inspect** button. One summary line reads
+  `Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance`, where
+  `gap = requested - total` (positive underfilled, negative overfilled) and
+  "within tolerance" is the server's `exact`, never a comparison with zero.
+  Every token in `composition.relaxed_rules` is spelled out as a sentence in an
+  Attention panel rather than a tooltip. **Play sequence / Previous / Next /
+  Stop** preview the break locally: one medium at a time, advancing on the
+  medium's `ended` and on the declared duration for a payload-only card, with
+  the item index and elapsed/remaining shown; a live stream keeps its own Play
+  button so the sequence never opens one. Playback stops and resets on a new
+  composition and on leaving the view. After a disable, enable, render or delete
+  through the inspector the break is marked **Stale — recompose to reflect
+  changes** and Play is disabled: no item is ever substituted client-side. The
+  whole view is GET-only — it does not call station `advance()`, write play
+  history, or mutate `play_count`/`last_played`.
 - **Station** (`#/station`) — `/api/station`: now/next per channel, conform
   progress, the handoff URLs, and **Conform now**
   (`POST /api/station/conform`).

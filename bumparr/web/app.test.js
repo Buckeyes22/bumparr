@@ -259,14 +259,41 @@ function buildDocument() {
           ]),
         ]),
         view("view-composer", [
-          el("div", { className: "viewtools" }, [
-            el("button", { id: "preview-one" }),
-            el("button", { data: { pack: "30" } }),
+          panel("panel-compose", [
+            el("div", { className: "cmp-presets" },
+               ["15", "30", "60", "90"].map((s) => el("button", { data: { preset: s } }))),
+            el("div", { className: "cmpbar" }, [
+              el("label", { htmlFor: "cmp-seconds" }),
+              el("input", { id: "cmp-seconds", type: "number", value: "30" }),
+              el("label", { htmlFor: "cmp-tolerance" }),
+              el("input", { id: "cmp-tolerance", type: "number", value: "1.5" }),
+              el("label", { htmlFor: "cmp-max-items" }),
+              el("input", { id: "cmp-max-items", type: "number", value: "8" }),
+              el("label", { htmlFor: "cmp-placement" }),
+              el("select", { id: "cmp-placement", value: "any" }),
+            ]),
+            el("fieldset", { className: "cmp-types" },
+               ["video", "card", "image", "stream"].map((t) =>
+                 el("input", { id: "cmp-type-" + t, type: "checkbox",
+                               data: { cmptype: t } }))),
+            el("div", { id: "cmp-validation", className: "cmp-validation", hidden: true }),
+            el("button", { id: "cmp-go" }),
           ]),
-          el("div", { className: "panel wide" }, [
-            el("div", { id: "preview-state", className: "panel-state" }),
-            el("div", { id: "preview-summary" }),
-            el("div", { id: "preview-grid", className: "grid" }),
+          panel("panel-break", [
+            el("div", { id: "composer-state", className: "panel-state" }),
+            el("p", { id: "composer-summary", className: "cmp-summary" }),
+            el("p", { id: "composer-count", className: "cmp-count" }),
+            el("div", { id: "composer-attention", className: "cmp-attn", hidden: true }),
+            el("div", { id: "composer-stale", className: "cmp-stale", hidden: true }),
+            el("div", { className: "cmp-playback" }, [
+              el("button", { id: "cmp-play", disabled: true }),
+              el("button", { id: "cmp-prev", disabled: true }),
+              el("button", { id: "cmp-next", disabled: true }),
+              el("button", { id: "cmp-stop", disabled: true }),
+            ]),
+            el("p", { id: "cmp-progress", className: "cmp-progress" }),
+            el("div", { id: "composer-stage", className: "cmp-stage" }),
+            el("ol", { id: "composer-timeline", className: "cmp-timeline" }),
           ]),
         ]),
         view("view-station", [
@@ -354,7 +381,7 @@ global.localStorage = {
 
 const app = require("./app.js");
 const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
-        previewPack, previewOne, packSummaryEl, freshnessLine, api, isApiAbort,
+        freshnessLine, api, isApiAbort,
         renderPanelState, statusBadge, formatAge, formatDuration, loadGrid,
         loadStatus, scheduleSearch, refreshTick, handleVisibilityChange,
         announce, STATE, API_TIMEOUT_MS, SEARCH_DEBOUNCE_MS, REFRESH_MS,
@@ -365,7 +392,12 @@ const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
         openInspector, closeInspector, confirmDialog, disableBumper, dropKind,
         setFilter, setPageSize, setDensity, clearFilters, renderFilters,
         libraryCounts, libraryHash, poolState, PAGE, PAGE_SIZES,
-        LIBRARY_DENSITIES, NOT_AVAILABLE } = app;
+        LIBRARY_DENSITIES, NOT_AVAILABLE,
+        gapLabel, composerProblems, composerParams, composeBreak,
+        readComposerControls, setComposerPreset, renderComposer, timelineItemEl,
+        playComposerSequence, advanceComposer, stopComposerPlayback,
+        markComposerStale, playbackLine, wireComposer, RELAXED_TEXT, STALE_TEXT,
+        COMPOSER_PRESETS } = app;
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -919,79 +951,6 @@ test("music credits stay text and do not invent missing fields", () => {
   const uncredited = descendants(empty).find((n) => n.className === "pv-credits");
   assert.equal(uncredited.textContent, "legacy.loose.wav");
   assert.ok(!uncredited.textContent.toLowerCase().includes("unknown"));
-});
-
-// ---------------------------------------------------------------------------
-// Preview
-// ---------------------------------------------------------------------------
-
-test("empty pack preview shows a message, not leftover cards", () => {
-  const el = packSummaryEl({
-    requested: 15, total: 0, gap: 15, exact: false, count: 0, bumpers: [],
-    note: "no bumper is short enough for this gap",
-    composition: { relaxed_rules: [] },
-  });
-  const text = JSON.stringify(el);
-  assert.ok(text.includes("nothing in this pack") || text.includes("no bumper is short enough"));
-  assert.ok(text.includes("Requested 15s"));
-  assert.equal(el.children.filter((n) => n.className === "pv-card").length, 0);
-});
-
-test("pack summary reports error text for a missing body", () => {
-  const el = packSummaryEl(null);
-  assert.ok(JSON.stringify(el).includes("preview failed: empty response"));
-});
-
-test("pack preview only GETs fill and never mutates history", async () => {
-  const calls = [];
-  global.fetch = async (url, opts) => {
-    calls.push({ url: String(url), method: (opts && opts.method) || "GET" });
-    return jsonReply({
-      requested: 15, total: 0, gap: 15, exact: false, count: 0, bumpers: [],
-      composition: { relaxed_rules: ["exit_ident"] },
-    });
-  };
-  await previewPack(15);
-  assert.ok(calls.length >= 1);
-  assert.ok(calls.every((c) => c.method === "GET"));
-  assert.ok(calls.every((c) => !/\/station\//.test(c.url)));
-  assert.ok(calls.some((c) => c.url.includes("/api/bumpers/fill") && c.url.includes("seconds=15")));
-  assert.ok(calls.every((c) => !c.url.includes("advance")));
-});
-
-test("one-item preview is a GET with explain and reports errors as text", async () => {
-  const calls = [];
-  global.fetch = async (url, opts) => {
-    calls.push({ url: String(url), method: (opts && opts.method) || "GET" });
-    return { ok: false, status: 503, text: async () => JSON.stringify({ error: "offline" }) };
-  };
-  await previewOne();
-  assert.ok(calls.every((c) => c.method === "GET"));
-  assert.ok(calls.some((c) => c.url.includes("/api/bumpers/random") && c.url.includes("explain=true")));
-  assert.equal($("#preview-state").dataset.state, "error");
-  assert.match(textOf($("#preview-state")), /offline/);
-});
-
-test("failed pack preview reports the error as text", async () => {
-  global.fetch = async () => { throw new Error("network down"); };
-  await previewPack(30);
-  assert.equal($("#preview-state").dataset.state, "error");
-  assert.match(textOf($("#preview-state")), /could not be reached/);
-});
-
-test("a failed preview keeps the last good pack rather than blanking it", async () => {
-  global.fetch = async () => jsonReply({
-    requested: 15, total: 15, gap: 0, exact: true, count: 1,
-    bumpers: [{ type: "card", kind: "psa", title: "keep me", payload: { text: "keep me" } }],
-  });
-  await previewPack(15);
-  assert.equal($("#preview-grid").children.length, 1);
-
-  global.fetch = async () => { throw new Error("gone"); };
-  await previewPack(15);
-  assert.equal($("#preview-grid").children.length, 1, "known-good cards survive a failure");
-  assert.equal($("#preview-state").dataset.state, "stale");
-  assert.match(textOf($("#preview-state")), /could not be reached/);
 });
 
 // ---------------------------------------------------------------------------
@@ -2643,11 +2602,12 @@ test("an inspector opened from the composer is torn down by a route change too",
   });
 
   await applyHash("#/composer");
-  await previewPack(15);
-  const video = descendants($("#preview-grid")).find((n) => n.tagName === "VIDEO");
+  await composeBreak();
+  playComposerSequence();
+  const video = descendants($("#composer-stage")).find((n) => n.tagName === "VIDEO");
   await video.play();
-  const inspect = descendants($("#preview-grid")).find(
-    (n) => n.tagName === "BUTTON" && n.className.includes("pv-inspect"));
+  const inspect = descendants($("#composer-timeline")).find(
+    (n) => n.tagName === "BUTTON" && n.className.includes("cmp-inspect"));
   inspect.click();
   await flush();
   assert.equal($("#inspector").open, true, "the composer's cards inspect too");
@@ -2670,22 +2630,23 @@ test("an inspector opened from the composer is torn down by a route change too",
   assert.equal($("#inspector").open, false);
 });
 
-test("rebuilding a preview grid lets go of the media it was showing", async () => {
+test("composing again lets go of the media the last break was playing", async () => {
   const row = (id) => ({ id, type: "video", kind: "ambient", title: id,
                          duration: 8, enabled: 1, health: "ok",
                          media_url: "/media/" + id + ".mp4" });
   global.fetch = async () => jsonReply({ requested: 15, total: 8, gap: 7,
     exact: true, count: 1, bumpers: [row("a")] });
-  await previewPack(15);
-  const first = descendants($("#preview-grid")).find((n) => n.tagName === "VIDEO");
-  await first.play();
+  await composeBreak();
+  playComposerSequence();
+  const first = descendants($("#composer-stage")).find((n) => n.tagName === "VIDEO");
   assert.equal(first.paused, false);
 
   global.fetch = async () => jsonReply({ requested: 30, total: 8, gap: 22,
     exact: false, count: 1, bumpers: [row("b")] });
-  await previewPack(30);
-  assert.equal(first.paused, true, "the replaced card is not left playing");
+  await composeBreak();
+  assert.equal(first.paused, true, "the replaced item is not left playing");
   assert.equal(first.src, "", "nor left holding its buffer");
+  assert.equal(STATE.composer.playback.index, -1, "and the sequence is back at a stop");
 });
 
 // --- danger flows ----------------------------------------------------------
@@ -2811,4 +2772,543 @@ test("the danger zone is dead until a kind is actually selected", () => {
   renderFilters();
   assert.equal($("#drop-kind").disabled, false);
   assert.match(textOf($("#danger-note")), /12/);
+});
+
+// ---- F3 composer tests ----
+// The composer asks the server for a break and shows what came back. These
+// cover the two things that cannot be allowed to drift: the request is built
+// only from valid controls, and the answer is rendered in the server's order,
+// never recomposed, reordered or substituted here.
+
+const BREAK_ITEM = (over) => Object.assign({
+  id: "vid:a", type: "video", kind: "ambient", title: "harbour",
+  duration: 8, enabled: 1, health: "ok", media_url: "/media/a.mp4",
+  creative: { family: "scenic", roles: ["open"], energy: "quiet", audio: "music",
+              text_heavy: false, template: "image_caption", brand_mode: "reveal" },
+}, over);
+
+const CARD_ITEM = (over) => Object.assign({
+  id: "card:psa:a", type: "card", kind: "psa", title: "stay tuned",
+  duration: 5, enabled: 1, health: "ok", media_url: null,
+  payload: { lines: ["Back after this."] },
+  creative: { family: "text", roles: ["inside"], energy: "quiet", audio: "silence",
+              text_heavy: true, template: "minimal_center", brand_mode: "none" },
+}, over);
+
+const breakBody = (items, over) => Object.assign({
+  requested: 30, total: 29.4, gap: 0.6, exact: true,
+  count: items.length, bumpers: items,
+  composition: { placement: "any", relaxed_rules: [], profile_version: 1 },
+}, over);
+
+// Answers /api/bumpers/fill with `body` and everything else with a status, so a
+// test can assert on exactly which requests the composer made.
+function stubFill(body) {
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    calls.push({ url: u, method: (opts && opts.method) || "GET" });
+    if (u.startsWith("/api/bumpers/fill")) return jsonReply(body);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    return jsonReply(OK_STATUS);
+  };
+  return calls;
+}
+
+const setControl = (sel, value) => { $(sel).value = String(value); };
+const tickType = (name) => { $("#cmp-type-" + name).checked = true; };
+const fillCalls = (calls) => calls.filter((c) => c.url.startsWith("/api/bumpers/fill"));
+const timelineItems = () => $("#composer-timeline").children;
+const titles = () => timelineItems()
+  .map((li) => descendants(li).find((n) => n.className === "cmp-title").textContent);
+const stageVideo = () => descendants($("#composer-stage")).find((n) => n.tagName === "VIDEO");
+
+test("every composer control is a labelled control the composer view owns", () => {
+  // The fake document only proves anything if it carries the same controls
+  // index.html does, in the same view.
+  ["#cmp-seconds", "#cmp-tolerance", "#cmp-max-items", "#cmp-placement",
+   "#cmp-validation", "#cmp-go", "#cmp-play", "#cmp-prev", "#cmp-next",
+   "#cmp-stop", "#cmp-progress", "#composer-state", "#composer-summary",
+   "#composer-attention", "#composer-stale", "#composer-stage",
+   "#composer-timeline"].forEach((sel) => {
+    const el = $(sel);
+    assert.ok(el, "index.html is missing " + sel);
+    assert.ok(matchesSelector(el, "#view-composer " + sel),
+              sel + " belongs to the composer view");
+  });
+  assert.deepEqual(document.querySelectorAll("#view-composer [data-preset]")
+                     .map((b) => Number(b.dataset.preset)),
+                   COMPOSER_PRESETS, "the presets are the four documented ones");
+});
+
+// --- the summary line -------------------------------------------------------
+
+test("gapLabel writes the sign and takes 'within tolerance' from the server", () => {
+  // The example from the spec, exactly.
+  assert.equal(gapLabel(30, 29.4, true),
+               "Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance");
+  // Underfilled is positive, overfilled is negative, and the sign is always there.
+  assert.match(gapLabel(15, 20, false), /Gap -5\.0s \| Outside tolerance$/);
+  assert.match(gapLabel(60, 60, true), /Gap \+0\.0s/);
+  // A gap too small to show is not printed as a negative zero.
+  assert.match(gapLabel(30, 30.04, true), /Gap \+0\.0s/);
+  // `exact` is the server's word: a zero gap outside tolerance is still outside,
+  // and a non-zero gap inside it is still within.
+  assert.match(gapLabel(30, 30, false), /Gap \+0\.0s \| Outside tolerance$/);
+  assert.match(gapLabel(30, 28.9, true), /Gap \+1\.1s \| Within tolerance$/);
+});
+
+test("a figure this build does not send is named, never shown as a zero", () => {
+  const label = gapLabel(undefined, null, undefined);
+  assert.equal(label, "Requested " + NOT_AVAILABLE + " | Composed " + NOT_AVAILABLE +
+                      " | Gap " + NOT_AVAILABLE + " | " + NOT_AVAILABLE);
+  assert.ok(!/0\.0/.test(label));
+});
+
+test("the summary line is the composed break's one summary line", async () => {
+  stubFill(breakBody([BREAK_ITEM(), CARD_ITEM()]));
+  await composeBreak();
+  assert.equal($("#composer-summary").textContent,
+               "Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance");
+  assert.match($("#composer-count").textContent, /^2 item\(s\)/);
+});
+
+// --- controls and the request they build ------------------------------------
+
+test("the fill request is built from the controls, through URLSearchParams",
+     async () => {
+  const calls = stubFill(breakBody([BREAK_ITEM()]));
+  setControl("#cmp-seconds", "45.5");
+  setControl("#cmp-tolerance", "2");
+  setControl("#cmp-max-items", "3");
+  setControl("#cmp-placement", "close");
+  tickType("video");
+  tickType("card");
+  await composeBreak();
+  const fill = fillCalls(calls);
+  assert.equal(fill.length, 1);
+  assert.equal(fill[0].url,
+    "/api/bumpers/fill?seconds=45.5&tolerance=2&max_items=3&placement=close" +
+    "&types=video%2Ccard&explain=true");
+  assert.deepEqual(STATE.composer.types, ["video", "card"]);
+});
+
+test("ticking no type asks for every type rather than naming all four", async () => {
+  const calls = stubFill(breakBody([BREAK_ITEM()]));
+  await composeBreak();
+  assert.ok(!fillCalls(calls)[0].url.includes("types="),
+            "no types parameter is the request for all of them");
+});
+
+test("a preset fills the seconds field in and sends nothing by itself", () => {
+  const calls = stubFill(breakBody([BREAK_ITEM()]));
+  setComposerPreset(90);
+  assert.equal($("#cmp-seconds").value, "90");
+  assert.equal($("#cmp-go").disabled, false);
+  assert.deepEqual(calls, [], "choosing a duration is not composing one");
+  const pressed = document.querySelectorAll("#view-composer [data-preset]")
+    .filter((b) => b.getAttribute("aria-pressed") === "true")
+    .map((b) => b.dataset.preset);
+  assert.deepEqual(pressed, ["90"]);
+});
+
+test("an out-of-range control disables Compose and sends no request", async () => {
+  const calls = stubFill(breakBody([BREAK_ITEM()]));
+  const cases = [
+    ["#cmp-seconds", "0", /more than 0/],
+    ["#cmp-seconds", "86401", /86400/],
+    ["#cmp-seconds", "not a number", /Seconds/],
+    ["#cmp-tolerance", "3601", /3600/],
+    ["#cmp-tolerance", "-1", /Tolerance/],
+    ["#cmp-tolerance", "", /Tolerance/],
+    ["#cmp-max-items", "0", /1 to 40/],
+    ["#cmp-max-items", "41", /1 to 40/],
+    ["#cmp-max-items", "2.5", /whole number/],
+    ["#cmp-placement", "everywhere", /any, open, inside or close/],
+  ];
+  for (const [sel, value, says] of cases) {
+    resetStateForTests();
+    BODY = buildDocument();
+    setControl(sel, value);
+    assert.equal(await composeBreak(), null, sel + "=" + value + " sends nothing");
+    assert.equal($("#cmp-go").disabled, true, sel + "=" + value + " disables Compose");
+    assert.match(textOf($("#cmp-validation")), says);
+    assert.equal($("#cmp-validation").hidden, false);
+    assert.equal($(sel).getAttribute("aria-invalid"), "true");
+  }
+  assert.deepEqual(fillCalls(calls), [], "no request was ever built");
+});
+
+test("composerProblems is pure and clears once the controls are legal", () => {
+  assert.deepEqual(composerProblems({ seconds: 30, tolerance: 1.5, maxItems: 8,
+                                      placement: "any", types: [] }), {});
+  assert.deepEqual(composerProblems({ seconds: 30, tolerance: 0, maxItems: 40,
+                                     placement: "close", types: ["video"] }), {});
+  assert.deepEqual(Object.keys(composerProblems({ seconds: 30, tolerance: 0, maxItems: 40,
+                                                  placement: "close", types: ["exe"] })),
+                   ["types"]);
+  assert.deepEqual(Object.keys(composerProblems({})).sort(),
+                   ["maxItems", "placement", "seconds", "tolerance"]);
+});
+
+// --- the timeline -----------------------------------------------------------
+
+test("the timeline keeps the server's order, and never sorts it", async () => {
+  const items = [
+    BREAK_ITEM({ id: "z", title: "zebra" }),
+    BREAK_ITEM({ id: "a", title: "alpha" }),
+    CARD_ITEM({ id: "m", title: "middle" }),
+  ];
+  stubFill(breakBody(items, { count: 3 }));
+  await composeBreak();
+  assert.deepEqual(titles(), ["zebra", "alpha", "middle"]);
+  assert.deepEqual(timelineItems().map((li) => li.dataset.order), ["1", "2", "3"]);
+  assert.equal($("#composer-timeline").tagName, "OL", "an ordered list, ordered");
+});
+
+test("each item states order, kind, family, duration, audio, role and brand mode",
+     async () => {
+  stubFill(breakBody([BREAK_ITEM(), CARD_ITEM()]));
+  await composeBreak();
+  const first = textOf(timelineItems()[0]);
+  assert.match(first, /1 of 2/);
+  assert.match(first, /harbour/);
+  assert.match(first, /ambient/);
+  assert.match(first, /scenic/);
+  assert.match(first, /8s/);
+  assert.match(first, /music/);
+  assert.match(first, /open/);
+  assert.match(first, /reveal/);
+  // A stream has no length: it runs until it stops.
+  const streamed = timelineItemEl({ type: "stream", title: "cam" }, 0, 1);
+  assert.match(textOf(streamed), /LIVE/);
+  // A build that sends no creative block says so rather than inventing one.
+  const bare = timelineItemEl({ id: "x", type: "video", title: "t" }, 0, 1);
+  assert.ok(textOf(bare).includes(NOT_AVAILABLE));
+});
+
+test("hostile strings in a composed item stay text, never markup", async () => {
+  const title = '<img src=x onerror="globalThis.pwned=60">';
+  const kind = 'news" data-owned="yes';
+  const family = "<script>globalThis.pwned=61</script>";
+  const media = 'https://media.example/a.mp4" onerror="globalThis.pwned=62';
+  stubFill(breakBody([BREAK_ITEM({
+    title, kind, media_url: media,
+    creative: { family, roles: ["<b>open</b>"], audio: "music", brand_mode: kind },
+  })]));
+  await composeBreak();
+  const li = timelineItems()[0];
+  const nodes = descendants(li);
+  assert.equal(nodes.filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(nodes.filter((n) => n.tagName === "SCRIPT").length, 0);
+  assert.equal(nodes.find((n) => n.className === "cmp-title").textContent, title);
+  assert.ok(textOf(li).includes(kind));
+  assert.ok(textOf(li).includes(family));
+  // The URL only ever reaches an element property, and only on the stage.
+  playComposerSequence();
+  assert.equal(stageVideo().src, media);
+  assert.equal(globalThis.pwned, undefined);
+  stopComposerPlayback();
+});
+
+test("a relaxed rule is a sentence in an Attention panel, not a token", async () => {
+  stubFill(breakBody([BREAK_ITEM()], {
+    composition: { placement: "any", profile_version: 1,
+                   relaxed_rules: ["exit_ident", "energy_jump", "same_family",
+                                   "text_run", "same_music", "future_rule"] },
+  }));
+  await composeBreak();
+  const attention = $("#composer-attention");
+  assert.equal(attention.hidden, false);
+  const said = textOf(attention);
+  assert.match(said, /Attention/);
+  Object.keys(RELAXED_TEXT).forEach((token) => {
+    assert.ok(said.includes(RELAXED_TEXT[token]), token + " is explained in words");
+  });
+  // A token this build of the server invents is shown as it arrived.
+  assert.ok(said.includes("future_rule"));
+  const lines = descendants(attention).filter((n) => n.tagName === "LI");
+  assert.equal(lines.length, 6, "one line per relaxed rule, on the page");
+});
+
+test("a break with nothing relaxed shows no attention panel at all", async () => {
+  stubFill(breakBody([BREAK_ITEM()]));
+  await composeBreak();
+  assert.equal($("#composer-attention").hidden, true);
+  assert.equal($("#composer-attention").children.length, 0);
+});
+
+// --- states -----------------------------------------------------------------
+
+test("an empty break reports the server's own note, not leftover items", async () => {
+  stubFill(breakBody([BREAK_ITEM()]));
+  await composeBreak();
+  assert.equal(timelineItems().length, 1);
+  stubFill({ requested: 15, total: 0.0, gap: 15, exact: false, count: 0, bumpers: [],
+             note: "no bumper is short enough for this gap",
+             composition: { placement: "any", relaxed_rules: [], profile_version: 1 } });
+  await composeBreak();
+  assert.equal(timelineItems().length, 0, "the old break does not linger under the note");
+  assert.equal($("#composer-state").dataset.state, "empty");
+  assert.match(textOf($("#composer-state")), /no bumper is short enough/);
+  assert.equal($("#cmp-play").disabled, true);
+});
+
+test("a failed compose reports the error and keeps the last good break", async () => {
+  stubFill(breakBody([BREAK_ITEM({ title: "keep me" })]));
+  await composeBreak();
+  assert.deepEqual(titles(), ["keep me"]);
+
+  global.fetch = async () => { throw new Error("network down"); };
+  await composeBreak();
+  assert.deepEqual(titles(), ["keep me"], "known-good items survive a failure");
+  assert.equal($("#composer-state").dataset.state, "stale");
+  assert.match(textOf($("#composer-state")), /could not be reached/);
+
+  // Retry is offered, and it composes again rather than sitting there.
+  const calls = stubFill(breakBody([BREAK_ITEM({ title: "fresh" })]));
+  const retry = descendants($("#composer-state")).find((n) => n.tagName === "BUTTON");
+  await retry.click();
+  await flush();
+  assert.deepEqual(titles(), ["fresh"]);
+  assert.equal(fillCalls(calls).length, 1);
+});
+
+test("nothing composed yet is empty, and says which button composes one", () => {
+  renderComposer();
+  assert.equal($("#composer-state").dataset.state, "empty");
+  assert.match(textOf($("#composer-state")), /Compose break/);
+  assert.equal($("#cmp-play").disabled, true);
+  assert.equal($("#cmp-stop").disabled, true);
+});
+
+// --- local playback ---------------------------------------------------------
+
+test("playback advances on the medium's own ended event", async () => {
+  stubFill(breakBody([BREAK_ITEM({ id: "a", media_url: "/media/a.mp4" }),
+                      BREAK_ITEM({ id: "b", title: "second", media_url: "/media/b.mp4" })]));
+  await composeBreak();
+  playComposerSequence();
+  const first = stageVideo();
+  assert.equal(first.src, "/media/a.mp4");
+  assert.equal(STATE.composer.playback.index, 0);
+  assert.match($("#cmp-progress").textContent, /^Item 1 of 2/);
+  assert.equal(timelineItems()[0].getAttribute("aria-current"), "true");
+
+  await first.dispatch("ended");
+  assert.equal(STATE.composer.playback.index, 1, "the sequence moved on by itself");
+  assert.equal(stageVideo().src, "/media/b.mp4");
+  assert.equal(first.paused, true, "and let go of the item it had finished");
+  assert.equal(first.src, "");
+  assert.equal(timelineItems()[1].getAttribute("aria-current"), "true");
+  assert.equal(timelineItems()[0].getAttribute("aria-current"), null);
+
+  // Off the end is the end of the break, not a wrap back to the top.
+  await stageVideo().dispatch("ended");
+  assert.equal(STATE.composer.playback.index, -1);
+  assert.equal($("#composer-stage").children.length, 0);
+  assert.match(logText(), /sequence finished/);
+});
+
+test("a payload-only card is shown for its declared duration", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  stubFill(breakBody([CARD_ITEM({ id: "c1", duration: 5, title: "first card" }),
+                      CARD_ITEM({ id: "c2", duration: 4, title: "second card" })]));
+  await composeBreak();
+  playComposerSequence();
+  assert.equal(STATE.composer.playback.index, 0);
+  assert.match(textOf($("#composer-stage")), /Back after this/);
+  assert.equal(stageVideo(), undefined, "a card with no media file opens no player");
+  assert.match($("#cmp-progress").textContent, /Item 1 of 2 · 0s elapsed · 5s remaining/);
+
+  t.mock.timers.tick(4999);
+  assert.equal(STATE.composer.playback.index, 0, "not a moment early");
+  t.mock.timers.tick(1);
+  assert.equal(STATE.composer.playback.index, 1, "the card's own clock advanced it");
+  assert.match(textOf($("#composer-stage")), /Item 2 of 2/);
+  stopComposerPlayback();
+});
+
+test("Previous, Next and Stop drive the sequence by hand", async () => {
+  // Through the buttons index.html ships, wired the way boot() wires them.
+  wireComposer();
+  stubFill(breakBody([BREAK_ITEM({ id: "a" }), BREAK_ITEM({ id: "b" }),
+                      BREAK_ITEM({ id: "c" })]));
+  await composeBreak();
+  assert.equal($("#cmp-stop").disabled, true, "nothing to stop before it starts");
+  await $("#cmp-next").click();
+  assert.equal(STATE.composer.playback.index, 0, "Next from stopped starts at the top");
+  await $("#cmp-next").click();
+  assert.equal(STATE.composer.playback.index, 1);
+  assert.equal($("#cmp-stop").disabled, false);
+  await $("#cmp-prev").click();
+  assert.equal(STATE.composer.playback.index, 0);
+  await $("#cmp-prev").click();
+  assert.equal(STATE.composer.playback.index, -1, "before the first item is a stop");
+  await $("#cmp-next").click();
+  await $("#cmp-stop").click();
+  assert.equal(STATE.composer.playback.index, -1);
+  assert.equal($("#composer-stage").children.length, 0);
+  assert.match($("#cmp-progress").textContent, /Stopped · 3 item\(s\)/);
+});
+
+test("only one medium is ever active, in the composer as anywhere else", async () => {
+  stubFill(breakBody([BREAK_ITEM({ id: "a", media_url: "/media/a.mp4" }),
+                      BREAK_ITEM({ id: "b", media_url: "/media/b.mp4" })]));
+  await composeBreak();
+  playComposerSequence();
+  const first = stageVideo();
+  assert.equal(first.paused, false);
+  advanceComposer(1);
+  const second = stageVideo();
+  assert.notEqual(first, second);
+  assert.equal(first.paused, true);
+  assert.equal(BODY.querySelectorAll("video").filter((v) => !v.paused).length, 1,
+               "exactly one video is playing");
+  stopComposerPlayback();
+});
+
+test("a live stream in a break is never opened by the sequence itself", async () => {
+  stubFill(breakBody([{ id: "cam:a", type: "stream", kind: "webcam", title: "harbour",
+                        media_url: "https://x/s.m3u8", enabled: 1, health: "ok",
+                        creative: { family: "window", roles: ["inside"],
+                                    audio: "native", brand_mode: "none" } }]));
+  await composeBreak();
+  playComposerSequence();
+  assert.equal(stageVideo(), undefined, "no element holds the stream URL yet");
+  assert.match(textOf($("#composer-stage")), /LIVE/);
+  assert.match(textOf($("#composer-stage")), /real client/,
+               "and the page says what pressing Play would do");
+  stopComposerPlayback();
+});
+
+test("leaving the composer stops the sequence, its timers and its media",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  stubFill(breakBody([CARD_ITEM({ id: "c1", duration: 5 }),
+                      CARD_ITEM({ id: "c2", duration: 5 })]));
+  await applyHash("#/composer");
+  await composeBreak();
+  playComposerSequence();
+  assert.equal(STATE.composer.playback.index, 0);
+
+  applyHash("#/overview");
+  await flush();
+  assert.equal(STATE.composer.playback.index, -1, "the sequence is stopped");
+  assert.equal($("#composer-stage").children.length, 0, "and the stage is empty");
+  t.mock.timers.tick(60000);
+  assert.equal(STATE.composer.playback.index, -1,
+               "the card's timer cannot advance a view that is gone");
+});
+
+test("leaving the composer cancels a fill that is still in flight", async () => {
+  const signals = [];
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    const u = String(url);
+    if (u.startsWith("/api/bumpers/fill")) {
+      signals.push(opts.signal);
+      opts.signal.addEventListener("abort", () => {
+        const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+      });
+      return;
+    }
+    resolve(jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS));
+  });
+  await applyHash("#/composer");
+  const pending = composeBreak();
+  assert.equal(signals.length, 1);
+  applyHash("#/overview");
+  await pending;
+  await flush();
+  assert.equal(signals[0].aborted, true);
+  assert.equal(STATE.composer.loading, false,
+               "a cancelled read does not leave the panel waiting forever");
+  assert.equal(STATE.composer.error, null, "and a cancellation is not a failure");
+});
+
+// --- staleness --------------------------------------------------------------
+
+test("disabling an item through the inspector marks the break stale", async () => {
+  stubFill(breakBody([BREAK_ITEM({ id: "vid:a", title: "weak one" }),
+                      BREAK_ITEM({ id: "vid:b", title: "the other" })]));
+  await composeBreak();
+  playComposerSequence();
+  assert.equal($("#cmp-play").disabled, false);
+
+  // The inspector the composer opens reports its mutations back to it.
+  const calls = stubInspector({ detail: { id: "vid:a", title: "weak one" } });
+  const inspect = descendants(timelineItems()[0])
+    .find((n) => n.tagName === "BUTTON" && n.className.includes("cmp-inspect"));
+  inspect.click();
+  await flush();
+  const disable = inspectorButton("Disable from rotation");
+  assert.ok(disable, "the inspector offers the reversible action");
+  await disable.click();
+  await flush();
+
+  assert.equal(STATE.composer.stale, true);
+  assert.equal($("#composer-stale").hidden, false);
+  assert.match(textOf($("#composer-stale")), /Stale — recompose/);
+  assert.equal($("#cmp-play").disabled, true, "a stale break is not played");
+  assert.equal(STATE.composer.playback.index, -1, "and whatever was playing stopped");
+  assert.deepEqual(titles(), ["weak one", "the other"],
+                   "nothing was substituted for the item that changed");
+  assert.deepEqual(calls.filter((c) => c.method === "POST").map((c) => c.url),
+                   ["/api/pool/disable?bumper_id=vid%3Aa"]);
+  // Marking the pack stale must not rebuild the timeline out from under the
+  // open dialog: that button is where focus goes when it closes.
+  assert.ok(descendants(BODY).includes(inspect), "the invoker survives the mutation");
+  closeInspector();
+  assert.equal(document.activeElement, inspect, "and focus comes back to it");
+});
+
+test("a stale break refuses to play until it is composed again", async () => {
+  stubFill(breakBody([BREAK_ITEM(), BREAK_ITEM({ id: "b" })]));
+  await composeBreak();
+  markComposerStale("delete", "vid:a");
+  assert.equal(STATE.composer.stale, true);
+  playComposerSequence();
+  assert.equal(STATE.composer.playback.index, -1, "Play does nothing while stale");
+  advanceComposer(1);
+  assert.equal(STATE.composer.playback.index, -1);
+
+  stubFill(breakBody([BREAK_ITEM({ id: "c", title: "recomposed" })]));
+  await composeBreak();
+  assert.equal(STATE.composer.stale, false, "composing again clears it");
+  assert.equal($("#composer-stale").hidden, true);
+  assert.equal($("#cmp-play").disabled, false);
+  assert.deepEqual(titles(), ["recomposed"]);
+});
+
+test("a mutation with no break on screen marks nothing stale", () => {
+  assert.equal(markComposerStale("disable", "vid:a"), null);
+  assert.equal(STATE.composer.stale, false);
+  assert.equal($("#composer-stale").hidden, true);
+});
+
+// --- read-only --------------------------------------------------------------
+
+test("the composer only ever GETs, and never writes play history", async () => {
+  const calls = stubFill(breakBody([BREAK_ITEM({ id: "a", media_url: "/media/a.mp4" }),
+                                    CARD_ITEM({ id: "c", duration: 3 })]));
+  await applyHash("#/composer");
+  setControl("#cmp-seconds", "60");
+  await composeBreak();
+  playComposerSequence();
+  await stageVideo().dispatch("ended");
+  advanceComposer(-1);
+  stopComposerPlayback();
+
+  assert.ok(calls.length >= 1);
+  assert.ok(calls.every((c) => c.method === "GET"),
+            "nothing the composer does is a write: " + JSON.stringify(calls));
+  assert.ok(calls.every((c) => !/\/station\//.test(c.url)));
+  assert.ok(calls.every((c) => !c.url.includes("advance")));
+  assert.ok(fillCalls(calls).every((c) => c.url.includes("explain=true")));
+  // Playing a sequence locally asks the server for nothing at all.
+  const before = calls.length;
+  playComposerSequence();
+  advanceComposer(1);
+  stopComposerPlayback();
+  assert.equal(calls.length, before, "local playback makes no requests");
 });

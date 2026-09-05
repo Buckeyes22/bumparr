@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+**Operator dashboard: a break composer you can review and play**
+- The Composer is now a break composer rather than a pack preview. Labelled
+  controls — 15/30/60/90-second presets, a custom duration, tolerance, maximum
+  items, placement, and optional type checkboxes (tick none for every type) —
+  build one `GET /api/bumpers/fill` request. A control outside the range the
+  endpoint documents disables **Compose break** and says what is wrong in
+  words, so an invalid request is never sent, and composition is never
+  reproduced in the browser.
+- The answer is rendered in the server's order and never re-sorted: a
+  horizontal timeline on desktop, an ordered stack below 760px, each item
+  carrying its order number, title, kind, family, duration, audio, role, brand
+  mode and an **Inspect** button. One summary line reads
+  `Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance`, with the
+  sign always written out and "within tolerance" taken from the server's
+  `exact` rather than a comparison with zero. Rules the profile had to relax to
+  fill the gap are spelled out as sentences in an Attention panel instead of
+  hiding in a tooltip.
+- **Play sequence / Previous / Next / Stop** preview the break locally: one
+  medium at a time, advancing on the medium's own `ended` and on the declared
+  duration for a payload-only card, showing which item is on screen and how
+  much of it is left. A live stream in a break keeps its own Play button, so the
+  sequence never opens one by itself. Playback stops and resets on a new
+  composition and on leaving the view, taking its timers and its media with it.
+- Disabling, enabling, rendering or deleting an item through the inspector
+  marks the break **Stale — recompose to reflect changes** and disables Play.
+  Nothing is substituted client-side: the sequence on screen stays exactly what
+  the server composed until it is composed again.
+
 **Operator dashboard: a library inspector and reversible curation**
 - The Library toolbar is now labelled controls instead of chips: search, type,
   kind (from `status.by_kind`, with counts), state, page size (24/48/100 — the

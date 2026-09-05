@@ -144,7 +144,11 @@ content covers every kind with no model at all (CI asserts this).
   file/conform availability stays with the caller.
 - **`simulate.py`** — seeded, read-only mix report over in-memory copies
   using station `choose_next`. Never writes history or calls station
-  `advance()`.
+  `advance()`. Experience metrics (shares, repeats, provenance, standard
+  break duration error) are diagnostic except for the objective CI gates.
+- **`review.py`** — read-only ten-minute station plan plus 15/30/60/90
+  break packs as M3U/JSON/Markdown. Reuses media; does not concatenate or
+  re-encode. Human review is [RELEASE_REVIEW.md](RELEASE_REVIEW.md).
 - **`seasons.py`** — calendar factors per category (holiday material ramps in
   and out rather than switching), computed at selection time, never stored.
 - **`creative.py`** — the only parser/resolver for optional
@@ -212,8 +216,8 @@ preview reads never extend a timeline or write history.
 - **The station airs only conformed items, and conform never runs in the
   request path.**
 - **Station observation is not playout.** Only HLS playlist requests extend a
-  channel timeline and report started entries; status/monitoring reads are
-  side-effect free.
+  channel timeline and report started entries; status/monitoring reads,
+  simulation, and release review are side-effect free.
 
 ## File map
 
@@ -239,6 +243,7 @@ preview reads never extend a timeline or write history.
 | `bumparr/sequence.py` | pure break composer and station adjacency |
 | `bumparr/music.py` | music-bed manifest, credits snapshot, offline loudness |
 | `bumparr/simulate.py` | read-only seeded selection mix report |
+| `bumparr/review.py` | read-only ten-minute plan and 15/30/60/90 review packs |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |
 | `bumparr/jobs.py` | background loops (capture, queue, volatile, dated, channel memory) |

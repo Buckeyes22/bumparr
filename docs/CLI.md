@@ -85,17 +85,39 @@ and does not download, render, conform, or probe.
 
 | Flag | Meaning |
 |---|---|
-| `--seed N` | integer RNG seed (default 1) |
+| `--seed N` | integer RNG seed (default 1, or the fixture seed with `--fixture`) |
 | `--picks N` | positive integer number of picks (default 200) |
-| `--start UNIX` | unix-seconds float for the first pick (default: now) |
+| `--start UNIX` | unix-seconds float (default: now, or the fixture start with `--fixture`) |
 | `--json` | print the report as JSON |
+| `--fixture PATH` | alignment playable JSON instead of the live pool |
+| `--pool NAME` | `capable` or `constrained` (with `--fixture`) |
 
-The report includes item/kind/family shares, exact repeats, same-kind runs,
-text runs over `max_text_run`, zero-score picks, role violations,
-relaxations (`exit_ident`, `energy_jump`, `same_family`, `text_run`,
-`same_music`), profile source/version, seasonal/daypart distribution,
-audio balance, music repeats, large energy transitions, and treatment
-shares from resolved creative data.
+The report includes item/kind/family/template/brand-mode shares; exact,
+family, template, and music repeats; max text run; energy/audio shares;
+role/zero-score/gated selections; relaxation counts; standard break
+duration error for 15/30/60/90 seconds (documented tolerance 1.5s);
+missing/stale provenance; and branded/unbranded frequency. Shares stay
+diagnostic. There is no subjective similarity score.
+
+### `bumparr.review` — read-only release-review artifacts
+
+Exports a fixed ten-minute station-style M3U/plan, four standard break
+packs (15/30/60/90), and JSON/Markdown sidecars with ids, metadata,
+credits, gaps, and relaxations. Reuses media URIs; does not concatenate,
+re-encode, download, render, probe, or write history. Human review of
+those files is recorded in [RELEASE_REVIEW.md](RELEASE_REVIEW.md).
+
+| Flag | Meaning |
+|---|---|
+| `--fixture PATH` | alignment playable JSON instead of the live pool |
+| `--pool NAME` | `capable` or `constrained` (with `--fixture`; default `capable`) |
+| `--seed N` | RNG seed (fixture default, else 7) |
+| `--start UNIX` | unix-seconds float for the first pick (required for the live pool) |
+| `--seconds N` | station plan length (default 600) |
+| `--tolerance N` | break duration tolerance (default 1.5) |
+| `--out DIR` | write `station.m3u`, `break-15.m3u`…`break-90.m3u`, `review.json`, `review.md` |
+| `--json` | print the sidecar JSON |
+| `--commit HASH` | optional commit recorded in the sidecar (otherwise leave it for the human record) |
 
 ### `bumparr.channel_profile` — validate the operator profile
 

@@ -15,8 +15,10 @@ then sequences a duration-bounded bumper set through `sequence.compose_break`
 set for a downstream scheduler. The live station sequences its own
 bumper-only timeline using these scores plus `sequence.choose_next`.
 `python -m bumparr.simulate` reports a seeded, read-only run of the same
-helpers. This page is the user-facing version of the module docstring; the
-code is the authority and the two should be read together.
+helpers. `python -m bumparr.review` exports a ten-minute plan and
+15/30/60/90 packs from that run without writing history. This page is the
+user-facing version of the module docstring; the code is the authority and
+the two should be read together.
 
 ## Declared vs computed
 

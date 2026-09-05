@@ -21,6 +21,7 @@ Phase 0 docs/catalog slice.
 | [STATION.md](STATION.md) | Running the bumper pool as live and standby HLS channels. |
 | [SCHEMA.md](SCHEMA.md) | The SQLite schema: column-by-column reference, id conventions, the card lifecycle, upsert rules. |
 | [CLI.md](CLI.md) | Every `python -m bumparr.…` module and flag, plus `tools/overnight.sh`. |
+| [RELEASE_REVIEW.md](RELEASE_REVIEW.md) | Human review checklist for the ten-minute plan and 15/30/60/90 packs. |
 | [RENDERING.md](RENDERING.md) | How cards become MP4s: the pipeline, per-kind rendering, volatile cards and their TTLs. |
 
 Read order for a first deploy: the main [README](../README.md), then

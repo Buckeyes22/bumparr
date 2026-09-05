@@ -1,0 +1,1023 @@
+{
+  "version": 1,
+  "seed": 7,
+  "start": 1700000000.0,
+  "tolerance": 1.5,
+  "station_seconds": 600,
+  "break_seconds": [15, 30, 60, 90],
+  "gates": {
+    "score": ["fx:gated-weight", "fx:gated-christmas"],
+    "standby_only": ["fx:standby-only"]
+  },
+  "pools": {
+    "capable": {
+      "description": "Diverse pool that can satisfy 15/30/60/90 within 1.5s and max_text_run.",
+      "rows": [
+        {
+          "id": "fx:ident-5",
+          "type": "video",
+          "kind": "station_id",
+          "source": "render",
+          "uri": "ident-5.mp4",
+          "duration": 5.0,
+          "title": "Ident five",
+          "tags": "ident",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "ident",
+              "roles": ["open", "close", "return", "ident"],
+              "energy": "neutral",
+              "audio": "designed",
+              "text_heavy": false,
+              "template": "ident",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:ident-3",
+          "type": "video",
+          "kind": "station_id",
+          "source": "render",
+          "uri": "ident-3.mp4",
+          "duration": 3.0,
+          "title": "Ident three",
+          "tags": "ident",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "ident",
+              "roles": ["open", "close", "return", "ident"],
+              "energy": "neutral",
+              "audio": "designed",
+              "text_heavy": false,
+              "template": "ident",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:ident-8",
+          "type": "video",
+          "kind": "station_id",
+          "source": "render",
+          "uri": "ident-8.mp4",
+          "duration": 8.0,
+          "title": "Ident eight",
+          "tags": "ident",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "ident",
+              "roles": ["open", "close", "return", "ident"],
+              "energy": "neutral",
+              "audio": "silence",
+              "text_heavy": false,
+              "template": "ident",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:scenic-10",
+          "type": "video",
+          "kind": "ambient",
+          "source": "produced",
+          "uri": "scenic-10.mp4",
+          "duration": 10.0,
+          "title": "Quiet harbour",
+          "tags": "scenic",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:scenic-8",
+          "type": "video",
+          "kind": "ambient",
+          "source": "produced",
+          "uri": "scenic-8.mp4",
+          "duration": 8.0,
+          "title": "Evening field",
+          "tags": "scenic",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "music_credits": {
+              "id": "bed-quiet",
+              "title": "Quiet Bed",
+              "creator": "Fixture Composer",
+              "source_page": "https://example.invalid/quiet",
+              "license": "CC0-1.0",
+              "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+              "attribution": ""
+            },
+            "creative": {
+              "family": "scenic",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "music",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "static",
+              "music_id": "bed-quiet"
+            }
+          }
+        },
+        {
+          "id": "fx:scenic-15",
+          "type": "video",
+          "kind": "ambient",
+          "source": "produced",
+          "uri": "scenic-15.mp4",
+          "duration": 15.0,
+          "title": "Long shore",
+          "tags": "scenic",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any", "open", "inside"],
+              "energy": "quiet",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:scenic-5",
+          "type": "video",
+          "kind": "ambient",
+          "source": "produced",
+          "uri": "scenic-5.mp4",
+          "duration": 5.0,
+          "title": "Bright walk",
+          "tags": "scenic",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "music_credits": {
+              "id": "bed-bright",
+              "title": "Bright Bed",
+              "creator": "Fixture Composer",
+              "source_page": "https://example.invalid/bright",
+              "license": "CC-BY-4.0",
+              "license_url": "https://creativecommons.org/licenses/by/4.0/",
+              "attribution": "Bright Bed by Fixture Composer"
+            },
+            "creative": {
+              "family": "scenic",
+              "roles": ["any", "inside"],
+              "energy": "loud",
+              "audio": "music",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "reveal",
+              "music_id": "bed-bright"
+            }
+          }
+        },
+        {
+          "id": "fx:archive-12",
+          "type": "video",
+          "kind": "archive",
+          "source": "archive",
+          "uri": "archive-12.mp4",
+          "duration": 12.0,
+          "title": "Public domain reel",
+          "tags": "archive,pd",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "license": "Public Domain",
+            "source_page": "https://example.invalid/archive-12",
+            "creative": {
+              "family": "archive",
+              "roles": ["any", "inside"],
+              "energy": "neutral",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:archive-7",
+          "type": "video",
+          "kind": "archive",
+          "source": "nasa",
+          "uri": "archive-7.mp4",
+          "duration": 7.0,
+          "title": "NASA fragment",
+          "tags": "archive,nasa",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "license": "Public Domain",
+            "source_page": "https://example.invalid/archive-7",
+            "creative": {
+              "family": "archive",
+              "roles": ["any", "inside"],
+              "energy": "loud",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "static",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:trivia-8",
+          "type": "card",
+          "kind": "trivia",
+          "source": "grounded",
+          "uri": "trivia-8.mp4",
+          "duration": 8.0,
+          "title": "Trivia",
+          "tags": "trivia",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["A question with a delayed answer."],
+            "answer": "The answer.",
+            "creative": {
+              "family": "data",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "information_board",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:weather-6",
+          "type": "card",
+          "kind": "weather",
+          "source": "grounded",
+          "uri": "weather-6.mp4",
+          "duration": 6.0,
+          "title": "Weather",
+          "tags": "weather",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["Clear, 12 C."],
+            "creative": {
+              "family": "data",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "information_board",
+              "brand_mode": "static",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:number-5",
+          "type": "card",
+          "kind": "number",
+          "source": "grounded",
+          "uri": "number-5.mp4",
+          "duration": 5.0,
+          "title": "Number",
+          "tags": "number",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "number": 7,
+            "meaning": "A documented number fact.",
+            "creative": {
+              "family": "data",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:psa-7",
+          "type": "card",
+          "kind": "psa",
+          "source": "generated",
+          "uri": "psa-7.mp4",
+          "duration": 7.0,
+          "title": "PSA",
+          "tags": "psa",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["Please keep the volume where you found it."],
+            "creative": {
+              "family": "text",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:corrections-6",
+          "type": "card",
+          "kind": "corrections",
+          "source": "generated",
+          "uri": "corrections-6.mp4",
+          "duration": 6.0,
+          "title": "Correction",
+          "tags": "corrections",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["Yesterday's map was of a different river."],
+            "creative": {
+              "family": "text",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_corner",
+              "brand_mode": "static",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:window-10",
+          "type": "stream",
+          "kind": "webcam",
+          "source": "live-cam",
+          "uri": "window-10.mp4",
+          "duration": 10.0,
+          "title": "Harbour cam",
+          "tags": "window,webcam",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "window",
+              "roles": ["any", "inside", "standby"],
+              "energy": "quiet",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:scenic-18",
+          "type": "video",
+          "kind": "ambient",
+          "source": "produced",
+          "uri": "scenic-18.mp4",
+          "duration": 18.0,
+          "title": "Long field",
+          "tags": "scenic",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:archive-14",
+          "type": "video",
+          "kind": "archive",
+          "source": "loc",
+          "uri": "archive-14.mp4",
+          "duration": 14.0,
+          "title": "Library fragment",
+          "tags": "archive,loc",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "license": "Public Domain",
+            "source_page": "https://example.invalid/archive-14",
+            "creative": {
+              "family": "archive",
+              "roles": ["any", "inside"],
+              "energy": "neutral",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:authored-9",
+          "type": "video",
+          "kind": "ambient",
+          "source": "user-added",
+          "uri": "authored-9.mp4",
+          "duration": 9.0,
+          "title": "Operator short",
+          "tags": "authored",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "authored",
+              "roles": ["any", "open", "inside", "close"],
+              "energy": "neutral",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:dead-air-4",
+          "type": "card",
+          "kind": "dead_air",
+          "source": "render",
+          "uri": "dead-air-4.mp4",
+          "duration": 4.0,
+          "title": "Dead air",
+          "tags": "failure",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["Please stand by."],
+            "creative": {
+              "family": "failure",
+              "roles": ["inside", "standby"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": false,
+              "template": "signal",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:on-this-day-8",
+          "type": "card",
+          "kind": "on_this_day",
+          "source": "grounded",
+          "uri": "on-this-day-8.mp4",
+          "duration": 8.0,
+          "title": "On this day",
+          "tags": "on_this_day",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["On this day a documented event occurred."],
+            "creative": {
+              "family": "data",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "information_board",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:stats-6",
+          "type": "card",
+          "kind": "channel_statistics",
+          "source": "generated",
+          "uri": "stats-6.mp4",
+          "duration": 6.0,
+          "title": "Channel statistics",
+          "tags": "memory",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["This channel has aired 25 starts this hour."],
+            "channel": "station:live",
+            "history_ids": ["h:1", "h:2"],
+            "generated_at": 1700000000.0,
+            "valid_until": 1700003600.0,
+            "creative": {
+              "family": "data",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "information_board",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:gated-weight",
+          "type": "video",
+          "kind": "ambient",
+          "source": "manual",
+          "uri": "gated-weight.mp4",
+          "duration": 10.0,
+          "title": "Editorially off",
+          "tags": "",
+          "weight": 0.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any"],
+              "energy": "quiet",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:gated-christmas",
+          "type": "video",
+          "kind": "christmas",
+          "source": "manual",
+          "uri": "gated-christmas.mp4",
+          "duration": 10.0,
+          "title": "Season gated",
+          "tags": "christmas",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any"],
+              "energy": "neutral",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:standby-only",
+          "type": "card",
+          "kind": "technical_difficulties",
+          "source": "render",
+          "uri": "standby-only.mp4",
+          "duration": 10.0,
+          "title": "Standby only",
+          "tags": "failure",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "failure",
+              "roles": ["standby"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": false,
+              "template": "signal",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        }
+      ]
+    },
+    "constrained": {
+      "description": "Long text-only items with missing/stale provenance; duration and adjacency degrade honestly.",
+      "rows": [
+        {
+          "id": "fx:text-a",
+          "type": "card",
+          "kind": "psa",
+          "source": "",
+          "uri": "text-a.mp4",
+          "duration": 22.0,
+          "title": "Text A",
+          "tags": "",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["A long text card."],
+            "creative": {
+              "family": "text",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:text-b",
+          "type": "card",
+          "kind": "psa",
+          "source": "",
+          "uri": "text-b.mp4",
+          "duration": 22.0,
+          "title": "Text B",
+          "tags": "",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["Another long text card."],
+            "creative": {
+              "family": "text",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:text-c",
+          "type": "card",
+          "kind": "corrections",
+          "source": "",
+          "uri": "text-c.mp4",
+          "duration": 22.0,
+          "title": "Text C",
+          "tags": "",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["A third long text card."],
+            "creative": {
+              "family": "text",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:text-d",
+          "type": "card",
+          "kind": "psa",
+          "source": "",
+          "uri": "text-d.mp4",
+          "duration": 22.0,
+          "title": "Text D",
+          "tags": "",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["A fourth long text card."],
+            "creative": {
+              "family": "text",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:stale-memory",
+          "type": "card",
+          "kind": "previously_on",
+          "source": "generated",
+          "uri": "stale-memory.mp4",
+          "duration": 22.0,
+          "title": "Stale previously on",
+          "tags": "memory",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "lines": ["This channel has aired a previous item."],
+            "channel": "station:live",
+            "history_ids": ["h:old"],
+            "generated_at": 1000.0,
+            "valid_until": 1600.0,
+            "creative": {
+              "family": "data",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": true,
+              "template": "information_board",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:archive-bare",
+          "type": "video",
+          "kind": "archive",
+          "source": "archive",
+          "uri": "archive-bare.mp4",
+          "duration": 22.0,
+          "title": "Unlicensed archive",
+          "tags": "archive",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "archive",
+              "roles": ["any", "inside"],
+              "energy": "neutral",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:music-bare",
+          "type": "video",
+          "kind": "ambient",
+          "source": "produced",
+          "uri": "music-bare.mp4",
+          "duration": 22.0,
+          "title": "Music without credits",
+          "tags": "",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any", "inside"],
+              "energy": "quiet",
+              "audio": "music",
+              "text_heavy": false,
+              "template": "image_caption",
+              "brand_mode": "reveal",
+              "music_id": "bed-missing"
+            }
+          }
+        },
+        {
+          "id": "fx:gated-weight",
+          "type": "video",
+          "kind": "ambient",
+          "source": "manual",
+          "uri": "gated-weight.mp4",
+          "duration": 10.0,
+          "title": "Editorially off",
+          "tags": "",
+          "weight": 0.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any"],
+              "energy": "quiet",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:gated-christmas",
+          "type": "video",
+          "kind": "christmas",
+          "source": "manual",
+          "uri": "gated-christmas.mp4",
+          "duration": 10.0,
+          "title": "Season gated",
+          "tags": "christmas",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "scenic",
+              "roles": ["any"],
+              "energy": "neutral",
+              "audio": "native",
+              "text_heavy": false,
+              "template": "minimal_center",
+              "brand_mode": "reveal",
+              "music_id": null
+            }
+          }
+        },
+        {
+          "id": "fx:standby-only",
+          "type": "card",
+          "kind": "technical_difficulties",
+          "source": "render",
+          "uri": "standby-only.mp4",
+          "duration": 22.0,
+          "title": "Standby only",
+          "tags": "failure",
+          "weight": 1.0,
+          "enabled": 1,
+          "health": "ok",
+          "play_count": 0,
+          "last_played": null,
+          "created_at": 1690000000.0,
+          "payload": {
+            "creative": {
+              "family": "failure",
+              "roles": ["standby"],
+              "energy": "quiet",
+              "audio": "silence",
+              "text_heavy": false,
+              "template": "signal",
+              "brand_mode": "none",
+              "music_id": null
+            }
+          }
+        }
+      ]
+    }
+  }
+}

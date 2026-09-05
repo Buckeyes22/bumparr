@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+**Experience reports and objective release review gates**
+- `python -m bumparr.simulate` reports item/kind/family/template/brand-mode
+  shares; exact/family/template/music repeats; max text run; energy/audio
+  shares; role/zero-score/gated selections; relaxations; 15/30/60/90
+  duration error (documented 1.5s tolerance); missing/stale provenance;
+  and branded/unbranded frequency. Shares stay diagnostic.
+- Fixed `tests/fixtures/alignment_playables.json` (capable + constrained
+  pools, seed 7, start 1700000000). CI asserts only objective contracts:
+  no gated/hard-role selection, deterministic JSON, satisfiable run
+  limits, valid media metadata, and the documented duration tolerance.
+- `python -m bumparr.review` exports a read-only ten-minute station-style
+  M3U/plan, four standard break packs, and JSON/Markdown sidecars with
+  ids, metadata, credits, gaps, and relaxations. Reuses media; does not
+  concatenate or re-encode. Human review is
+  [docs/RELEASE_REVIEW.md](docs/RELEASE_REVIEW.md). No Adult Swim
+  similarity score.
+
 **Truthful channel memory and local operator messages**
 - `bumparr/generators/channel_memory.py` builds `channel_statistics`,
   `previously_on`, `viewer_achievement`, and `operator_message` cards from

@@ -66,7 +66,12 @@ class SimulateReport(unittest.TestCase):
                     "same_kind_runs", "zero_score_picks", "seasonal",
                     "daypart", "audio", "family_shares", "text_runs",
                     "role_violations", "relaxations", "profile",
-                    "music_repeats", "energy_jumps", "treatment_shares"):
+                    "music_repeats", "energy_jumps", "treatment_shares",
+                    "template_shares", "brand_mode_shares", "energy_shares",
+                    "family_repeats", "template_repeats", "max_text_run",
+                    "text_run_limit", "gated_selections",
+                    "invalid_media_metadata", "provenance",
+                    "branded_unbranded", "break_duration_error"):
             self.assertIn(key, a)
         self.assertEqual(a["chosen"] + a["zero_score_picks"], 40)
         self.assertGreater(a["chosen"], 0)
@@ -75,12 +80,18 @@ class SimulateReport(unittest.TestCase):
         self.assertEqual(set(a["relaxations"]),
                          {"exit_ident", "energy_jump", "same_family",
                           "text_run", "same_music"})
-        self.assertEqual(set(a["profile"]), {"version", "source"})
+        self.assertEqual(set(a["profile"]), {"version", "source", "hash"})
         self.assertEqual(a["profile"]["version"], 1)
         self.assertIn(a["profile"]["source"],
                       ("shipped-default", "custom", "fallback-after-error"))
+        self.assertRegex(a["profile"]["hash"], r"^[0-9a-f]{16}$")
         self.assertIsInstance(a["text_runs"], int)
         self.assertIsInstance(a["role_violations"], int)
+        self.assertEqual(a["gated_selections"], 0)
+        self.assertEqual(set(a["provenance"]), {"ok", "missing", "stale"})
+        self.assertEqual(a["break_duration_error"]["tolerance"], 1.5)
+        self.assertEqual(set(a["break_duration_error"]["seconds"]),
+                         {"15", "30", "60", "90"})
 
     def test_does_not_write_db_or_call_station_advance(self):
         before = self._fingerprint()
@@ -140,6 +151,25 @@ class SimulateCli(unittest.TestCase):
         bad = self._run("--picks", "0", seed_rows=rows)
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn("positive", (bad.stderr or bad.stdout).lower())
+
+    def test_fixture_json_does_not_need_a_database(self):
+        fixture = str(Path(REPO) / "tests" / "fixtures" / "alignment_playables.json")
+        env = dict(os.environ,
+                   PYTHONPATH=REPO + os.pathsep + os.environ.get("PYTHONPATH", ""))
+        first = subprocess.run(
+            [sys.executable, "-m", "bumparr.simulate", "--fixture", fixture,
+             "--pool", "capable", "--picks", "20", "--json"],
+            capture_output=True, text=True, env=env, cwd=REPO, timeout=60)
+        second = subprocess.run(
+            [sys.executable, "-m", "bumparr.simulate", "--fixture", fixture,
+             "--pool", "capable", "--picks", "20", "--json"],
+            capture_output=True, text=True, env=env, cwd=REPO, timeout=60)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(json.loads(first.stdout), json.loads(second.stdout))
+        report = json.loads(first.stdout)
+        self.assertEqual(report["seed"], 7)
+        self.assertEqual(report["start"], 1_700_000_000.0)
+        self.assertEqual(report["gated_selections"], 0)
 
 
 if __name__ == "__main__":

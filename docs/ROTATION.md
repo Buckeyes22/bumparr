@@ -8,10 +8,12 @@ score = base × season × daypart × recency × affinity × fatigue
 
 Every Bumparr path that probabilistically ranks candidates —
 `/api/bumpers/random` and a co-deployed player — uses
-`rotation.weights_for`. `/api/bumpers/fill` instead optimizes for duration,
-and `/playlist.m3u` lists the full playable set for its downstream scheduler.
-This page is the user-facing version of the module docstring; the code is the
-authority and the two should be read together.
+`rotation.weights_for`. `/api/bumpers/fill` currently sequences by duration
+only (an ordered bumper set, not a programme schedule). `/playlist.m3u` lists
+the unsequenced playable set for a downstream scheduler. The live station
+sequences its own bumper-only timeline using these scores. This page is the
+user-facing version of the module docstring; the code is the authority and
+the two should be read together.
 
 ## Declared vs computed
 
@@ -99,10 +101,14 @@ specific score — the tool for "why did that play?".
 
 ## What this model does not do
 
-- It does not schedule. It returns a ranking; the consumer (or the fill
-  endpoint's subset-sum) decides the actual sequence.
+- It does not schedule a programme. It returns a ranking. `/api/bumpers/fill`
+  then sequences a duration-bounded bumper set; the live station sequences a
+  bumper-only showcase/failover timeline; `/playlist.m3u` leaves order to a
+  downstream scheduler. This scoring model does not choose that sequence, and
+  Bumparr does not schedule episodes or films.
 - It does not enforce type quotas. There are no per-type shares; the mix comes
   from each type's own weights and availability. (Type composition is an
   editorial decision made at the weight column, not by the model.)
 - It does not remember per-consumer state. History is per-channel (`playout` /
-  `play_history`), so one pool can serve several consumers.
+  `play_history`). Station playout is the shipped writer; other players may
+  write their own channel ids. Status and preview never write history.

@@ -9,23 +9,32 @@
 
 How Bumparr's pieces fit together. The short version: **sources land as files
 or rows, production turns files into finished bumpers, one SQLite registry is
-the single source of truth, one scoring model decides what plays, and a set of
-background jobs keeps everything fresh.** Nothing runs in the playback path
-except reading the registry.
+authoritative, one scoring model ranks candidates, and a set of background
+jobs keeps everything fresh.** Nothing runs in the playback path except
+reading the registry. The station conform cache is derived from that registry,
+not a second source of truth.
+
+Bumparr is not a long-form programme scheduler. `/api/bumpers/fill` composes a
+duration-bounded bumper set; `/playlist.m3u` is an unsequenced pool listing;
+`/station/live` is a bumper showcase and `/station/standby` is failover.
 
 ## The registry is the center of everything
 
-One SQLite database (`DB_PATH`) holds all state:
+One SQLite database (`DB_PATH`) is authoritative:
 
 - `playables` — every bumper of every type (video, card, stream, image), with
   its media pointer, duration, declared weight, enabled/health flags, and
   play stats. Full reference in [SCHEMA.md](SCHEMA.md).
-- `playout` / `play_history` — the channel playout cursor and play history
-  (written by whatever plays the pool; read by the rotation model).
+- `playout` / `play_history` — the channel playout cursor and play history.
+  Station playout is the shipped writer; other players may write their own
+  channel ids. Status, preview, and dashboard inspection never write history.
 
 Everything else is a writer to or reader from this table. There is no second
-store, no cache of content, no queue of work that survives a restart except
-the fetch queue's state file.
+authoritative store. The station conform cache under
+`ASSET_ROOT/.cache/station/` is derived from playable rows and can be rebuilt.
+The fetch queue's state file is the only work queue that survives a restart.
+`config_files/bumper_catalog.yaml` is a descriptive inventory, not something
+runtime parses to decide what to generate.
 
 ## Content flow
 
@@ -47,8 +56,8 @@ the fetch queue's state file.
         │                                     │                             │
         └─────────────────────────────────────┬─────────────────────────────┘
                                               ▼
-                         station/ (registry → HLS,
-                         play history writer)
+                         station/ (derived HLS cache,
+                         shipped play-history writer)
                                               │
                                               ▼
                         consumers: ErsatzTV, Tunarr,
@@ -131,8 +140,11 @@ content covers every kind with no model at all (CI asserts this).
 - **`seasons.py`** — calendar factors per category (holiday material ramps in
   and out rather than switching), computed at selection time, never stored.
 - `/random` and any co-deployed player call the same `weights_for`, so
-  probabilistic ranking means the same thing everywhere. `/fill` optimizes for
-  duration; `/playlist.m3u` delegates ordering to its downstream scheduler.
+  probabilistic ranking means the same thing everywhere. `/fill` currently
+  optimizes for duration only (no creative sequence grammar yet) and returns
+  an ordered bumper set, not a programme schedule. `/playlist.m3u` is an
+  unsequenced pool listing for a downstream scheduler. The live station
+  sequences its own bumper-only timeline.
 
 ### 5. Service
 
@@ -147,16 +159,19 @@ content covers every kind with no model at all (CI asserts this).
 ### 6. Station
 
 `station/conform.py` pre-conforms eligible registry items into splice-safe
-segments in a background sweep, outside the request path. `station/playout.py`
-maintains the live and standby virtual clocks, selects conformed items, and
-writes play history. `station/guide.py` turns daypart windows into the XMLTV
-guide for both channels. The station routes expose the HLS playlists, segment
-files, channel M3U, guide, status, and conform action.
+segments in a background sweep, outside the request path. That cache is
+derived; SQLite remains authoritative. `station/playout.py` maintains the live
+showcase and standby failover virtual clocks, selects conformed items, and is
+the shipped play-history writer. `station/guide.py` turns daypart windows into
+the XMLTV guide for both channels. The station routes expose the HLS playlists,
+segment files, channel M3U, guide, status, and conform action. Status and
+preview reads never extend a timeline or write history.
 
 ## Invariants worth preserving when changing things
 
-- **The registry is the only source of truth.** A file without a row does not
-  play; the startup asset scan parks missing media and clears stale card URIs.
+- **SQLite is authoritative; the station cache is derived.** A file without a
+  row does not play; the startup asset scan parks missing media and clears
+  stale card URIs. Conformed HLS segments can be rebuilt from playable rows.
 - **Idempotent refreshes, unique production.** Config/source refreshes upsert
   stable identities; intentional new renders use collision-proof identities.
 - **Nothing in the playback path does heavy work.** Acquisition and production

@@ -14,23 +14,30 @@
 
 ## What the station is
 
-Dispatcharr relays live streams and has no file playback or scheduler. Its
-plugins are action buttons, not playback hooks, so an M3U of individual bumper
-files becomes a list of dead channels. The first-class integration is for
-Bumparr to be a stream: the pool is served as a continuous HLS channel.
+The station is Bumparr's bumper pool run as HLS. `live` is a continuous
+**showcase** of that pool. `standby` is branded **failover**. It schedules
+only bumpers — not episodes, films, or a general linear channel. SQLite
+remains authoritative; the conform cache is derived and can be rebuilt.
+
+Dispatcharr relays live streams and has no file playback or long-form
+scheduler. Its plugins are action buttons, not playback hooks, so an M3U of
+individual bumper files becomes a list of dead channels. The first-class
+integration is for Bumparr to be a stream: the pool is served as a continuous
+HLS showcase.
 
 The second channel is the important operational piece. Dispatcharr can put
 the standby stream last in a channel's failover list. When the provider dies,
 the channel falls back to Bumparr's branded standby loop instead of showing a
-spinner. ErsatzTV, Tunarr, and other HLS players can consume the live channel
-directly as well.
+spinner. ErsatzTV, Tunarr, and other HLS players can consume the live
+showcase directly as well.
 
 ## The two channels
 
-`live` draws from every eligible, conformed playable item. `standby` uses the
-same playout engine but restricts its pool to the kinds in `STANDBY_KINDS`.
-The default is `technical_difficulties,station_id,dead_air,window`; window
-captures are included, but `stream` rows are not.
+`live` is the bumper showcase: it draws from every eligible, conformed
+playable item. `standby` is failover: it uses the same playout engine but
+restricts its pool to the kinds in `STANDBY_KINDS`. The default is
+`technical_difficulties,station_id,dead_air,window`; window captures are
+included, but `stream` rows are not.
 
 ## Conform
 
@@ -40,7 +47,8 @@ eligibility query is `enabled=1 AND health='ok' AND type IN
 Images are rendered as stills for their duration. Stream rows are never
 conformed.
 
-The output profile is fixed: `1920x1080`, 30 fps, H.264 High 4.1,
+Conform writes a derived cache, not a second registry. The output profile is
+fixed: `1920x1080`, 30 fps, H.264 High 4.1,
 `yuv420p`; `libx264` with the `veryfast` preset; `-g 60`, `-keyint_min 60`,
 and `-sc_threshold 0`; target video bitrate `STATION_BITRATE_K` (4000k by
 default), maxrate 1.125 times that target (4500k by default), and a buffer of
@@ -141,7 +149,7 @@ test cards, and live windows.` Times use the process's local-zone offset.
 
 | Endpoint | Behaviour |
 |---|---|
-| `GET /station/{channel}/index.m3u8` | Live HLS playlist; `application/vnd.apple.mpegurl`, `Cache-Control: no-store`; 404 for an unknown channel. |
+| `GET /station/{channel}/index.m3u8` | HLS playlist (`live` showcase, `standby` failover); `application/vnd.apple.mpegurl`, `Cache-Control: no-store`; 404 for an unknown channel. |
 | `GET /station/seg/{key}/{n}.ts` | Static conformed segment from `ASSET_ROOT/.cache/station`, served as `video/mp2t`. |
 | `GET /station/channel.m3u` | M3U with live and standby `#EXTINF` lines, `tvg-id` values `bumparr.live` and `bumparr.standby`, `tvg-name`, `group-title="Bumparr"`, and absolute URLs. |
 | `GET /station/guide.xml` | XMLTV guide described above. |

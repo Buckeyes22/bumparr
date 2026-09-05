@@ -2,7 +2,9 @@
 
 One SQLite file at `DB_PATH` (WAL mode, 15s busy timeout — the DB is shared by
 the app, the CLI subprocesses, and possibly a co-deployed player). Schema lives
-in `bumparr/db.py`; this is the reference for what each column means.
+in `bumparr/db.py`; this is the reference for what each column means. SQLite is
+authoritative. The station conform cache is derived from `playables` and can
+be rebuilt; it is not a second source of truth.
 
 ## `playables` — the registry
 
@@ -53,8 +55,9 @@ without UNIQUE-constraint races. Writers that need "did I insert?" check
 | `started_at` | Unix ts it started. |
 
 The station playout is the shipped writer, upserting one cursor per channel as
-entries air. Other players may also write their own channel values. The
-rotation model consumes history and the denormalized `last_played`/`play_count`
+entries air. Other players may also write their own channel values.
+Status, preview, and dashboard inspection never write history. The rotation
+model consumes history and the denormalized `last_played`/`play_count`
 values.
 
 ## `play_history`
@@ -64,7 +67,7 @@ values.
 | `id` | autoincrement. |
 | `channel_id` | which channel played it; station values are `station:live` and `station:standby`. |
 | `playable_id` | the row played. |
-| `played_at` | Unix ts. The station writes one row per aired entry; its built-in slate is never recorded. |
+| `played_at` | Unix ts. The station writes one row per aired entry; its built-in slate is never recorded. Status and preview never insert rows. |
 
 Indexed on `(channel_id, played_at DESC)`. This is the raw feed; the
 rotation model works off the denormalized `last_played`/`play_count` columns

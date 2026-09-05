@@ -11,8 +11,11 @@
 - [Keeping the pool fresh](#keeping-the-pool-fresh)
 - [Notes](#notes)
 
-Bumparr produces bumpers. It does not decide what airs or when — that is your
-channel generator's job. This is how to hand its output to one.
+Bumparr produces short interstitials. It is not a long-form programme
+scheduler: it does not schedule episodes or films. Hand the **bumper library**
+and **break composer** to ErsatzTV, Tunarr, or anything that places filler;
+use the **live station** as a bumper showcase and **standby** as branded
+failover.
 
 Everything below assumes Bumparr is reachable at `http://bumparr:8780`. If it
 sits behind a reverse proxy, set `PUBLIC_URL` to the address your *consumers*
@@ -27,15 +30,18 @@ PUBLIC_URL=https://bumpers.example.com
 
 | Endpoint | Gives you | Use it when |
 |---|---|---|
-| `GET /playlist.m3u` | M3U of every playable bumper, absolute URLs | Your tool ingests a playlist |
+| `GET /api/bumpers/fill?seconds=N` | An ordered bumper set that fits N seconds | You have a break to compose (not a programme schedule) |
 | `GET /api/bumpers/random` | Up to `count` bumpers (default 5), JSON | You want to pick some yourself |
-| `GET /api/bumpers/fill?seconds=N` | A *set* that adds up to N seconds | You have a gap to fill |
+| `GET /playlist.m3u` | Unsequenced M3U of every playable bumper, absolute URLs | Your downstream scheduler ingests a pool listing |
 
-The third one is the interesting one, and the reason Bumparr exists.
+The fill endpoint is the interesting one, and the reason Bumparr exists as a
+break composer. The live showcase and standby failover are a fourth path:
+`/station/live/index.m3u8` and `/station/standby/index.m3u8`.
 
 ## Filling a gap (the part nothing else does)
 
-Ask for a duration and Bumparr hands back bumpers that add up to it:
+Ask for a duration and Bumparr hands back an ordered bumper set that adds up
+to it. This composes a break; it does not schedule the show on either side:
 
 ```bash
 curl 'http://bumparr:8780/api/bumpers/fill?seconds=47'
@@ -58,8 +64,8 @@ clip, an 18s card and a 7s ident to land on 47.
 
 ## ErsatzTV
 
-ErsatzTV has first-class filler support, so point it at the playlist and let it
-schedule.
+ErsatzTV has first-class filler support, so point it at Bumparr's unsequenced
+pool listing and let ErsatzTV place the bumpers.
 
 1. **Add the library.** Bumparr writes finished bumpers to its output directory
    (`OUTPUT`, default `<assets>/bumpers`). Mount that path into ErsatzTV and add
@@ -74,9 +80,9 @@ If you would rather not share a filesystem, add `http://bumparr:8780/playlist.m3
 as a playlist source instead — just make sure `PUBLIC_URL` is set so the URLs
 resolve from ErsatzTV's container.
 
-The live channel can also be added as a stream source
-(`/station/live/index.m3u8`) for a "Bumparr TV" channel alongside the
-file-based filler.
+The live showcase can also be added as a stream source
+(`/station/live/index.m3u8`) for a bumper-only channel alongside the
+file-based filler. That channel still does not schedule episodes or films.
 
 ## Tunarr
 
@@ -88,18 +94,20 @@ Tunarr also does flex/filler natively.
    content.
 3. Set flex to fill the gap rather than pad with a static image.
 
-The live channel can also be added as a stream source
-(`/station/live/index.m3u8`) for a "Bumparr TV" channel alongside the
-file-based filler.
+The live showcase can also be added as a stream source
+(`/station/live/index.m3u8`) for a bumper-only channel alongside the
+file-based filler. That channel still does not schedule episodes or films.
 
 ## Dispatcharr
 
 Dispatcharr relays live streams; it does not schedule files, so a playlist
-of bumper files is not useful to it. Bumparr therefore runs its pool **as a
-live channel**, and Dispatcharr consumes that like any provider.
+of bumper files is not useful to it. Bumparr therefore runs its bumper pool
+as HLS: `live` is a showcase and `standby` is branded failover. Dispatcharr
+consumes those like any provider. This is still not episode or film
+scheduling.
 
 1. **Add the channel.** Sources → M3U: `http://bumparr:8780/station/channel.m3u`.
-   Two streams appear in the `Bumparr` group: the live channel and standby.
+   Two streams appear in the `Bumparr` group: the live showcase and standby failover.
 2. **Add the guide.** Sources → EPG: `http://bumparr:8780/station/guide.xml`.
    The `tvg-id`s match, so the guide assigns itself.
 3. **Use standby as failover.** On any channel whose provider drops, add

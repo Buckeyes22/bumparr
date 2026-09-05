@@ -5,12 +5,18 @@
 **A bumper generator for the \*arr stack.** Point it at your sources and it builds
 and maintains a self-refreshing pool of TV bumpers / interstitials — station IDs,
 "please stand by" cards, trivia, live "window" cams, public-domain clips, ambient
-loops — that any channel generator (Dispatcharr, ErsatzTV, Tunarr) or player can
-consume.
+loops.
 
-Bumparr does the one thing the \*arr ecosystem doesn't: turn source material into
-finished, varied bumpers, automatically. It is not a channel scheduler — it
-produces the interstitials; something downstream decides what airs and when.
+Bumparr is a self-hosted engine for making and serving short television
+interstitials. It is not a long-form programme scheduler: it does not schedule
+episodes or films. Lead with the **bumper library** and **break composer**; the
+live station is a bumper showcase plus branded failover.
+
+| Mode | What it does |
+|---|---|
+| Bumper library | Create, ingest, inspect, enable, disable, render, and serve individual items. `/playlist.m3u` is an unsequenced pool listing for a downstream scheduler (ErsatzTV, Tunarr, or similar). |
+| Break composer | `GET /api/bumpers/fill` returns an ordered bumper set that fits a duration. Today that is duration-only; it is not a programme schedule. |
+| Live station | `/station/live` is a continuous bumper showcase; `/station/standby` is branded failover. The station schedules only its own bumper pool. |
 
 ## Run it
 
@@ -78,14 +84,18 @@ automatically on their configured TTLs so file-based consumers do not air stale 
 
 ## Consume it
 
-Three ways for a channel generator or player to pull bumpers:
+The primary product is the bumper library and the break composer. The live
+station is a showcase of that same pool, plus branded failover.
 
 | Endpoint | Use |
 |---|---|
-| `GET /api/bumpers/random?count=N&max_duration=S&types=video,card` | Hand me N bumpers to drop between shows |
-| `GET /playlist.m3u` | An M3U of every playable bumper (video, stream, rendered cards) for IPTV tooling |
+| `GET /api/bumpers/fill?seconds=N` | Ordered bumper set that fits a duration (not a programme schedule) |
+| `GET /api/bumpers/random?count=N&max_duration=S&types=video,card` | N bumpers from the library, ranked by the scoring model |
+| `GET /playlist.m3u` | Unsequenced M3U of every playable bumper (video, stream, rendered cards) for a downstream scheduler |
 | `GET /media/<path>` | The actual media files |
-| `GET /station/channel.m3u` + `/station/guide.xml` | Bumparr as a live channel (Dispatcharr, or any HLS player); `/station/standby/index.m3u8` as a failover stream |
+| `GET /station/live/index.m3u8` | Bumper showcase HLS |
+| `GET /station/standby/index.m3u8` | Branded failover HLS |
+| `GET /station/channel.m3u` + `/station/guide.xml` | Both station channels plus XMLTV (Dispatcharr, or any HLS player) |
 
 Plus `GET /api/status`, `GET /api/bumpers`, `POST /api/render/cards`, and
 `POST /api/generate/<kind>` / `POST /api/sources/<action>` to drive it from the
@@ -100,17 +110,21 @@ is rarely the thing that plays its entries. Behind a reverse proxy, set
 `PUBLIC_URL` to the address consumers actually reach; otherwise Bumparr
 derives it from the incoming request.
 
-Also `GET /api/bumpers/fill?seconds=N`, which hands back a *set* of bumpers that
-adds up to a gap — solved as a subset-sum rather than a greedy pass, so a break
+`/fill` solves a duration as a subset-sum rather than a greedy pass, so a break
 doesn't end in dead air. That is the contract a channel generator actually
-needs, and nothing else in the \*arr ecosystem offers it.
+needs for bumper placement, and nothing else in the \*arr ecosystem offers it.
 
-The station is the pool run as a live channel: pre-conformed segments and a playlist, no encoder in the playback path.
+The live station is the bumper pool run as HLS: pre-conformed segments and a
+playlist, no encoder in the playback path. It showcases bumpers; it does not
+schedule episodes or films.
 
 ## Documentation
 
 | Doc | What it covers |
 |---|---|
+| [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md) | what Bumparr is trying to make and the experience it should deliver |
+| [docs/CREATIVE_REFERENCE.md](docs/CREATIVE_REFERENCE.md) | the Adult Swim bumper reference and what to preserve without copying |
+| [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md) | self-contained execution specification for closing the product and creative gaps |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | wiring Bumparr into ErsatzTV, Tunarr, Dispatcharr |
 | [docs/CARDS.md](docs/CARDS.md) | making the cards yours: shapes per kind, model prompts, new kinds |
 | [docs/API.md](docs/API.md) | the full endpoint reference, incl. the dashboard |

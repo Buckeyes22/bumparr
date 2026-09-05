@@ -68,7 +68,10 @@ because the *contract with the viewer* differs:
   factual framing ("which came first?") may carry an `answer`.
 - **Comedic kinds can be as absurd as you like.** `psa`, `corrections`,
   `coming_up`, `achievements` are *supposed* to make no sense. Nothing will
-  "correct" them.
+  "correct" them. Shipped `coming_up` cards are fake teasers for programmes
+  that will never air — they are not a preview of a downstream episode or
+  film schedule. Channel-memory kinds (statistics, previously-on, viewer
+  history) are proposed for a later phase and are not generated today.
 
 A card that fails validation is rejected with a reason rather than aired, so if
 something you added doesn't appear, check the logs.

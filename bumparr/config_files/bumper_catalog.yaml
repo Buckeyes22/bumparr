@@ -1,20 +1,23 @@
 # Bumper Catalog
-# Master plan for bumper content.
+# Descriptive inventory of bumper concepts. Runtime must not parse this file
+# to decide what to generate; SQLite playables remain authoritative.
 #
-# The point of this file: variety comes from DIFFERENT PRODUCTION MECHANISMS, not just
-# "more clips." Each concept is tagged by how it is actually produced and how ready it is.
+# Variety comes from different production mechanisms, not just more clips.
+# Each content row records how it would be produced and how ready it is.
 #
-# status:
-#   generate        - produced locally (model or render), NO external fetch -> buildable now
-#   fetch           - clean, correctly-licensed downloadable/stream source reachable now
-#   data-api        - needs a (mostly free / no-key) data API
-#   key             - needs an API key we don't have yet
-#   deferred-archive- needs the Internet Archive (our IP is throttled; do politely later)
-#   deferred-jelly  - needs the Jellyfin library (the "shows" half, later)
-#   modifier        - a scheduler weighting overlay, NOT a standalone content type
+# state (exactly one):
+#   shipped   - documented, reachable, and tested
+#   partial   - a mechanism exists but the named concept is incomplete
+#   proposed  - no implementation
+#   blocked   - a named dependency or rights decision prevents it
+#   deferred  - deliberately outside near-term milestones
 #
-# treatment: a presentation wrapper applied over a base asset. Several concepts are
-#   really (base asset) x (treatment): reveal-late, slow-zoom, delayed-answer, progressive.
+# mechanism: how it is / would be produced (generate, fetch, data-api, …).
+# implementation: required for shipped/partial — module/route/test evidence.
+# gap: required for proposed/blocked/deferred — what is missing, or why.
+#
+# treatment: a presentation wrapper over a base asset (not a content row).
+# Seasonal/holiday modifiers are time-based weight overlays, not content.
 
 treatments:
   - reveal-late        # hide the key detail (location/answer/meaning) until the final seconds
@@ -22,7 +25,7 @@ treatments:
   - delayed-answer     # question/clue up, answer after a beat
   - progressive        # clues that get progressively easier
 
-# Seasonal/holiday are NOT content types - they are time-based weight overlays on everything else.
+# Seasonal/holiday are NOT content types — they are time-based weight overlays.
 modifiers:
   - name: Seasonal Flavor
     kind: seasonal
@@ -33,73 +36,423 @@ modifiers:
 
 # ---- LIVE STREAMS ("windows") -------------------------------------------------
 streams:
-  - {name: Live Windows,     type: stream, status: fetch,    treatment: [],            sources: [public-webcam-directories, youtube-live, dot-traffic-cams, windy-webcams], license: public-feeds-only, notes: "streets/traffic/harbors/airports/trains/beaches/wildlife/underwater/observatories/ISS"}
-  - {name: Meanwhile,        type: stream, status: fetch,    treatment: [reveal-late], sources: [public-webcam-directories, youtube-live], license: public-feeds-only, notes: "unexplained live cam; location revealed near the end"}
-  - {name: Nature Roulette,  type: stream, status: fetch,    treatment: [],            sources: [explore-org, youtube-live, zoo-aquarium-cams], license: public-feeds-only, notes: "bird feeders/nests/bears/aquariums/reefs/zoos"}
-  - {name: Machine Cam,      type: stream, status: fetch,    treatment: [],            sources: [youtube-live, public-webcam-directories, wikimedia], license: mixed, notes: "factories/CNC/3D printers/rail yards/ship locks/drawbridges/telescopes; mix of live + recorded"}
-  - {name: Microscope,       type: video,  status: fetch,    treatment: [],            sources: [wikimedia, nih-bioimage, youtube-cc], license: cc, notes: "microscopy footage dropped in with little explanation"}
-  - {name: Radio Scan,       type: stream, status: fetch,    treatment: [],            sources: [public-radio-streams, radio-garden-public], license: public-streams-only, notes: "legal live/public audio snippet + simple visual"}
+  - name: Live Windows
+    type: stream
+    state: shipped
+    mechanism: fetch
+    treatment: []
+    sources: [public-webcam-directories, youtube-live, dot-traffic-cams, windy-webcams]
+    license: public-feeds-only
+    implementation: "bumparr/live_cams.py, bumparr/config_files/live_cams.yaml, bumparr/sources/capture_windows.py, bumparr/stream_proxy.py; stream rows via /api/bumpers; tests/test_live_cams.py, tests/test_stream_proxy.py, tests/test_jobs.py"
+    notes: "Open direct-HLS cams ship enabled. YouTube snapshot cams are opt-in and commented out (scrape policy is the operator's)."
+  - name: Meanwhile
+    type: stream
+    state: partial
+    mechanism: fetch
+    treatment: [reveal-late]
+    sources: [public-webcam-directories, youtube-live]
+    license: public-feeds-only
+    implementation: "Live-window mechanism in bumparr/live_cams.py and capture_windows.py; no late location-reveal treatment."
+    notes: "Unexplained live cam; location revealed near the end. Windows exist; the reveal-late treatment does not."
+  - name: Nature Roulette
+    type: stream
+    state: proposed
+    mechanism: fetch
+    treatment: []
+    sources: [explore-org, youtube-live, zoo-aquarium-cams]
+    license: public-feeds-only
+    gap: "No dedicated nature-cam pool or rotation. live_cams.yaml only comments a bird-feeder snapshot example; do not treat a nearby window kind as this concept."
+    notes: "bird feeders/nests/bears/aquariums/reefs/zoos"
+  - name: Machine Cam
+    type: stream
+    state: proposed
+    mechanism: fetch
+    treatment: []
+    sources: [youtube-live, public-webcam-directories, wikimedia]
+    license: mixed
+    gap: "No dedicated machine-cam ingest, kind, or tests."
+    notes: "factories/CNC/3D printers/rail yards/ship locks/drawbridges/telescopes; mix of live + recorded"
+  - name: Microscope
+    type: video
+    state: proposed
+    mechanism: fetch
+    treatment: []
+    sources: [wikimedia, nih-bioimage, youtube-cc]
+    license: cc
+    gap: "No microscopy ingest or kind. ingest.py's science vibe maps to fun_animation search terms only."
+    notes: "microscopy footage dropped in with little explanation"
+  - name: Radio Scan
+    type: stream
+    state: proposed
+    mechanism: fetch
+    treatment: []
+    sources: [public-radio-streams, radio-garden-public]
+    license: public-streams-only
+    gap: "No public-radio stream ingest, audio-snippet producer, or tests."
+    notes: "legal live/public audio snippet + simple visual"
 
 # ---- DOWNLOADED VIDEO ---------------------------------------------------------
 video:
-  - {name: NASA/Space,          type: video, status: fetch,            sources: [nasa-images-api], license: public-domain, notes: "DONE (7 clips); Earth/launches/auroras/nebulae/spacecraft"}
-  - {name: Ambient Television,  type: video, status: fetch,            sources: [nasa, wikimedia, pixabay], license: cc-pd, notes: "rain/fireplaces/aquariums/clouds/snow/lava lamps/records spinning"}
-  - {name: Very Slow Television, type: video, status: fetch,           sources: [wikimedia, pd-collections], license: cc-pd, notes: "long mundane scenes where nothing must happen; can run several minutes"}
-  - {name: Random Drone/Aerial, type: video, status: fetch,            sources: [wikimedia, pixabay, coverr], license: cc-pd, notes: "landscapes/cities/coastlines/landmarks from above"}
-  - {name: Satellite Window,    type: video, status: data-api,         sources: [noaa-goes, nasa-worldview], license: public-domain, notes: "recent satellite imagery of clouds/storms/auroras/oceans"}
-  - {name: Micro Music Videos,  type: video, status: key,              sources: [free-music-archive, cc-mixter, visualizer-generated], license: cc, notes: "short legal music + visualizer/archive footage"}
-  - {name: Archive Clips,       type: video, status: deferred-archive, sources: [internet-archive-prelinger], license: public-domain, notes: "short vintage educational/industrial/gov/safety/training film segments"}
-  - {name: Vintage Ads,         type: video, status: deferred-archive, sources: [internet-archive], license: public-domain, notes: "legally reusable historical commercials/promo films"}
-  - {name: Public-Domain Shorts, type: video, status: deferred-archive, sources: [internet-archive], license: public-domain, notes: "occasionally let a great archive/cartoon/educational film run long or in full"}
-  - {name: Found Instructions,  type: video, status: deferred-archive, sources: [internet-archive, pd-manuals], license: public-domain, notes: "contextless diagrams/clips from old manuals + instructional films"}
-  - {name: GM Training Films,   type: video, status: deferred-archive, sources: [internet-archive-prelinger], license: public-domain, notes: "black-and-white General Motors training/industrial/sponsored films, 1920s-1960s. Search handles: Jam Handy Organization, Chevrolet, General Motors, Prelinger"}
-  # ---- content-expansion batch ----
-  - {name: Military/Naval,      type: video, status: fetch,   category: military, license: public-domain, notes: "old military/naval footage; US Gov/National Archives = PD. Search: US Navy, WWII newsreel, military training film"}
-  - {name: Atomic Tests,        type: video, status: fetch,   category: atomic_era, license: public-domain, notes: "atomic bomb TEST footage (distinct from civil-defense films already pulled); US Gov PD. Search: nuclear test, Operation Crossroads, atomic detonation"}
-  - {name: Classic Cartoons,    type: video, status: fetch,   category: cartoons, license: public-domain, notes: "PD black-and-white cartoons — early rubber-hose animation (NOT Steamboat Willie, still Disney-copyright), e.g. Betty Boop, Popeye (some PD), Out of the Inkwell, Flip the Frog, ComiColor. Verify each is actually PD. The metamorphosis one = likely early Fleischer/rubber-hose"}
-  - {name: Trippy Animation,    type: video, status: fetch,   category: trippy, license: public-domain, notes: "psychedelic/experimental animation; Prelinger + PD experimental film. Search: experimental animation, oscilloscope, kaleidoscope, abstract film"}
-  - {name: Fun Animations,      type: video, status: fetch,   category: fun_animation, license: cc-pd, notes: "fractals, kaleidoscopes, paint-in-water/paint-stirring, microscope timelapse. Sources: NASA, Wikimedia, PD science film"}
-  - {name: Automotive,          type: video, status: fetch,   category: automotive, license: public-domain, notes: "racing, mechanics, automotive educational films. Prelinger has tons (Jam Handy did GM). Search: auto racing newsreel, car mechanics educational, hot rod"}
-  - {name: Card Music Beds,     type: audio, status: fetch,   category: music_beds, license: pd-cc, notes: "PD/CC music clips to play UNDER some text cards instead of silence. Sources: Musopen (PD classical), archive.org 78rpm/PD music, FMA CC"}
+  - name: NASA/Space
+    type: video
+    state: partial
+    mechanism: fetch
+    sources: [nasa-images-api]
+    license: public-domain
+    implementation: "ingest.py archive collection allowlist includes nasa; VIBE_MAP space -> ambient; seed.py ambient source label nasa. No NASA Images API client. Bumparr ships no video files."
+    notes: "Earth/launches/auroras/nebulae/spacecraft. Operator-local clips are not a shipped library."
+  - name: Ambient Television
+    type: video
+    state: partial
+    mechanism: fetch
+    sources: [nasa, wikimedia, pixabay]
+    license: cc-pd
+    implementation: "seed.py CATEGORY ambient; starter_seeds.yaml rain/aquarium/fire/skyline queries; ingest.py VIBE_MAP ambient/nature; POST /api/starter; tests/test_seed.py"
+    notes: "rain/fireplaces/aquariums/clouds/snow/lava lamps/records spinning. Acquisition path exists; no bundled clips."
+  - name: Very Slow Television
+    type: video
+    state: proposed
+    mechanism: fetch
+    sources: [wikimedia, pd-collections]
+    license: cc-pd
+    gap: "No dedicated long-take kind, producer, or duration band for multi-minute mundane scenes."
+    notes: "long mundane scenes where nothing must happen; can run several minutes"
+  - name: Random Drone/Aerial
+    type: video
+    state: proposed
+    mechanism: fetch
+    sources: [wikimedia, pixabay, coverr]
+    license: cc-pd
+    gap: "No dedicated aerial/drone ingest or kind. Starter skyline queries are generic stock, not this concept."
+    notes: "landscapes/cities/coastlines/landmarks from above"
+  - name: Satellite Window
+    type: video
+    state: proposed
+    mechanism: data-api
+    sources: [noaa-goes, nasa-worldview]
+    license: public-domain
+    gap: "No NOAA GOES or NASA Worldview client, renderer, or tests."
+    notes: "recent satellite imagery of clouds/storms/auroras/oceans"
+  - name: Micro Music Videos
+    type: video
+    state: blocked
+    mechanism: key
+    sources: [free-music-archive, cc-mixter, visualizer-generated]
+    license: cc
+    gap: "No visualizer or music-video producer. Commercial music must not ship; licensed/owned tracks wait on the Phase 4 music manifest and redistribution rights."
+    notes: "short legal music + visualizer/archive footage"
+  - name: Archive Clips
+    type: video
+    state: blocked
+    mechanism: fetch
+    sources: [internet-archive-prelinger]
+    license: public-domain
+    gap: "Internet Archive throttle. fetch_queue.py can retry named items politely, but bulk vintage educational/industrial pulls are blocked until that dependency is acceptable."
+    notes: "short vintage educational/industrial/gov/safety/training film segments"
+  - name: Vintage Ads
+    type: video
+    state: blocked
+    mechanism: fetch
+    sources: [internet-archive]
+    license: public-domain
+    gap: "Internet Archive throttle. seed.py CATEGORY vintage_ads and ingest VIBE_MAP vintage exist; bulk historical-commercial pulls remain blocked."
+    notes: "legally reusable historical commercials/promo films"
+  - name: Public-Domain Shorts
+    type: video
+    state: blocked
+    mechanism: fetch
+    sources: [internet-archive]
+    license: public-domain
+    gap: "Internet Archive throttle. No producer that lets a full archive/cartoon/educational film run long as a bumper."
+    notes: "occasionally let a great archive/cartoon/educational film run long or in full"
+  - name: Found Instructions
+    type: video
+    state: blocked
+    mechanism: fetch
+    sources: [internet-archive, pd-manuals]
+    license: public-domain
+    gap: "Internet Archive throttle. No manuals/instructional-film ingest or kind."
+    notes: "contextless diagrams/clips from old manuals + instructional films"
+  - name: GM Training Films
+    type: video
+    state: blocked
+    mechanism: fetch
+    sources: [internet-archive-prelinger]
+    license: public-domain
+    gap: "Internet Archive throttle. seed.py CATEGORY gm_films exists; no dedicated Jam Handy/GM producer."
+    notes: "black-and-white General Motors training/industrial/sponsored films, 1920s-1960s. Search handles: Jam Handy Organization, Chevrolet, General Motors, Prelinger"
+  - name: Military/Naval
+    type: video
+    state: partial
+    mechanism: fetch
+    category: military
+    license: public-domain
+    implementation: "seed.py CATEGORY military; ingest.py VIBE_MAP military; fetch_queue.yaml military items; bumparr/sources/fetch_queue.py; tests/test_seed.py, tests/test_fetch_queue.py"
+    notes: "old military/naval footage; US Gov/National Archives = PD. Search: US Navy, WWII newsreel, military training film. No bundled files."
+  - name: Atomic Tests
+    type: video
+    state: partial
+    mechanism: fetch
+    category: atomic_era
+    license: public-domain
+    implementation: "seed.py CATEGORY atomic_era; ingest.py VIBE_MAP atomic; tests/test_seed.py"
+    notes: "atomic bomb TEST footage (distinct from civil-defense films); US Gov PD. Search: nuclear test, Operation Crossroads, atomic detonation. No bundled files."
+  - name: Classic Cartoons
+    type: video
+    state: partial
+    mechanism: fetch
+    category: cartoons
+    license: public-domain
+    implementation: "seed.py CATEGORY cartoons; ingest.py VIBE_MAP cartoon; fetch_queue.yaml cartoon items; tests/test_seed.py, tests/test_fetch_queue.py"
+    notes: "PD black-and-white cartoons — early rubber-hose animation (NOT Steamboat Willie). Verify each is actually PD. No bundled files."
+  - name: Trippy Animation
+    type: video
+    state: partial
+    mechanism: fetch
+    category: trippy
+    license: public-domain
+    implementation: "seed.py CATEGORY trippy; ingest.py VIBE_MAP trippy/stoner/psychedelic; fetch_queue.yaml trippy items; tests/test_seed.py, tests/test_fetch_queue.py"
+    notes: "psychedelic/experimental animation; Prelinger + PD experimental film. No bundled files."
+  - name: Fun Animations
+    type: video
+    state: partial
+    mechanism: fetch
+    category: fun_animation
+    license: cc-pd
+    implementation: "seed.py CATEGORY fun_animation; fetch_queue.yaml fun_animation items; tests/test_seed.py, tests/test_fetch_queue.py"
+    notes: "fractals, kaleidoscopes, paint-in-water, microscope timelapse. No bundled files."
+  - name: Automotive
+    type: video
+    state: partial
+    mechanism: fetch
+    category: automotive
+    license: public-domain
+    implementation: "seed.py CATEGORY automotive; ingest.py VIBE_MAP car/race; fetch_queue.yaml automotive items; tests/test_seed.py, tests/test_fetch_queue.py"
+    notes: "racing, mechanics, automotive educational films. No bundled files."
+  - name: Card Music Beds
+    type: audio
+    state: partial
+    mechanism: fetch
+    category: music_beds
+    license: pd-cc
+    implementation: "config.SOUND_DIR; produce.py sound_pool; render_cards.py _music_bed; tests/test_render_hardening.py test_music_bed_containment. No bundled audio; empty pool is intentional silence."
+    notes: "PD/CC music clips to play UNDER some text cards instead of silence. Operator-mounted only; no commercial defaults."
 
 # ---- IMAGE (download + reveal) ------------------------------------------------
 image:
-  - {name: One-Minute Museum,     type: image, status: data-api, sources: [met-openaccess, smithsonian-open, rijksmuseum, art-institute, europeana], license: cc0-open, notes: "paintings/photos/artifacts/maps/patent drawings"}
-  - {name: "What Am I Looking At?", type: image, status: data-api, treatment: [slow-zoom], sources: [met-openaccess, wikimedia], license: cc0-open, notes: "start extremely cropped, slowly reveal"}
-  - {name: Then / Now,            type: image, status: fetch,     sources: [wikimedia, loc-photos], license: cc-pd, notes: "historical image of a place, then its modern look"}
-  - {name: Internet Archaeology,  type: image, status: fetch,     sources: [oldweb-today, wikimedia-ui-screenshots, guidebook-museum], license: mixed, notes: "old websites/software UIs/forgotten tech"}
+  - name: One-Minute Museum
+    type: image
+    state: proposed
+    mechanism: data-api
+    sources: [met-openaccess, smithsonian-open, rijksmuseum, art-institute, europeana]
+    license: cc0-open
+    gap: "No museum open-access client. ingest.py _loc_search is Library of Congress posters/photos, not this concept."
+    notes: "paintings/photos/artifacts/maps/patent drawings"
+  - name: "What Am I Looking At?"
+    type: image
+    state: proposed
+    mechanism: data-api
+    treatment: [slow-zoom]
+    sources: [met-openaccess, wikimedia]
+    license: cc0-open
+    gap: "No slow-zoom image treatment, museum client, or tests."
+    notes: "start extremely cropped, slowly reveal"
+  - name: Then / Now
+    type: image
+    state: proposed
+    mechanism: fetch
+    sources: [wikimedia, loc-photos]
+    license: cc-pd
+    gap: "No paired historical/modern image producer or kind."
+    notes: "historical image of a place, then its modern look"
+  - name: Internet Archaeology
+    type: image
+    state: proposed
+    mechanism: fetch
+    sources: [oldweb-today, wikimedia-ui-screenshots, guidebook-museum]
+    license: mixed
+    gap: "No old-web/UI screenshot ingest or kind."
+    notes: "old websites/software UIs/forgotten tech"
 
 # ---- DATA-API CARDS (live/reference data -> rendered card) --------------------
 data_cards:
-  - {name: Patent of the Day,   type: card, status: data-api, sources: [patentsview, google-patents], license: public-domain, notes: "bizarre historical patent drawing + title + year"}
-  - {name: On This Day,         type: card, status: data-api, sources: [wikimedia-onthisday-api], license: cc, notes: "one interesting event for today's date; free, no key"}
-  - {name: Weather Somewhere Else, type: card, status: data-api, sources: [open-meteo], license: free, notes: "weather from an arbitrary place + footage/cam from there"}
-  - {name: Earth Is Big,        type: card, status: data-api, sources: [open-meteo], license: free, notes: "contrast home time/weather with somewhere radically different"}
-  - {name: Above You,           type: card, status: data-api, sources: [open-notify-iss, astronomy-ephemeris], license: free, notes: "ISS/satellite passes, visible planets, Moon phase, sky events"}
-  - {name: Transit Board,       type: card, status: data-api, sources: [gtfs-realtime-public, transitland], license: mixed, notes: "live/recent departures from a random station/airport/ferry"}
-  - {name: "Teletext/Ceefax",   type: card, status: generate, sources: [open-meteo, internal], license: n/a, notes: "retro info pages (weather/trivia/schedule/system info + nonsense)"}
+  - name: Patent of the Day
+    type: card
+    state: proposed
+    mechanism: data-api
+    sources: [patentsview, google-patents]
+    license: public-domain
+    gap: "No PatentsView/Google Patents client, card kind, or tests."
+    notes: "bizarre historical patent drawing + title + year"
+  - name: On This Day
+    type: card
+    state: shipped
+    mechanism: data-api
+    sources: [wikimedia-onthisday-api]
+    license: cc
+    implementation: "bumparr/generators/on_this_day.py; POST /api/generate/on_this_day; jobs.dated_card_loop; tests/test_pool_recovery.py"
+    notes: "one interesting event for today's date; free, no key"
+  - name: Weather Somewhere Else
+    type: card
+    state: partial
+    mechanism: data-api
+    sources: [open-meteo]
+    license: free
+    implementation: "bumparr/generators/weather.py; ingest.py weather-in-place routing; POST /api/generate/weather (home); tests/test_weather.py, tests/test_ingest_routing.py. No pairing with footage/cam from that place."
+    notes: "weather from an arbitrary place; footage/cam pairing is not implemented"
+  - name: Earth Is Big
+    type: card
+    state: proposed
+    mechanism: data-api
+    sources: [open-meteo]
+    license: free
+    gap: "No contrast card that pairs home time/weather with a remote place."
+    notes: "contrast home time/weather with somewhere radically different"
+  - name: Above You
+    type: card
+    state: proposed
+    mechanism: data-api
+    sources: [open-notify-iss, astronomy-ephemeris]
+    license: free
+    gap: "No ISS/ephemeris client, sky-event card, or tests."
+    notes: "ISS/satellite passes, visible planets, Moon phase, sky events"
+  - name: Transit Board
+    type: card
+    state: proposed
+    mechanism: data-api
+    sources: [gtfs-realtime-public, transitland]
+    license: mixed
+    gap: "No GTFS/Transitland client, transit-board card, or tests."
+    notes: "live/recent departures from a random station/airport/ferry"
+  - name: "Teletext/Ceefax"
+    type: card
+    state: proposed
+    mechanism: generate
+    sources: [open-meteo, internal]
+    license: n/a
+    gap: "No teletext/ceefax template, generator, or tests."
+    notes: "retro info pages (weather/trivia/system info + nonsense). Must not imply a long-form programme schedule."
 
 # ---- LOCAL-MODEL GENERATED CARDS (no download; your configured model) --------
 model_cards:
-  - {name: Trivia,             type: card, status: generate, treatment: [delayed-answer], notes: "movie/tv/music/science/history/geography/tech/general"}
-  - {name: Fun Facts,          type: card, status: generate, notes: "genuinely interesting short facts (+optional related image/video later)"}
-  - {name: Guess the Year,     type: card, status: data-api, treatment: [reveal-late], notes: "show object/photo/movie/tech, reveal its year (image via museum/wiki)"}
-  - {name: Three Clues,        type: card, status: generate, treatment: [progressive], notes: "3 progressively easier clues -> movie/show/place/person/object"}
-  - {name: Connections,        type: card, status: generate, notes: "unexpected chain linking two movies/actors/events/objects"}
-  - {name: Fake PSAs,          type: card, status: generate, notes: "dry, strange, dead-serious PSAs (generator exists)"}
-  - {name: Corrections, type: card, status: generate, notes: "deadpan corrections, incl. corrections to things that were not wrong"}
-  - {name: Unexplained Numbers, type: card, status: generate, treatment: [reveal-late], notes: "number with no context, then reveal its meaning (generator exists)"}
-  - {name: Numbers Station,    type: card, status: generate, notes: "cryptic numbers/symbols; occasionally an actual solvable message; +TTS audio later"}
-  - {name: Tiny Games,         type: card, status: generate, notes: "higher/lower, which-came-first, silhouettes, geography guesses; 15-60s"}
-  - {name: Library Trivia,     type: card, status: deferred-jelly, notes: "trivia from Jellyfin shows/movies/actors/directors/connections"}
+  - name: Trivia
+    type: card
+    state: shipped
+    mechanism: data-api
+    treatment: [delayed-answer]
+    implementation: "bumparr/generators/grounded.py gen_trivia; POST /api/generate/trivia; card_validation trivia rules; tests/test_grounded.py, tests/test_card_validation.py"
+    notes: "movie/tv/music/science/history/geography/tech/general. Grounded in Open Trivia DB, not model invention."
+  - name: Fun Facts
+    type: card
+    state: shipped
+    mechanism: data-api
+    implementation: "bumparr/generators/grounded.py gen_fun_facts; POST /api/generate/fun_facts; docs/CARDS.md; tests/test_grounded.py, tests/test_card_validation.py"
+    notes: "genuinely interesting short facts from Wikipedia"
+  - name: Guess the Year
+    type: card
+    state: proposed
+    mechanism: data-api
+    treatment: [reveal-late]
+    gap: "No guess_year generator or API route. render_cards.CARD_LABELS and enrich_bg.ELIGIBLE mention the kind; that is not an implementation."
+    notes: "show object/photo/movie/tech, reveal its year"
+  - name: Three Clues
+    type: card
+    state: proposed
+    mechanism: generate
+    treatment: [progressive]
+    gap: "No three_clues generator, prompt, or API route. CARD_LABELS listing is not an implementation."
+    notes: "3 progressively easier clues -> movie/show/place/person/object"
+  - name: Connections
+    type: card
+    state: proposed
+    mechanism: generate
+    gap: "No connections generator, prompt, or API route. CARD_LABELS / enrich_bg listing is not an implementation."
+    notes: "unexpected chain linking two movies/actors/events/objects"
+  - name: Fake PSAs
+    type: card
+    state: shipped
+    mechanism: generate
+    implementation: "generators/cards.py PROMPTS psa; ingest.py MODEL_CARD_KINDS; card_seeds.json; POST /api/generate/psa; tests/test_card_seeds.py, tests/test_cards_gen.py"
+    notes: "dry, strange, dead-serious PSAs"
+  - name: Corrections
+    type: card
+    state: shipped
+    mechanism: generate
+    implementation: "generators/cards.py PROMPTS corrections; card_seeds.json; POST /api/generate/corrections; tests/test_card_seeds.py, tests/test_cards_gen.py"
+    notes: "deadpan corrections, incl. corrections to things that were not wrong"
+  - name: Unexplained Numbers
+    type: card
+    state: shipped
+    mechanism: generate
+    treatment: [reveal-late]
+    implementation: "generators/grounded.py number + register_number_baseline; config_files/number_facts.json; POST /api/generate/number; tests/test_grounded.py, tests/test_card_validation.py"
+    notes: "number with no context, then reveal its meaning. Grounded in a vendored dataset, not model invention."
+  - name: Numbers Station
+    type: card
+    state: proposed
+    mechanism: generate
+    gap: "No numbers_station generator, TTS path, or tests. Distinct from the shipped grounded `number` kind."
+    notes: "cryptic numbers/symbols; occasionally an actual solvable message; +TTS audio later"
+  - name: Tiny Games
+    type: card
+    state: shipped
+    mechanism: generate
+    implementation: "generators/cards.py PROMPTS tiny_games; card_seeds.json; POST /api/generate/tiny_games; tests/test_card_seeds.py, tests/test_card_validation.py, tests/test_cards_gen.py"
+    notes: "higher/lower, which-came-first, silhouettes, geography guesses; 15-60s"
+  - name: Library Trivia
+    type: card
+    state: deferred
+    mechanism: generate
+    gap: "Needs a Jellyfin library integration; deliberately outside near-term milestones."
+    notes: "trivia from Jellyfin shows/movies/actors/directors/connections"
 
 # ---- INTERNAL / PROCEDURAL (station's self-awareness; no external content) ----
 internal:
-  - {name: Technical Difficulties, type: generate, status: generate, notes: "static/test patterns/VHS glitch/broken-feed/fake failures; render in player"}
-  - {name: Station IDs,          type: generate, status: generate, notes: "short brand idents/cards; simple ones render now, richer ones later"}
-  - {name: Dead Air,             type: generate, status: generate, notes: "rare near-silent black bumper + tiny brand ident; trivial"}
-  - {name: Local Time,           type: generate, status: generate, notes: "minimalist clock/date card as broadcast breathing room (Jarvis time route exists)"}
-  - {name: Channel Statistics,    type: generate, status: generate, notes: "real-but-useless telemetry: uptime, bumpers served, time since a category last aired (we have the data)"}
-  - {name: Previously On This Channel, type: card,     status: generate, notes: "deadpan recap of recent programming + mundane live-cam events (uses play_history)"}
-  - {name: Coming Up Eventually, type: card,     status: generate, notes: "deliberately vague previews of what the scheduler expects to show later"}
-  - {name: Viewer Achievements,  type: card,     status: generate, notes: "joke achievements e.g. 'survived a Window where nothing happened'"}
+  - name: Technical Difficulties
+    type: card
+    state: shipped
+    mechanism: generate
+    implementation: "ingest.py PROCEDURAL technical_difficulties; render_cards.py _compose_technical_difficulties; STANDBY_KINDS; docs/CARDS.md, docs/RENDERING.md; tests/test_grounded.py register_all_baselines, card_validation COMEDIC_KINDS"
+    notes: "static/test patterns/broken-feed/fake failures; rendered offline to MP4"
+  - name: Station IDs
+    type: video
+    state: shipped
+    mechanism: generate
+    implementation: "bumparr/station_ids.py; render_cards.py _frames_station_id; seed.py CATEGORY station_ids; tests/test_processes.py, tests/test_render_hardening.py"
+    notes: "short brand idents; combinatorial stills/clips x font roulette"
+  - name: Dead Air
+    type: card
+    state: shipped
+    mechanism: generate
+    implementation: "ingest.py PROCEDURAL dead_air; render_cards.py _frames_dead_air; STANDBY_KINDS; docs/RENDERING.md; tests/test_grounded.py register_all_baselines"
+    notes: "rare near-silent black bumper + tiny brand ident"
+  - name: Local Time
+    type: card
+    state: partial
+    mechanism: generate
+    implementation: "render_cards.py _frames_local_time and VOLATILE_TTL; app._volatile_refresh_loop; docs/RENDERING.md; tests/test_render_hardening.py. No generator or baseline registers a local_time row."
+    notes: "minimalist clock/date card as broadcast breathing room"
+  - name: Channel Statistics
+    type: card
+    state: proposed
+    mechanism: generate
+    gap: "No channel-statistics generator. Phase 5 will add channel memory from real play_history / pool telemetry."
+    notes: "real-but-useless telemetry: uptime, bumpers served, time since a category last aired"
+  - name: Previously On This Channel
+    type: card
+    state: proposed
+    mechanism: generate
+    gap: "No previously-on generator. Phase 5 will recap Bumparr's own recent bumper-pool history, not a downstream episode schedule."
+    notes: "deadpan recap of recent bumpers and mundane live-cam events (uses play_history)"
+  - name: Coming Up Eventually
+    type: card
+    state: proposed
+    mechanism: generate
+    gap: "Bumparr does not know a downstream long-form schedule, so this cannot preview episodes or films. Existing coming_up cards are fake never-airing teasers (generators/cards.py, card_seeds.json), not schedule awareness."
+    notes: "Must not imply episode/film awareness. Fake teasers exist as a different, non-schedule concept."
+  - name: Viewer Achievements
+    type: card
+    state: proposed
+    mechanism: generate
+    gap: "No viewer-history achievements. Phase 5. Generic `achievements` cards exist (generators/cards.py, card_seeds.json) but are not backed by play_history or viewer input."
+    notes: "joke achievements e.g. survived a Window where nothing happened. Viewer input, if any, is operator-curated and local."

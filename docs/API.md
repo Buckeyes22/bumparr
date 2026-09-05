@@ -59,8 +59,9 @@ One bumper as JSON: every registry column plus `media_url`. 404 if unknown.
 ## The output contract
 
 These are the endpoints a channel generator or player pulls from. `/random`
-uses the rotation model ([ROTATION.md](ROTATION.md)); `/fill` optimizes for a
-requested duration, while the playlist exposes the full playable set.
+uses the rotation model ([ROTATION.md](ROTATION.md)); `/fill` composes a
+duration-bounded bumper set (not a programme schedule); `/playlist.m3u` is an
+unsequenced pool listing for a downstream scheduler.
 
 ### `GET /api/bumpers/random`
 
@@ -76,9 +77,10 @@ candidates; seasonally gated (weight 0) items never come back.
 
 ### `GET /api/bumpers/fill`
 
-The gap-filling contract: "the next show starts in N seconds." Solved as a
-randomized subset-sum, not a greedy pass — see the `fill` docstring in
-`bumparr/app.py` for why.
+The break-composer contract: return an ordered bumper set that fits N seconds.
+This is not a programme schedule and does not know what a downstream channel
+will air next. Solved as a randomized subset-sum, not a greedy pass — see the
+`fill` docstring in `bumparr/app.py` for why.
 
 | Param | Default | Meaning |
 |---|---|---|
@@ -94,11 +96,16 @@ a wider `gap` rather than return a bad fit — check `exact`/`gap`, not just
 
 ## Station
 
-- `GET /station/{channel}/index.m3u8` — sliding HLS playlist (`live` for the full pool, `standby` for standby material); unknown channels return 404.
+`live` is a bumper showcase; `standby` is branded failover. The station
+schedules only its own bumper pool. SQLite is authoritative; the conform
+cache is derived. `GET /api/station` is read-only: it does not extend a
+timeline or write play history.
+
+- `GET /station/{channel}/index.m3u8` — sliding HLS playlist (`live` showcase, `standby` failover); unknown channels return 404.
 - `GET /station/seg/{key}/{number}.ts` — static pre-conformed HLS segment cache.
 - `GET /station/channel.m3u` — M3U source listing both channels with XMLTV ids.
 - `GET /station/guide.xml` — XMLTV guide for the live and standby channels.
-- `GET /api/station` — status, conform progress, handoff URLs, and now/next data.
+- `GET /api/station` — status, conform progress, handoff URLs, and now/next data (inspection only).
 - `POST /api/station/conform?limit=25` — starts a background conform pass (1–1000 items).
 
 `GET /api/station` returns:
@@ -116,9 +123,11 @@ the status handoff URLs are absolute.
 
 ### `GET /playlist.m3u`
 
-M3U of every playable bumper (streams, and video/card entries that have a
-rendered file), absolute URLs, for IPTV tooling. Unrendered cards are absent;
-weather/local-time renders are refreshed automatically on their TTLs.
+Unsequenced M3U of every playable bumper (streams, and video/card entries that
+have a rendered file), absolute URLs, for a downstream scheduler. This is a
+pool listing, not a break playlist and not a programme schedule. Unrendered
+cards are absent; weather/local-time renders are refreshed automatically on
+their TTLs.
 
 ### `GET /healthz`
 

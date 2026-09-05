@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**Design contract** (not completed runtime alignment).
+- Lands the product/creative contract: [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md),
+  [docs/CREATIVE_REFERENCE.md](docs/CREATIVE_REFERENCE.md),
+  [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md).
+- Reconciles scheduling language: Bumparr is not a long-form programme
+  scheduler; `/fill` composes duration-bounded bumper sets; `/playlist.m3u`
+  is an unsequenced pool listing; `live` is a bumper showcase; `standby` is
+  failover.
+- Reclassifies `bumparr/config_files/bumper_catalog.yaml` with truthful
+  `state` values (`shipped` / `partial` / `proposed` / `blocked` /
+  `deferred`) plus `implementation` or `gap` evidence.
+- Runtime alignment (selection, sequence grammar, voice profile, music
+  manifest, channel memory, review reel) is **not** completed by this change.
+
 Security + correctness pass (plan: [docs/FIX_PLAN.md](docs/FIX_PLAN.md)).
 
 **Station**

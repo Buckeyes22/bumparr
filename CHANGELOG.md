@@ -14,10 +14,12 @@
   because the job id returns immediately and polling owns the long wait.
 - A lost status read is never reported as a failed job. Polling keeps
   `status unknown`, backs off to 10 s and keeps asking; only a 404 ends it, and
-  no five-minute success is invented. The ask bar hands its input and button
-  back as soon as a poll cannot reach the server, with **Check now** and
-  **Stop checking** controls, so a network outage can no longer leave the form
-  permanently disabled.
+  no five-minute success is invented. The ask bar and the Actions panel share
+  one poller, and both hand their controls back as soon as a read cannot reach
+  the server, offering **Check now** and **Stop checking** while checking
+  continues in the background — a network outage can no longer leave a form or
+  a panel of buttons permanently disabled. A superseded job stops being polled
+  and cannot overwrite newer feedback.
 - Library search is debounced 250 ms, superseded reads are aborted, and answers
   older than the current filter generation are discarded. The periodic
   20-second overview/station refresh does nothing while the tab is hidden and

@@ -68,6 +68,7 @@ class FakeNode {
     this.attributes = {};
     this.listeners = new Map();
     this.hidden = false;
+    this.disabled = false;
     this.id = "";
     // Back-references stay non-enumerable: several tests serialise a subtree
     // with JSON.stringify to prove no markup got in, and a parent/classList
@@ -172,6 +173,7 @@ function buildDocument() {
         ]),
       ]),
       panel("panel-actions", [
+        el("div", { id: "actions-state", className: "panel-state" }),
         el("div", { className: "actions" }, [
           el("button", { data: { gen: "trivia" } }),
           el("button", { data: { src: "fetch-queue" } }),
@@ -506,19 +508,31 @@ test("an action whose status is unknown is not announced as a failure", async ()
   assert.match(logText(), /run it again to check/);
 });
 
-test("an ask poll that cannot reach the server hands the controls back", async (t) => {
-  // The poll used to reschedule itself every ten seconds forever with the input
-  // and button still disabled: no typing, no cancel, no retry, only a reload.
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const urls = [];
+// Both job surfaces are driven the same way: start the wait, let the POST
+// settle, then advance the clock a poll at a time.
+const escapeLabels = (sel) => descendants($(sel))
+  .filter((n) => n.tagName === "BUTTON").map((n) => n.textContent);
+const escapeButton = (sel, label) => descendants($(sel))
+  .find((n) => n.tagName === "BUTTON" && n.textContent === label);
+
+function stubFailingJob(urls) {
   global.fetch = async (url, opts) => {
     urls.push(String(url));
     if ((opts && opts.method) === "POST") return jsonReply({ job_id: "j1", status: "working" });
     throw new TypeError("Failed to fetch");
   };
-  const statusReads = () => urls.filter((u) => u.startsWith("/api/request/j1")).length;
+  return () => urls.filter((u) => u.startsWith("/api/request/j1")).length;
+}
+
+test("an ask poll that cannot reach the server hands the controls back", async (t) => {
+  // The poll used to reschedule itself every ten seconds forever with the input
+  // and button still disabled: no typing, no cancel, no retry, only a reload.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = [];
+  const statusReads = stubFailingJob(urls);
   $("#ask").value = "more dead air";
-  await submitAsk();
+  const waiting = submitAsk();
+  await flush();
   assert.equal($("#ask-go").disabled, true, "the form is held while the job starts");
 
   t.mock.timers.tick(3000);
@@ -527,18 +541,14 @@ test("an ask poll that cannot reach the server hands the controls back", async (
   assert.equal($("#ask-go").disabled, false, "a lost poll never leaves the form dead");
   assert.equal($("#ask").disabled, false);
   assert.match(textOf($("#ask-result")), /status unknown/);
-  assert.deepEqual(
-    descendants($("#ask-result")).filter((n) => n.tagName === "BUTTON")
-      .map((n) => n.textContent),
-    ["Check now", "Stop checking"]);
+  assert.deepEqual(escapeLabels("#ask-result"), ["Check now", "Stop checking"]);
 
   t.mock.timers.tick(10000);
   await flush();
   assert.equal(statusReads(), 2, "it keeps checking in the background");
 
-  const stop = descendants($("#ask-result")).find((n) => n.textContent === "Stop checking");
-  await stop.click();
-  await flush();
+  escapeButton("#ask-result", "Stop checking").click();
+  await waiting;
   t.mock.timers.tick(60000);
   await flush();
   assert.equal(statusReads(), 2, "stopping actually stops the poll");
@@ -546,31 +556,66 @@ test("an ask poll that cannot reach the server hands the controls back", async (
   assert.equal($("#ask-go").disabled, false);
 });
 
+test("an action whose status reads keep failing leaves the panel usable", async (t) => {
+  // The shared poller loops until the job ends or the operator stops it, so
+  // without an escape a silent server pinned every Actions button on disabled.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = [];
+  const statusReads = stubFailingJob(urls);
+  const buttons = document.querySelectorAll(".actions button");
+  assert.ok(buttons.length > 1, "the panel disables more than the clicked button");
+
+  const running = doAction("/api/generate/trivia?n=20", "generate trivia");
+  await flush();
+  assert.ok(buttons.every((b) => b.disabled), "the panel is held while the job starts");
+
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(statusReads(), 1);
+  assert.ok(buttons.every((b) => !b.disabled), "a lost read never leaves the panel dead");
+  assert.match(textOf($("#actions-state")), /status unknown/);
+  assert.equal($("#actions-state").dataset.state, "attention");
+  assert.deepEqual(escapeLabels("#actions-state"), ["Check now", "Stop checking"]);
+
+  t.mock.timers.tick(10000);
+  await flush();
+  assert.equal(statusReads(), 2, "it keeps checking in the background");
+
+  escapeButton("#actions-state", "Stop checking").click();
+  await running;
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(statusReads(), 2, "stopping actually stops the poll");
+  assert.match(logText(), /generate trivia: stopped checking/);
+  assert.doesNotMatch(logText(), /generate trivia failed/);
+  assert.ok(buttons.every((b) => !b.disabled));
+  assert.equal($("#actions-state").dataset.state, "populated",
+               "the region goes back to the panel vocabulary once the job ends");
+  assert.equal($("#actions-state").hidden, true);
+});
+
 test("Check now polls immediately instead of waiting out the backoff", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const urls = [];
-  global.fetch = async (url, opts) => {
-    urls.push(String(url));
-    if ((opts && opts.method) === "POST") return jsonReply({ job_id: "j1", status: "working" });
-    throw new TypeError("Failed to fetch");
-  };
+  const statusReads = stubFailingJob(urls);
   $("#ask").value = "more dead air";
-  await submitAsk();
+  submitAsk();
+  await flush();
   t.mock.timers.tick(3000);
   await flush();
-  const before = urls.filter((u) => u.startsWith("/api/request/j1")).length;
+  assert.equal(statusReads(), 1);
 
-  const again = descendants($("#ask-result")).find((n) => n.textContent === "Check now");
-  await again.click();
-  t.mock.timers.tick(0);
+  escapeButton("#ask-result", "Check now").click();
   await flush();
-  assert.equal(urls.filter((u) => u.startsWith("/api/request/j1")).length, before + 1);
+  assert.equal(statusReads(), 2, "the operator does not wait out the ten-second backoff");
 });
 
-test("a second ask supersedes the first job's result line", async (t) => {
+test("a second ask supersedes the first job's poll and result line", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
+  const urls = [];
   let posts = 0;
   global.fetch = async (url, opts) => {
+    urls.push(String(url));
     if ((opts && opts.method) === "POST") {
       posts++;
       return jsonReply({ job_id: "j" + posts, status: "working" });
@@ -579,14 +624,23 @@ test("a second ask supersedes the first job's result line", async (t) => {
     return jsonReply({ status: "working" });
   };
   $("#ask").value = "one";
-  await submitAsk();
+  const first = submitAsk();
+  await flush();
   $("#ask").value = "two";
-  await submitAsk();
+  submitAsk();
+  await flush();
+
   t.mock.timers.tick(3000);
   await flush();
   assert.doesNotMatch(textOf($("#ask-result")), /first landed/,
                       "a superseded poll may not overwrite the newer request");
   assert.match(textOf($("#ask-result")), /working on it/);
+  await first;
+  const readsOfFirst = urls.filter((u) => u.includes("j1")).length;
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(urls.filter((u) => u.includes("j1")).length, readsOfFirst,
+               "a superseded job stops being polled rather than polling forever");
 });
 
 // ---------------------------------------------------------------------------

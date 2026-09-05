@@ -53,7 +53,10 @@ const STATE = initialState();
 let searchTimer = null;
 let libraryAbort = null;
 let refreshTimer = null;
+// One counter per job surface: a superseded wait abandons its poll and stops
+// writing, so it can neither overwrite newer feedback nor poll forever.
 let askGeneration = 0;
+let actionGeneration = 0;
 
 // ---------------------------------------------------------------------------
 // 2. Safe DOM helpers
@@ -200,6 +203,26 @@ function statusBadge(level, detail) {
     root.append(makeEl("span", "badge-detail", detail));
   }
   return root;
+}
+
+// A job surface: one badge plus whatever escape controls the poller offers.
+// `dataset.state` carries the job's level here rather than a panel data state
+// (loading/populated/…); the caller hands the region back to renderPanelState
+// once the job ends.
+function renderJobState(el, level, message, actions) {
+  if (!el) return null;
+  const nodes = [statusBadge(level, message)];
+  (actions || []).forEach((action) => {
+    const button = makeEl("button", "mini", action.label);
+    button.addEventListener("click", action.onClick);
+    nodes.push(button);
+  });
+  el.className = "panel-state";
+  el.dataset.state = level;
+  el.hidden = false;
+  setBusy(el, level === "working");
+  el.replaceChildren(...nodes);
+  return el;
 }
 
 function formatAge(then, at) {
@@ -991,6 +1014,9 @@ const MAINT = {
     j.skipped_streams + " stream(s) skipped" },
 };
 
+const JOB_STOPPED = "stopped checking — the job may still be running";
+const JOB_FORGOTTEN = "status unknown: the server no longer tracks this job";
+
 // A job POST returns immediately; polling owns the long wait, so no clock is
 // imposed on the server's own duration and no five-minute success is invented.
 //
@@ -999,28 +1025,61 @@ const MAINT = {
 // seconds and keeps asking rather than reporting the action as failed. Only a
 // 404 — the server itself no longer tracking the id — ends the poll, and even
 // that is reported as unknown.
+//
+// The loop always terminates: `hooks.stopped()` lets the surface abandon the
+// wait, so no caller can be left awaiting a poll that never returns.
 async function pollJob(job, getStatus = async (jobId) =>
   api("/api/request/" + encodeURIComponent(jobId)),
-pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))) {
+pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+hooks = {}) {
   const jobId = job.job_id;
+  const stopped = hooks.stopped || (() => false);
   let current = job;
   let delay = JOB_POLL_MS;
+  let elapsed = 0;
   while (jobId && current.status === "working") {
     await pause(delay);
+    if (stopped()) return { status: "unknown", result: JOB_STOPPED };
+    elapsed += delay;
     try {
       current = await getStatus(jobId);
       delay = JOB_POLL_MS;
-    } catch (err) {
-      if (err && err.status === 404) {
-        return { status: "unknown",
-                 result: "status unknown: the server no longer tracks this job" };
+      if (current && current.status === "working" && hooks.onWorking) {
+        hooks.onWorking(Math.round(elapsed / 1000));
       }
+    } catch (err) {
+      if (err && err.status === 404) return { status: "unknown", result: JOB_FORGOTTEN };
       delay = JOB_BACKOFF_MS;
-      announce("status unknown (" + err.message +
-               ") — the job may still be running; checking again in 10s");
+      const message = "status unknown (" + err.message +
+                      ") — the job may still be running; checking again in 10s";
+      if (hooks.onUnknown) hooks.onUnknown(message);
+      else announce(message);
     }
   }
   return current;
+}
+
+// Every operator surface that waits on a job shares this. pollJob owns the
+// state machine; the pause here can be cut short by "Check now" or abandoned
+// by "Stop checking", and the surface's controls go back to the operator the
+// moment a read is lost. Nothing here can leave a panel disabled with no way
+// out, and a superseded surface abandons its poll instead of polling forever.
+function watchJob(job, view) {
+  let wake = null;
+  let stopped = false;
+  const pause = (ms) => new Promise((resolve) => {
+    const timer = setTimeout(() => { wake = null; resolve(); }, ms);
+    wake = () => { clearTimeout(timer); wake = null; resolve(); };
+  });
+  const escapes = [
+    { label: "Check now", onClick: () => { if (wake) wake(); } },
+    { label: "Stop checking", onClick: () => { stopped = true; if (wake) wake(); } },
+  ];
+  return pollJob(job, undefined, pause, {
+    stopped: () => stopped || (view.superseded ? view.superseded() : false),
+    onWorking: (seconds) => view.working(seconds),
+    onUnknown: (message) => { view.release(); view.unknown(message, escapes); },
+  });
 }
 
 function wireMaintenance() {
@@ -1049,20 +1108,43 @@ function wireMaintenance() {
 
 async function doAction(url, label) {
   const btns = $$(".actions button");
+  const state = $("#actions-state");
+  const mine = ++actionGeneration;
+  const current = () => mine === actionGeneration;
+  // The panel is held only while the operator is actually being made to wait.
+  // The moment a status read is lost the buttons come back, so the escape from
+  // a silent server is a real control, not a page reload.
+  const release = () => { if (current()) btns.forEach((b) => { b.disabled = false; }); };
   btns.forEach((b) => { b.disabled = true; });
   announce("→ " + label + " …");
+  renderJobState(state, "working", label + "…", []);
   try {
     let r = await api(url, { method: "POST", timeout: 0 });
-    if (r.job_id) r = await pollJob(r);
+    if (r.job_id) {
+      r = await watchJob(r, {
+        superseded: () => !current(),
+        release,
+        working: (seconds) => {
+          if (current()) renderJobState(state, "working", label + "… (" + seconds + "s)", []);
+        },
+        unknown: (message, actions) => {
+          if (current()) renderJobState(state, "attention", message, actions);
+        },
+      });
+    }
     const result = r.result === undefined ? r : r.result;
     const msg = typeof result === "string" ? result : JSON.stringify(result);
-    // "unknown" is not "failed": the run may well have completed. The Actions
-    // buttons come back enabled below, so re-running it is the retry.
+    // "unknown" is not "failed": the run may well have completed.
     const mark = r.status === "error" ? "✗ " : (r.status === "unknown" ? "▲ " : "✓ ");
-    announce(mark + label + ": " + msg.trim().split("\n").slice(-2).join(" ") +
-             (r.status === "unknown" ? " — run it again to check" : ""));
-  } catch (err) { announce("✗ " + label + " failed: " + err.message); }
-  btns.forEach((b) => { b.disabled = false; });
+    if (current()) {
+      announce(mark + label + ": " + msg.trim().split("\n").slice(-2).join(" ") +
+               (r.status === "unknown" ? " — run it again to check" : ""));
+    }
+  } catch (err) {
+    if (current()) announce("✗ " + label + " failed: " + err.message);
+  }
+  release();
+  if (current()) renderPanelState(state, { state: "populated" });
   loadStatus(); loadGrid(true);
   loadStation();
 }
@@ -1095,63 +1177,21 @@ async function submitAsk() {
   } catch (err) { return finish("failed", err.message); }
   if (!job.job_id) return finish(job.status === "error" ? "failed" : "healthy", job.result || "done");
   inp.value = "";
-  // Poll until the job reaches a terminal status. A lost poll is reported as
-  // "status unknown" and retried more slowly — never as a success or a failure.
-  let elapsed = 0;
-  let delay = JOB_POLL_MS;
-  let timer = null;
-  let stopped = false;
-  const schedule = (ms) => {
-    if (stopped || !current()) return;
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(poll, ms);
-  };
-  // A poll that cannot reach the server must never leave the form dead. Give
-  // the controls back at once, keep checking in the background, and offer both
-  // an immediate check and a way to stop waiting.
-  const renderUnknown = (message) => {
-    if (!current()) return;
-    btn.disabled = false; inp.disabled = false;
-    const again = makeEl("button", "mini", "Check now");
-    again.addEventListener("click", () => { delay = JOB_POLL_MS; schedule(0); });
-    const stop = makeEl("button", "mini", "Stop checking");
-    stop.addEventListener("click", () => {
-      stopped = true;
-      if (timer !== null) { clearTimeout(timer); timer = null; }
-      finish("attention", "stopped checking — the job may still be running");
-    });
-    out.replaceChildren(statusBadge("attention", message), again, stop);
-  };
-  const poll = async () => {
-    if (stopped || !current()) return;
-    timer = null;
-    let s;
-    try {
-      s = await api("/api/request/" + encodeURIComponent(job.job_id));
-    } catch (err) {
-      if (err.status === 404) {
-        return finish("attention", "status unknown: the server no longer tracks this job");
-      }
-      delay = JOB_BACKOFF_MS;
-      renderUnknown("status unknown (" + err.message + ") — checking again in 10s");
-      schedule(delay);
-      return;
-    }
-    if (s.status === "working") {
-      elapsed += delay;
-      delay = JOB_POLL_MS;
-      // Controls handed back after a lost poll are never taken away again: a
-      // recovered poll updates the badge and leaves the form usable.
-      if (current()) {
-        out.replaceChildren(statusBadge("working",
-          "working on it… (" + Math.round(elapsed / 1000) + "s)"));
-      }
-      schedule(delay);
-      return;
-    }
-    finish(s.status === "done" ? "healthy" : "failed", s.result || "done");
-  };
-  schedule(JOB_POLL_MS);
+  // The same poller the Actions panel uses: never a false success, never a
+  // failure invented from a lost read, and never a form left disabled.
+  const final = await watchJob(job, {
+    superseded: () => !current(),
+    // Controls handed back after a lost poll are never taken away again.
+    release: () => { if (current()) { btn.disabled = false; inp.disabled = false; } },
+    working: (seconds) => {
+      if (current()) renderJobState(out, "working", "working on it… (" + seconds + "s)", []);
+    },
+    unknown: (message, actions) => {
+      if (current()) renderJobState(out, "attention", message, actions);
+    },
+  });
+  finish(final.status === "done" ? "healthy"
+    : (final.status === "unknown" ? "attention" : "failed"), final.result || "done");
 }
 
 // ---------------------------------------------------------------------------
@@ -1224,6 +1264,7 @@ if (COMMONJS) {
       if (refreshTimer !== null) { clearInterval(refreshTimer); refreshTimer = null; }
       libraryAbort = null;
       askGeneration = 0;
+      actionGeneration = 0;
       Object.assign(STATE, initialState());
     },
   };

@@ -479,16 +479,23 @@ closes any modal it had open, and pauses and detaches its media.
   no per-item recheck endpoint — **Run revive (all retired)**
   (`POST /api/pool/revive`) for a dead one, labelled as the pool-wide sweep it
   is. A mutation updates only the row it changed and refreshes the counts: it
-  never resets filters, page offset or scroll. Focus goes to the heading on
-  open and back to the Inspect button on close; Escape closes it; Tab is
-  trapped while it is modal.
+  never resets filters, page offset or scroll, and any `warning` the server
+  answers with is rendered inside the dialog as well as announced. Focus goes to
+  the heading on open and back to the Inspect button on close; Escape closes it;
+  Tab is trapped while it is modal. The inspector is opened from any surface
+  that draws a card, so a route change — from the Composer as much as the
+  Library — closes it and aborts its read.
 - **Deletion** — permanent deletion exists only in the inspector's danger zone
   and in the Library's own **Danger zone**; no card carries a delete control.
   Both confirmations name the item, state the file consequence in the
   endpoint's terms, offer the `keep_file` / `keep_files` the endpoint documents,
-  put **Cancel** first and focus it, and do not treat Escape as an answer. Bulk
-  kind deletion (`DELETE /api/pool/kind/{kind}`) additionally requires typing
-  the kind name exactly before its confirm button works.
+  and put **Cancel** first and focus it; the destructive button is never the
+  default, and dismissing the dialog any way at all — Cancel or Escape —
+  resolves as a refusal and sends nothing. Bulk kind deletion
+  (`DELETE /api/pool/kind/{kind}`) additionally requires typing the kind name
+  exactly before its confirm button works. A `cleanup_failed` response keeps
+  the inspector open carrying that news, because it is the only surface that
+  said so.
 - **Composer** (`#/composer`) — one item
   (`GET /api/bumpers/random?count=1&explain=true`) and 15/30/60/90-second packs
   (`GET /api/bumpers/fill?seconds=N&explain=true`). Cards show creative data,

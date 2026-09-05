@@ -35,16 +35,23 @@
   named for the pool-wide sweep it actually is, because there is no per-item
   recheck endpoint. A mutation updates only the row it changed and refreshes
   the counts; it never resets the filters, the page offset or the scroll
-  position.
+  position. Whatever the server answers back — the rotation that will undo an
+  enable, a file a delete could not finish removing — is rendered inside the
+  dialog as well as announced, because the live region sits outside the modal
+  and is inert under it.
 - Permanent deletion now exists only in the inspector's danger zone and the
   Library's own **Danger zone**. Both confirmations name the item, state the
   file consequence in the endpoint's own terms, offer the `keep_file` /
-  `keep_files` the API documents, put **Cancel** first and focus it, and do not
-  treat Escape as an answer. Deleting a whole kind additionally requires typing
-  the kind name exactly before the confirm button will work.
-- Dialogs focus their heading on open, trap Tab only while modal, return focus
-  to whatever opened them, and are closed by a route change. Grid/list layout
-  is the one thing the page keeps in `localStorage`, and a browser that refuses
+  `keep_files` the API documents, and put **Cancel** first and focus it; the
+  destructive button is never the default, and dismissing the dialog any way at
+  all — Cancel or Escape — is a refusal that sends nothing. Deleting a whole
+  kind additionally requires typing the kind name exactly first.
+- Dialogs focus their heading on open, trap Tab only while modal, and return
+  focus to whatever opened them. Because the inspector opens from any surface
+  that draws a card, a route change closes it, aborts its read and releases its
+  media at the route level rather than in one view's exit — so leaving the
+  Composer tears down as thoroughly as leaving the Library. Grid/list layout is
+  the one thing the page keeps in `localStorage`, and a browser that refuses
   storage still works.
 
 **API: status counts, library state filter, reversible disable, single-card render**

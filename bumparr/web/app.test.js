@@ -1978,7 +1978,9 @@ function stubInspector(over) {
     if (isDetailUrl(u) && method === "GET") {
       return jsonReply(Object.assign({}, DETAIL, o.detail));
     }
-    if (u.startsWith("/api/bumpers")) {
+    // GET only: a DELETE of /api/bumpers/{id} is a mutation, and answering it
+    // with a listing body would hide whatever the endpoint really said back.
+    if (u.startsWith("/api/bumpers") && method === "GET") {
       return jsonReply(o.bumpers || { count: 0, total: 0, bumpers: [] });
     }
     return jsonReply(o.reply || { status: "done", result: "ok" });
@@ -2359,6 +2361,67 @@ test("a mutation refreshes the row it changed without resetting filters or pagin
   assert.ok(calls.some((c) => c.url.startsWith("/api/status")), "the counts are refreshed");
 });
 
+test("the server's warning is shown inside the inspector, not only announced",
+     async () => {
+  // #live-region sits outside the modal and is inert under it, so a warning
+  // that only went there was a warning the operator reading the dialog never
+  // saw. It has to survive being a hostile string, like every other API value.
+  const hostile = '<img src=x onerror="globalThis.pwned=52">';
+  stubInspector({ reply: { id: "card:psa:abc", enabled: false, changed: true,
+                           warning: hostile } });
+  await openInspector("card:psa:abc");
+  await inspectorButton("Disable from rotation").click();
+  await flush();
+  const dlg = $("#inspector");
+  assert.ok(textOf(dlg).includes(hostile), "the warning is inside the dialog");
+  assert.equal(descendants(dlg).filter((n) => n.tagName === "IMG").length, 0);
+  assert.match(textOf($("#inspector-state")), /Attention/);
+  assert.ok($("#live-region").textContent.includes(hostile), "and announced too");
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("a mutation the server had nothing to add to leaves no warning behind",
+     async () => {
+  stubInspector({ reply: { id: "card:psa:abc", enabled: false, changed: true } });
+  await openInspector("card:psa:abc");
+  await inspectorButton("Disable from rotation").click();
+  await flush();
+  assert.equal($("#inspector-state").dataset.state, "populated");
+  assert.equal(STATE.inspector.notice, "");
+});
+
+test("a delete that left a file behind keeps saying so where it can be read",
+     async () => {
+  // cleanup_failed means the row is gone but something is still on disk. The
+  // inspector is the only surface that said so, so it does not close on it.
+  const calls = stubInspector({ reply: { deleted: "card:psa:abc", kind: "psa",
+    title: "Stay tuned", file_removed: false, dir_removed: false,
+    cleanup_failed: true } });
+  await openInspector("card:psa:abc");
+  const pending = deleteBumper({ id: "card:psa:abc", title: "Stay tuned" });
+  await flush();
+  dialogButton("Delete permanently").click();
+  await pending;
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE").map((c) => c.url),
+                   ["/api/bumpers/card%3Apsa%3Aabc"]);
+  assert.equal($("#inspector").open, true, "the dialog stays up to carry the news");
+  assert.match(textOf($("#inspector-state")), /quarantine file remains/);
+  assert.equal($("#inspector-body").children.length, 0,
+               "but there is nothing left to inspect");
+  assert.match(logText(), /quarantine file remains/);
+});
+
+test("a clean delete closes the inspector on the row it removed", async () => {
+  stubInspector({ reply: { deleted: "card:psa:abc", kind: "psa", title: "x",
+    file_removed: true, dir_removed: false, cleanup_failed: false } });
+  await openInspector("card:psa:abc");
+  const pending = deleteBumper({ id: "card:psa:abc", title: "x" });
+  await flush();
+  dialogButton("Delete permanently").click();
+  await pending;
+  assert.equal($("#inspector").open, false);
+});
+
 test("a mutation that redraws the inspector does not drop focus out of it",
      async () => {
   // The clicked button is replaced by the redraw and disabled by the job
@@ -2462,6 +2525,77 @@ test("leaving the library closes the inspector it left open", async () => {
   assert.equal($("#inspector").open, false, "no modal survives a route change");
 });
 
+test("an inspector opened from the composer is torn down by a route change too",
+     async (t) => {
+  // The inspector belongs to every surface that draws a card, not to the
+  // Library. Wiring its teardown into exitLibrary alone left a native <dialog>
+  // in the top layer over the next view, its explain read still in flight and
+  // still able to write, and the composer's video still playing.
+  const pack = { requested: 15, total: 8, gap: 7, exact: false, count: 1,
+                 bumpers: [{ id: "vid:a", type: "video", kind: "ambient",
+                             title: "clip", duration: 8, enabled: 1, health: "ok",
+                             media_url: "/media/a.mp4" }] };
+  let detail = null;
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    const u = String(url);
+    if (isDetailUrl(u)) {
+      detail = { signal: opts.signal, resolve };
+      opts.signal.addEventListener("abort", () => {
+        const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+      });
+      return;
+    }
+    if (u.startsWith("/api/bumpers/fill")) return resolve(jsonReply(pack));
+    if (u.startsWith("/api/station")) return resolve(jsonReply(OK_STATION));
+    resolve(jsonReply(OK_STATUS));
+  });
+
+  await applyHash("#/composer");
+  await previewPack(15);
+  const video = descendants($("#preview-grid")).find((n) => n.tagName === "VIDEO");
+  await video.play();
+  const inspect = descendants($("#preview-grid")).find(
+    (n) => n.tagName === "BUTTON" && n.className.includes("pv-inspect"));
+  inspect.click();
+  await flush();
+  assert.equal($("#inspector").open, true, "the composer's cards inspect too");
+  assert.ok(detail, "and the detail read is in flight");
+
+  applyHash("#/overview");
+  await flush();
+  assert.equal($("#inspector").open, false, "the dialog does not outlive the view");
+  assert.equal(detail.signal.aborted, true, "nor does its read");
+  assert.equal(video.paused, true, "nor does the media it was showing");
+  assert.equal(video.src, "");
+  assert.equal(STATE.inspector.value, null);
+  assert.equal(STATE.inspector.loading, false,
+               "a cancelled read does not leave the panel waiting forever");
+
+  // The abandoned answer arrives after the teardown and writes nothing.
+  detail.resolve(jsonReply(DETAIL));
+  await flush();
+  assert.equal(STATE.inspector.value, null);
+  assert.equal($("#inspector").open, false);
+});
+
+test("rebuilding a preview grid lets go of the media it was showing", async () => {
+  const row = (id) => ({ id, type: "video", kind: "ambient", title: id,
+                         duration: 8, enabled: 1, health: "ok",
+                         media_url: "/media/" + id + ".mp4" });
+  global.fetch = async () => jsonReply({ requested: 15, total: 8, gap: 7,
+    exact: true, count: 1, bumpers: [row("a")] });
+  await previewPack(15);
+  const first = descendants($("#preview-grid")).find((n) => n.tagName === "VIDEO");
+  await first.play();
+  assert.equal(first.paused, false);
+
+  global.fetch = async () => jsonReply({ requested: 30, total: 8, gap: 22,
+    exact: false, count: 1, bumpers: [row("b")] });
+  await previewPack(30);
+  assert.equal(first.paused, true, "the replaced card is not left playing");
+  assert.equal(first.src, "", "nor left holding its buffer");
+});
+
 // --- danger flows ----------------------------------------------------------
 
 test("the delete confirmation names the item and states the file consequence",
@@ -2548,17 +2682,31 @@ test("cancelling the bulk flow sends no request", async () => {
   assert.deepEqual(calls.filter((c) => c.method === "DELETE"), []);
 });
 
-test("Escape does not dismiss a destructive confirmation", async () => {
-  // Cancel is focused and first, so leaving is one keystroke either way; what
-  // must never happen is a stray Escape being taken for an answer.
-  stubInspector();
+test("Escape cancels a destructive confirmation and sends no request", async () => {
+  // Escape is the cancel direction, so it takes the same path Cancel does:
+  // the promise resolves false and nothing destructive is sent. What Escape
+  // must never do is confirm.
+  const calls = stubInspector();
   const pending = deleteBumper({ id: "a", title: "x" });
   await flush();
   const dlg = topDialog();
   await dlg.dispatch("keydown", { key: "Escape" });
-  assert.equal(topDialog(), dlg, "the confirmation is still up");
-  dialogButton("Cancel").click();
+  assert.equal(topDialog(), null, "Escape dismisses the confirmation");
+  assert.equal(await pending, null, "and it is dismissed as a refusal");
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE"), []);
+  assert.match(logText(), /delete cancelled/);
+});
+
+test("a native dialog's own cancel event is also a refusal", async () => {
+  // The UA turns Escape into `cancel` before it turns into a close; app.js
+  // takes that door rather than letting the browser tear the dialog down
+  // behind its back.
+  const calls = stubInspector();
+  const pending = deleteBumper({ id: "a", title: "x" });
+  await flush();
+  await topDialog().dispatch("cancel", {});
   assert.equal(await pending, null);
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE"), []);
 });
 
 test("the danger zone is dead until a kind is actually selected", () => {

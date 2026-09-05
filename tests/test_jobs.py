@@ -1,6 +1,8 @@
 """M6: background loops survive transient errors; stat failures read as unknown."""
 import asyncio
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -12,7 +14,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bumparr import app as webapp
-from bumparr import jobs
+from bumparr import config, db, jobs
 
 
 class RefreshOnce(unittest.TestCase):
@@ -168,6 +170,84 @@ class ActionJobs(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(second_ran.is_set())
         self.assertFalse(webapp._JOBS[first["job_id"]]["worker_active"])
         self.assertEqual(webapp._JOBS[second["job_id"]]["status"], "done")
+
+
+class RenderCardsRoute(unittest.IsolatedAsyncioTestCase):
+    """POST /api/render/cards?bumper_id=... — validated before any job starts.
+
+    `_run` is mocked in the success case so this never shells out to ffmpeg;
+    the batch (no bumper_id) path is unchanged and covered elsewhere.
+    """
+
+    async def asyncSetUp(self):
+        self.semaphore = webapp._JOB_SEMAPHORE
+        webapp._JOB_SEMAPHORE = asyncio.Semaphore(2)
+        with webapp._JOB_LOCK:
+            webapp._JOBS.clear()
+            webapp._JOB_TASKS.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        originals = (config.DB_PATH, config.ASSET_ROOT, config.OUTPUT_DIR)
+        config.DB_PATH = str(Path(self.tmp.name) / "render.db")
+        config.ASSET_ROOT = Path(self.tmp.name) / "assets"
+        config.OUTPUT_DIR = config.ASSET_ROOT / "bumpers"
+        config.ASSET_ROOT.mkdir(); config.OUTPUT_DIR.mkdir()
+        for attr, value in zip(("DB_PATH", "ASSET_ROOT", "OUTPUT_DIR"), originals):
+            self.addCleanup(setattr, config, attr, value)
+        db.init_db()
+
+    async def asyncTearDown(self):
+        tasks = list(webapp._JOB_TASKS.values())
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        webapp._JOB_SEMAPHORE = self.semaphore
+
+    def _seed(self, pid, type_="card", uri=None):
+        with db.conn() as c:
+            c.execute(
+                "INSERT INTO playables (id,type,kind,uri,duration,enabled,health,payload) "
+                "VALUES (?,?,?,?,?,1,'ok','{}')", (pid, type_, "trivia", uri, 8))
+            c.commit()
+
+    async def test_unknown_bumper_id_is_404(self):
+        out = await webapp.render_cards(bumper_id="nope")
+        self.assertEqual(out.status_code, 404)
+        self.assertEqual(json.loads(out.body), {"error": "not found"})
+
+    async def test_non_card_bumper_id_is_400(self):
+        self._seed("v", type_="video", uri="ambient/x.mp4")
+        out = await webapp.render_cards(bumper_id="v")
+        self.assertEqual(out.status_code, 400)
+        self.assertEqual(json.loads(out.body), {"error": "not a card"})
+
+    async def test_card_bumper_id_returns_a_job_whose_label_contains_the_id(self):
+        self._seed("t:card-1")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch.object(webapp, "_run", return_value=completed) as run:
+            out = await webapp.render_cards(bumper_id="t:card-1")
+            self.assertIn("job_id", out)
+            with webapp._JOB_LOCK:
+                label = webapp._JOBS[out["job_id"]]["request"]
+            self.assertIn("t:card-1", label)
+            await asyncio.gather(*list(webapp._JOB_TASKS.values()))
+        run.assert_called_once_with("bumparr.render_cards", "--id", "t:card-1")
+
+    async def test_bumper_id_force_is_forwarded_to_the_cli(self):
+        self._seed("t:card-2")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch.object(webapp, "_run", return_value=completed) as run:
+            await webapp.render_cards(bumper_id="t:card-2", force=True)
+            await asyncio.gather(*list(webapp._JOB_TASKS.values()))
+        run.assert_called_once_with("bumparr.render_cards", "--id", "t:card-2", "--force")
+
+    async def test_batch_path_unchanged_when_bumper_id_absent(self):
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch.object(webapp, "_run", return_value=completed) as run:
+            out = await webapp.render_cards(limit=5, force=True)
+            await asyncio.gather(*list(webapp._JOB_TASKS.values()))
+        run.assert_called_once_with("bumparr.render_cards", "--limit", "5", "--force")
+        with webapp._JOB_LOCK:
+            self.assertEqual(webapp._JOBS[out["job_id"]]["request"], "render cards")
 
 
 class ChannelMemoryLoop(unittest.TestCase):

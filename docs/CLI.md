@@ -52,6 +52,7 @@ rows at the files. Offline and idempotent. Details in [RENDERING.md](RENDERING.m
 | `--kind KIND` | restrict (repeatable) |
 | `--force` | re-render even if a file exists |
 | `--refresh-volatile` | only the perishable kinds (clock, weather) whose files expired |
+| `--id ID` | render only this card id (repeatable); ignores `--limit`/`--kind` and the render-pending filter — the row named still renders even if it already has a file |
 
 ### `bumparr.starter` — run the shipped starter seeds
 

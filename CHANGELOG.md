@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+**API: status counts, library state filter, reversible disable, single-card render**
+- `GET /api/status` adds `parked`, `dead`, and `unrendered` counts, computed
+  with the exact same SQL definitions `GET /api/bumpers?state=` uses, so the
+  two can never disagree.
+- `GET /api/bumpers` adds `total` (rows matching every filter before
+  `limit`/`offset`; `count` stays the page size) and an optional `state` filter
+  (`all` \| `playable` \| `parked` \| `dead` \| `unrendered`) that composes with
+  the existing `type`/`kind`/`enabled`/`q` filters. An invalid `state` is a
+  FastAPI 422.
+- `POST /api/pool/disable?bumper_id=` is the reversible counterpart to
+  `enable`: sets `enabled=0` only, never touching `health`, `uri`, or files.
+  Returns `{id, enabled, changed}`, plus a `warning` when the dated-card
+  rotation will re-enable an `on_this_day` card that belongs to today on its
+  next pass — the one case in the code that actually undoes a disable.
+- `POST /api/render/cards` accepts an optional `bumper_id` to render exactly
+  one card (404 unknown, 400 non-card, before any job starts) instead of a
+  batch pass; `bumparr.render_cards`'s CLI gained a matching `--id` flag.
+
 **Operator dashboard: truthful states and accessible foundations**
 - Every panel (Pool, Station, Preview, Browse) now renders exactly one explicit
   state: loading, populated, useful empty, error with Retry, or last-known

@@ -302,5 +302,62 @@ class RenderHardening(unittest.TestCase):
         self.assertEqual(list(dest.parent.glob(".*.part.mp4")), [])
 
 
+class RenderAllById(unittest.TestCase):
+    """`render_all(ids=...)` — the selection `--id` (and POST .../cards?bumper_id=)
+    rely on. render_one is mocked throughout: no ffmpeg involved."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        originals = (config.DB_PATH, config.ASSET_ROOT)
+        config.DB_PATH = str(Path(self.tmp.name) / "byid.db")
+        config.ASSET_ROOT = Path(self.tmp.name) / "assets"
+        config.ASSET_ROOT.mkdir()
+        self.addCleanup(setattr, config, "DB_PATH", originals[0])
+        self.addCleanup(setattr, config, "ASSET_ROOT", originals[1])
+        db.init_db()
+        with db.conn() as c:
+            c.executemany(
+                "INSERT INTO playables (id,type,kind,uri,duration,enabled,health,payload) "
+                "VALUES (?,?,?,?,?,1,'ok','{}')",
+                [("c1", "card", "trivia", None, 8),
+                 ("c2", "card", "trivia", None, 8),
+                 ("v1", "video", "ambient", "clip.mp4", 5)])
+            c.commit()
+
+    def test_ids_selects_only_the_named_card_rows(self):
+        with mock.patch.object(render_cards, "render_one",
+                               return_value=("rendered", "cards/c1.mp4")) as render_one:
+            res = render_cards.render_all(ids=["c1"])
+        render_one.assert_called_once()
+        self.assertEqual(render_one.call_args.args[0]["id"], "c1")
+        self.assertEqual(res["stats"]["rendered"], 1)
+
+    def test_ids_ignores_a_non_card_id(self):
+        """A video id passed to --id must never be handed to the card renderer."""
+        with mock.patch.object(render_cards, "render_one",
+                               return_value=("rendered", "x")) as render_one:
+            render_cards.render_all(ids=["v1"])
+        render_one.assert_not_called()
+
+    def test_force_is_forwarded_to_render_one(self):
+        with mock.patch.object(render_cards, "render_one",
+                               return_value=("rendered", "cards/c1.mp4")) as render_one:
+            render_cards.render_all(ids=["c1"], force=True)
+        self.assertTrue(render_one.call_args.kwargs.get("force"))
+
+    def test_ids_bypasses_the_already_rendered_filter(self):
+        """Unlike the batch pass, a named id renders even with an existing uri
+        (render_one's own cache/force decision still applies)."""
+        with db.conn() as c:
+            c.execute("UPDATE playables SET uri=? WHERE id=?", ("cards/c2.mp4", "c2"))
+            c.commit()
+        with mock.patch.object(render_cards, "render_one",
+                               return_value=("cached", "cards/c2.mp4")) as render_one:
+            res = render_cards.render_all(ids=["c2"])
+        render_one.assert_called_once()
+        self.assertEqual(res["stats"]["cached"], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

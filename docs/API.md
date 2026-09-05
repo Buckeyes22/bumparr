@@ -23,6 +23,7 @@ Pool overview.
 
 ```json
 {"brand": "Bumparr", "total": 412, "playable_now": 350,
+ "parked": 40, "dead": 6, "unrendered": 12,
  "by_type": {"video": 210, "card": 150, "stream": 20, "image": 32},
  "by_kind": {"ambient": 40, "trivia": 60, ...},
  "profile": {"version": 1, "valid": true, "source": "shipped-default"},
@@ -38,6 +39,14 @@ Pool overview.
 
 `playable_now` is the enabled-and-healthy count before dynamic seasonal and
 duration filters. The gap to `total` is disabled or dead items.
+
+`parked` is rows with `enabled=0`. `dead` is rows with `health='dead'`
+(regardless of `enabled` — a row can be both). `unrendered` is card rows with
+no media file yet (`type='card' AND (uri IS NULL OR uri='')`), regardless of
+`enabled`. All three use the exact same definitions as `GET /api/bumpers`'s
+`state` filter below, so the two never disagree. There is no package version
+to report (Bumparr ships no version string anywhere), so no `version` key is
+added here.
 
 `profile` is the loaded channel profile's health, not the YAML path.
 `source` is only `shipped-default`, `custom`, or `fallback-after-error`.
@@ -65,6 +74,7 @@ and unhealthy rows.
 | `type` | all | `video` \| `card` \| `stream` \| `image` |
 | `kind` | all | any kind (`ambient`, `trivia`, `webcam`, `station_id`, …) |
 | `enabled` | all | `true` for rows still on air, `false` for parked ones |
+| `state` | `all` | `all` \| `playable` \| `parked` \| `dead` \| `unrendered` |
 | `q` | none | title/kind search (maximum 100 characters) |
 | `limit` | 200 | page size (1–1000) |
 | `offset` | 0 | page offset (non-negative) |
@@ -73,8 +83,23 @@ Omitting `enabled` means *no filter*, not `enabled=false` — the default listin
 keeps showing both. `?enabled=false` is how you find what the system parked
 without paging the whole pool by eye; `POST /api/pool/enable` is the way back.
 
-Response: `{"count": N, "bumpers": [{id, type, kind, source, duration, title,
-tags, enabled, health, media_url, payload, creative, music_credits?}]}`. `payload` is the
+`state` narrows by operational health/renderedness and composes with every
+filter above (AND, same as `enabled`/`type`/`kind`/`q`): `all` applies no
+operational filter; `playable` is `enabled` + `health='ok'` + a resolvable
+media URI (a stream's own `uri`, or a rendered file for anything else);
+`parked` is `enabled=0` regardless of health; `dead` is `health='dead'`
+regardless of `enabled`; `unrendered` is a card with no file yet. An invalid
+value is a FastAPI 422 validation response, not a silent fallback to `all`.
+`state=playable` additionally requires a media URI, so it can read smaller
+than `/api/status`'s `playable_now` by exactly the enabled-and-healthy-but-
+unrendered cards — `playable_now` does not check for a uri, `state=playable`
+does.
+
+Response: `{"count": N, "total": M, "bumpers": [{id, type, kind, source,
+duration, title, tags, enabled, health, media_url, payload, creative,
+music_credits?}]}`. `count` is the number of rows on this page; `total` is the
+number matching every filter above **before** `limit`/`offset` — use it to
+know how many pages exist. `payload` is the
 parsed JSON card content (lines/answer/number/meaning/…), null-ish for plain
 media. `creative` is the resolved vocabulary from `bumparr.creative` (family,
 roles, energy, audio, …); it does not replace `payload`. `music_credits` is
@@ -273,6 +298,32 @@ lasts exactly until the next restart. Putting the entry back is what stops the
 parking; enabling is what undoes the park already recorded, because the loader
 never re-enables a cam it does find. Both steps, in that order.
 
+### `POST /api/pool/disable`
+
+Turn one row off: `?bumper_id=<id>`. The reversible counterpart to `enable` —
+sets `enabled=0` and touches nothing else: not `health`, not `uri`, not the
+file, not history. This is "stop offering this," never "this is broken"
+(that is `health`, which a sweep or a future failure reporter owns) or "this
+is gone" (`DELETE /api/bumpers/{id}`, a different endpoint with its own
+file-removal contract). Response: `{id, enabled, changed}` — `changed` is
+`true` only if the row was enabled before this call — or 404 `{error}` if no
+such id.
+
+The same optional `warning` key as `enable`, but for the opposite direction:
+present only when a schedule may put the row back regardless of this call.
+Today that is exactly an `on_this_day` card that belongs to today — the
+dated-card rotation (`bumparr.jobs.dated_card_loop`) enables every disabled
+row matching today's date on its next pass (startup, then hourly), so
+disabling one is undone almost immediately unless the operator knows to
+expect it. A card for another day gets no warning (the rotation only ever
+turns those off, never back on, so disabling one is not undone). A
+config-owned live cam also gets no warning: `live_cams.load_cams` never sets
+`enabled=1` on a row it finds in the YAML — refreshing a cam's `uri`/weight
+never touches `enabled` — so a disabled cam stays disabled until an operator
+re-enables it, no matter how many reloads happen. Absent for every other row;
+the three keys above never change, and absence is never a promise of
+permanence for `on_this_day` or config-owned rows either way.
+
 ### `POST /api/starter`
 
 Run the shipped starter seeds (the suggested first pulls). Opt-in, spaced out
@@ -283,8 +334,16 @@ for the archives. Params: `dry_run`, `only_free` (skip stock-API entries),
 
 Render text cards to MP4 so non-browser consumers can play them. Offline and
 idempotent; already-rendered cards are skipped. Params: `limit` (render in
-batches, 1–1000), `force`. Returns a background job id. Details in
-[RENDERING.md](RENDERING.md).
+batches, 1–1000), `force`, `bumper_id` (maximum 200 characters). Returns a
+background job id. Details in [RENDERING.md](RENDERING.md).
+
+`bumper_id`, if given, renders exactly that one card instead of a batch pass —
+validated before the job starts: 404 `{error: "not found"}` for an unknown id,
+400 `{error: "not a card"}` if the row is not `type='card'`. The job label is
+`render card <id>` (truncated to 80 characters), so it is identifiable in the
+job list even while several renders run at once. `force` still applies.
+`limit`/`bumper_id` are mutually exclusive in effect: batch behaviour with
+`limit` is unchanged when `bumper_id` is absent.
 
 ### `POST /api/generate/{kind}`
 

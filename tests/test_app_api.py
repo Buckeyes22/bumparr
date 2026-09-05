@@ -277,6 +277,90 @@ class AppApi(unittest.TestCase):
         self.assertEqual(out["by_kind"]["shared"], 2)
         self.assertEqual(out["by_type"], {"card": 1, "video": 1})
 
+    def test_status_counts_parked_dead_and_unrendered(self):
+        """The additive counts must agree with the `state` filter's definitions."""
+        live = _row(1, 10.0)
+        parked = _row(2, 10.0); parked["enabled"] = 0
+        dead = _row(3, 10.0); dead["health"] = "dead"
+        unrendered = _row(4, 4.0, type="card", kind="trivia")
+        unrendered["uri"] = None
+        out = self._run_child("status", [live, parked, dead, unrendered])
+        self.assertEqual(out["parked"], 1)
+        self.assertEqual(out["dead"], 1)
+        self.assertEqual(out["unrendered"], 1)
+        # No version constant exists anywhere in the package; the key must be
+        # omitted rather than invented.
+        self.assertNotIn("version", out)
+
+    def test_list_total_reflects_filtered_rows_before_pagination(self):
+        seed = [_row(i, 10.0) for i in range(5)]
+        out = self._run_child("list", seed, limit=2, offset=0)
+        self.assertEqual(out["count"], 2)
+        self.assertEqual(out["total"], 5)
+        out = self._run_child("list", seed, limit=2, offset=4)
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["total"], 5)
+
+    def test_list_state_all_applies_no_operational_filter(self):
+        on = _row(1, 10.0, type="video")
+        off = _row(2, 10.0, type="video"); off["enabled"] = 0
+        dead = _row(3, 10.0, type="video"); dead["health"] = "dead"
+        unrendered = _row(4, 4.0, type="card", kind="trivia"); unrendered["uri"] = None
+        seed = [on, off, dead, unrendered]
+        out = self._run_child("list", seed, limit=10, offset=0, state="all")
+        self.assertEqual(out["count"], 4)
+        self.assertEqual(out["total"], 4)
+
+    def test_list_state_playable_excludes_unrendered_card_includes_stream(self):
+        on = _row(1, 10.0, type="video")
+        unrendered = _row(2, 4.0, type="card", kind="trivia"); unrendered["uri"] = None
+        stream = _row(3, 45.0, type="stream", kind="webcam")
+        stream["uri"] = "http://example.com/a.m3u8"
+        seed = [on, unrendered, stream]
+        out = self._run_child("list", seed, limit=10, offset=0, state="playable")
+        ids = {b["id"] for b in out["bumpers"]}
+        self.assertEqual(ids, {"t:item-1", "t:item-3"})
+        self.assertEqual(out["total"], 2)
+
+    def test_list_state_parked_ignores_health(self):
+        off_ok = _row(1, 10.0, type="video"); off_ok["enabled"] = 0
+        off_dead = _row(2, 10.0, type="video")
+        off_dead["enabled"] = 0; off_dead["health"] = "dead"
+        on = _row(3, 10.0, type="video")
+        out = self._run_child("list", [off_ok, off_dead, on], limit=10, offset=0,
+                              state="parked")
+        self.assertEqual({b["id"] for b in out["bumpers"]},
+                         {"t:item-1", "t:item-2"})
+
+    def test_list_state_dead(self):
+        dead = _row(1, 10.0, type="video"); dead["health"] = "dead"
+        on = _row(2, 10.0, type="video")
+        out = self._run_child("list", [dead, on], limit=10, offset=0, state="dead")
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-1"})
+
+    def test_list_state_unrendered(self):
+        unrendered = _row(1, 4.0, type="card", kind="trivia"); unrendered["uri"] = None
+        rendered = _row(2, 4.0, type="card", kind="trivia")
+        out = self._run_child("list", [unrendered, rendered], limit=10, offset=0,
+                              state="unrendered")
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-1"})
+
+    def test_list_state_composes_with_type_filter(self):
+        on = _row(1, 10.0, type="video")
+        stream = _row(2, 45.0, type="stream", kind="webcam")
+        stream["uri"] = "http://example.com/a.m3u8"
+        out = self._run_child("list", [on, stream], limit=10, offset=0,
+                              state="playable", type="stream")
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-2"})
+
+    def test_hostile_title_in_state_filtered_list_is_plain_json_data(self):
+        hostile = '<img src=x onerror=alert(1)>"; DROP TABLE playables; --'
+        row = _row(1, 4.0)
+        row["title"] = hostile
+        out = self._run_child("list", [row], limit=10, offset=0, state="playable")
+        self.assertEqual(out["bumpers"][0]["title"], hostile)
+        self.assertEqual(out["total"], 1)
+
     def test_status_profile_is_not_a_path(self):
         out = self._run_child("status")
         profile = out["profile"]
@@ -492,6 +576,22 @@ class HttpValidation(unittest.TestCase):
         self.assertEqual(self._status("/api/bumpers/random?types=video,evil"), 400)
         self.assertEqual(self._status("/api/bumpers/fill?seconds=5&types=evil"), 400)
         self.assertEqual(self._status("/api/bumpers/fill?seconds=5&placement=close"), 200)
+
+    def test_bumpers_state_filter_validation_over_http(self):
+        self.assertEqual(self._status("/api/bumpers?state=bogus"), 422)
+        self.assertEqual(self._status("/api/bumpers?state=playable"), 200)
+        self.assertEqual(self._status("/api/bumpers?state=all"), 200)
+
+    def test_render_cards_bumper_id_length_bound(self):
+        self.assertEqual(
+            self._status("/api/render/cards?bumper_id=" + "x" * 201, "POST"), 422)
+
+    def test_pool_disable_unknown_id_is_404_over_http(self):
+        self.assertEqual(self._status("/api/pool/disable?bumper_id=nope", "POST"), 404)
+
+    def test_render_cards_unknown_bumper_id_is_404_over_http(self):
+        self.assertEqual(
+            self._status("/api/render/cards?bumper_id=nope", "POST"), 404)
 
     def test_random_default_count_contract_over_http(self):
         result = self._json("/api/bumpers/random")

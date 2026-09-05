@@ -116,16 +116,48 @@ class _StationSegmentFiles(StaticFiles):
 
 # ---------- Status / pool inspection ----------
 
+def _state_filter_sql(state):
+    """SQL boolean condition for one `state` filter value; None for `all`/unknown
+    (meaning "no operational-state filter").
+
+    Kept in exactly one place and shared, word for word, between
+    `/api/bumpers`'s WHERE clause and `/api/status`'s parked/dead/unrendered
+    counts (there each wrapped in `SUM(CASE WHEN ... THEN 1 ELSE 0 END)`), so
+    the two can never quietly define "parked"/"dead"/"unrendered" differently.
+    `playable` additionally requires a resolvable media URI (a stream's own
+    `uri`, or a rendered file for anything else), which is why it can read
+    smaller than `/api/status`'s `playable_now`: that count is enabled+healthy
+    only, before this route's stricter "has something to actually play" test.
+    """
+    return {
+        "playable": "enabled!=0 AND health='ok' AND (type='stream' OR (uri IS NOT NULL AND uri!=''))",
+        "parked": "enabled=0",
+        "dead": "health='dead'",
+        "unrendered": "type='card' AND (uri IS NULL OR uri='')",
+    }.get(state)
+
+
 @app.get("/api/status")
 def status():
     """Pool overview: total vs currently-airable counts, split by type and kind.
 
     `playable_now` is the enabled-and-healthy count before dynamic seasonal or
     duration filtering. The pool can retain disabled/dead rows for history.
+    `parked`/`dead`/`unrendered` reuse `_state_filter_sql` so they always agree
+    with `/api/bumpers?state=...`'s definitions. There is no package version
+    anywhere in this repo (no `__init__.__version__`, no pyproject) to report,
+    so no `version` key is added here rather than inventing one.
     """
     with db.conn() as c:
         rows = c.execute("SELECT type, kind, source, COUNT(*) n, SUM(CASE WHEN enabled=1 AND health='ok' THEN 1 ELSE 0 END) live "
                          "FROM playables GROUP BY type, kind").fetchall()
+        state_counts = c.execute(
+            "SELECT SUM(CASE WHEN %s THEN 1 ELSE 0 END) parked, "
+            "SUM(CASE WHEN %s THEN 1 ELSE 0 END) dead, "
+            "SUM(CASE WHEN %s THEN 1 ELSE 0 END) unrendered FROM playables"
+            % (_state_filter_sql("parked"), _state_filter_sql("dead"),
+               _state_filter_sql("unrendered"))
+        ).fetchone()
     by_type, by_kind = {}, {}
     total = live = 0
     for r in rows:
@@ -135,6 +167,9 @@ def status():
         live += r["live"]
     from bumparr.generators import channel_memory
     return {"brand": config.BRAND, "total": total, "playable_now": live,
+            "parked": state_counts["parked"] or 0,
+            "dead": state_counts["dead"] or 0,
+            "unrendered": state_counts["unrendered"] or 0,
             "by_type": by_type, "by_kind": by_kind,
             "profile": channel_profile.profile_status(),
             "music": music.manifest_status(),
@@ -144,40 +179,59 @@ def status():
 @app.get("/api/bumpers")
 def list_bumpers(request: Request, type: str = None, kind: str = None,
                  enabled: bool = None,
+                 state: Literal["all", "playable", "parked", "dead", "unrendered"] = Query("all"),
                  q: str = Query(None, max_length=100),
                  limit: int = Query(200, ge=1, le=1000),
                  offset: int = Query(0, ge=0)):
     """Browse the whole pool, newest first.
 
-    Filter by `type` (video | card | stream | image), `kind` and/or `enabled`;
-    paginate with `limit`/`offset`. Includes disabled and unhealthy rows — this
-    is the management view, not a source of playable material (that is /random,
-    /fill and /playlist.m3u). `payload` is the parsed JSON card content, if any.
+    Filter by `type` (video | card | stream | image), `kind`, `enabled` and/or
+    `state`; paginate with `limit`/`offset`. Includes disabled and unhealthy
+    rows — this is the management view, not a source of playable material
+    (that is /random, /fill and /playlist.m3u). `payload` is the parsed JSON
+    card content, if any.
 
     `enabled` defaults to None rather than False on purpose: absent has to mean
     "no filter", or the default listing would silently hide every parked row.
     `enabled=false` is how an operator finds what the system parked without
     paging the whole pool by eye; POST /api/pool/enable is the way back.
+
+    `state` (`all` | `playable` | `parked` | `dead` | `unrendered`, default
+    `all`) composes with every filter above (AND) via `_state_filter_sql`, the
+    same definitions `/api/status`'s counts use. `total` is the row count
+    matching every filter BEFORE `limit`/`offset`; `count` stays the page size.
+    A direct Python caller (tests) that omits `state` sees FastAPI's Query
+    sentinel rather than the string default, so it is normalized to `all` —
+    the same treatment `fill` gives `placement`.
     """
     if type and type not in config.PLAYABLE_TYPES:
         return JSONResponse({"error": "invalid playable type"}, status_code=400)
-    sql = "SELECT * FROM playables WHERE 1=1"
+    if not isinstance(state, str):
+        state = "all"
+    where_sql = "1=1"
     args = []
     if type:
-        sql += " AND type=?"; args.append(type)
+        where_sql += " AND type=?"; args.append(type)
     if kind:
-        sql += " AND kind=?"; args.append(kind)
+        where_sql += " AND kind=?"; args.append(kind)
     if enabled is not None:
         # 0 is the parked marker every writer uses; anything else counts as on,
         # the same reading live_cams.load_cams applies.
-        sql += " AND enabled!=0" if enabled else " AND enabled=0"
+        where_sql += " AND enabled!=0" if enabled else " AND enabled=0"
+    state_sql = _state_filter_sql(state)
+    if state_sql:
+        where_sql += " AND " + state_sql
     if isinstance(q, str) and q.strip():
         term = "%" + q.strip().replace("%", "\\%").replace("_", "\\_") + "%"
-        sql += " AND (title LIKE ? ESCAPE '\\' OR kind LIKE ? ESCAPE '\\')"
+        where_sql += " AND (title LIKE ? ESCAPE '\\' OR kind LIKE ? ESCAPE '\\')"
         args += [term, term]
-    sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"; args += [limit, offset]
     with db.conn() as c:
-        rows = c.execute(sql, args).fetchall()
+        total = c.execute("SELECT COUNT(*) n FROM playables WHERE " + where_sql,
+                          args).fetchone()["n"]
+        rows = c.execute(
+            "SELECT * FROM playables WHERE " + where_sql
+            + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            args + [limit, offset]).fetchall()
     out = []
     for r in rows:
         payload = _payload_obj(r)
@@ -187,7 +241,7 @@ def list_bumpers(request: Request, type: str = None, kind: str = None,
                 "media_url": _media_url(r, request), "payload": payload,
                 "creative": creative.resolve_creative(r)}
         out.append(_attach_credits(item, payload))
-    return {"count": len(out), "bumpers": out}
+    return {"count": len(out), "total": total, "bumpers": out}
 
 
 def _payload_obj(row):
@@ -678,6 +732,41 @@ def revive(dry_run: bool = False):
             "dry_run": dry_run}
 
 
+_DATED_ROTATION = ("the dated-card rotation (bumparr.jobs.dated_card_loop — on "
+                   "startup, then hourly)")
+
+
+def _on_this_day_status(kind, payload):
+    """(is_today, for_date, today) for an on_this_day row, or None for any
+    other kind — no schedule owns those, so neither warning applies.
+
+    Shared by the enable and disable warnings so both read the calendar
+    rotation's own predicate (on_this_day.is_todays_card) rather than each
+    parsing/deciding separately, which is what let them disagree with the
+    rotation before (see the note on `for_date` below): the rotation matched
+    the serialized payload text with SQL LIKE while an earlier version of this
+    parsed the JSON, and the two disagreed on a compact-serialized card and on
+    a NULL payload. `for_date` is read here only to name the day in a
+    sentence, never to decide.
+
+    The kind test is exact rather than heuristic: on_this_day is the only kind
+    bumparr.jobs._rotate_dated_cards (via on_this_day.retire_other_days)
+    writes `enabled` for, and it is the only writer of that kind's `enabled` —
+    confirmed by reading both call sites, not assumed. live_cams.load_cams
+    never sets `enabled=1` on a row it finds (only ever parks ones it does
+    not), so no cam kind needs a case here at all.
+    """
+    if kind != "on_this_day":
+        return None
+    from bumparr.generators import on_this_day
+    try:
+        for_date = (json.loads(payload or "{}") or {}).get("for_date")
+    except Exception:
+        for_date = None
+    today = on_this_day.today_key()
+    return on_this_day.is_todays_card(payload, today), for_date, today
+
+
 def _calendar_park_warning(kind, payload):
     """The sentence to attach when `enabled` on this row is not the operator's.
 
@@ -694,33 +783,44 @@ def _calendar_park_warning(kind, payload):
     Refusing would be worse than the surprise: the operator named an id, and
     naming an id is the decision. So the endpoint does what it was asked and
     says what will happen to it. Returns None for rows no schedule owns.
-
-    The kind test is exact rather than heuristic: on_this_day is the only kind
-    the rotation writes, and the rotation is the only writer of that kind's
-    `enabled`. The date test is the rotation's own predicate
-    (on_this_day.is_todays_card), so the sentence and the next pass give the
-    same answer. They did not always: this parsed the payload while the
-    rotation matched the serialized text with SQL LIKE, which disagreed on a
-    compact-serialized card and on a NULL payload. `for_date` is read here only
-    to name the day in the sentence, never to decide.
     """
-    if kind != "on_this_day":
+    ctx = _on_this_day_status(kind, payload)
+    if ctx is None:
         return None
-    from bumparr.generators import on_this_day
-    try:
-        for_date = (json.loads(payload or "{}") or {}).get("for_date")
-    except Exception:
-        for_date = None
-    today = on_this_day.today_key()
-    when = ("the dated-card rotation (bumparr.jobs.dated_card_loop — on "
-            "startup, then hourly)")
-    if on_this_day.is_todays_card(payload, today):
+    is_today, for_date, today = ctx
+    if is_today:
         return ("This card is rotated by date and belongs to today (%s), so it "
                 "stays on until the date rolls over; %s parks it again then."
-                % (today, when))
+                % (today, _DATED_ROTATION))
     return ("This card is parked by date, not by an operator: it belongs to %s "
             "and today is %s. %s will park it again on its next pass, within "
-            "the hour." % (for_date or "another day", today, when.capitalize()))
+            "the hour." % (for_date or "another day", today, _DATED_ROTATION.capitalize()))
+
+
+def _calendar_disable_warning(kind, payload):
+    """The sentence to attach when disabling this row may not stick.
+
+    Verified against the actual writers rather than assumed:
+    bumparr.jobs._rotate_dated_cards calls on_this_day.retire_other_days on
+    startup and hourly, and that function turns ON every disabled row whose
+    payload matches today's date — so disabling an on_this_day card that
+    belongs to today is undone on the rotation's very next pass. A card for
+    another day is not touched either way (the rotation only ever turns those
+    OFF, never on), and live_cams.load_cams never sets enabled=1 on a row it
+    finds in the YAML (its own docstring says so, and
+    tests/test_live_cams.py::test_disabled_dead_cam_preserved_on_reload pins
+    it) — a disabled cam holds until an operator re-enables it, no warning
+    needed. Returns None for every row no schedule owns; never claims
+    permanence for the ones it does not warn about.
+    """
+    ctx = _on_this_day_status(kind, payload)
+    if ctx is None:
+        return None
+    is_today, _for_date, today = ctx
+    if not is_today:
+        return None
+    return ("This card is rotated by date and belongs to today (%s); %s will "
+            "enable it again on its next pass." % (today, _DATED_ROTATION))
 
 
 @app.post("/api/pool/enable")
@@ -764,6 +864,37 @@ def enable_playable(bumper_id: str):
     return out
 
 
+@app.post("/api/pool/disable")
+def disable_playable(bumper_id: str):
+    """Turn one row off, touching nothing else: not health, not the file, not
+    history. The reversible half of the pool's editorial controls — enable
+    says "play this," disable says "stop offering this," and neither is
+    "this is broken" (health, which stays whatever it was) or "this is gone"
+    (delete, a separate endpoint with its own file-removal contract). Mirrors
+    enable_playable's row lookup and `{id, enabled, changed}` shape.
+
+    `warning` is added only when a schedule may put the row back regardless of
+    this call — verified against the code (see _calendar_disable_warning),
+    not assumed: today that is exactly an on_this_day card that belongs to
+    today, which the dated-card rotation re-enables on its next pass. A card
+    for another day, a config-owned live cam, and every ordinary row get no
+    warning and no promise of permanence either way.
+    """
+    with db.conn() as c:
+        row = c.execute("SELECT id, enabled, kind, payload FROM playables WHERE id=?",
+                        (bumper_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        changed = bool(row["enabled"])
+        if changed:
+            c.execute("UPDATE playables SET enabled=0 WHERE id=?", (bumper_id,))
+    out = {"id": bumper_id, "enabled": False, "changed": changed}
+    warning = _calendar_disable_warning(row["kind"], row["payload"])
+    if warning:
+        out["warning"] = warning
+    return out
+
+
 @app.post("/api/starter")
 async def starter(dry_run: bool = False, only_free: bool = False,
                   limit: int = Query(None, ge=1, le=1000)):
@@ -788,16 +919,38 @@ async def starter(dry_run: bool = False, only_free: bool = False,
 
 
 @app.post("/api/render/cards")
-async def render_cards(limit: int = Query(None, ge=1, le=1000), force: bool = False):
+async def render_cards(bumper_id: str = Query(None, max_length=200),
+                       limit: int = Query(None, ge=1, le=1000), force: bool = False):
     """Render text cards to MP4 so non-browser consumers can play them.
 
     Offline and idempotent — an already-rendered card is skipped unless forced.
     Use `limit` to render in batches; a full pass over a large pool can outlast
     a comfortable request timeout.
+
+    `bumper_id`, if given, renders exactly that one card via render_cards.py's
+    `--id` instead of a batch pass — validated here, before any job starts:
+    404 for an unknown id, 400 if the row is not `type='card'`. Batch
+    behaviour with `limit`/`force` is unchanged when it is absent. A direct
+    Python caller (tests) that omits `bumper_id` sees FastAPI's Query
+    sentinel rather than None, same treatment as `fill`'s `placement`.
     """
+    if not isinstance(bumper_id, str):
+        bumper_id = None
     args = []
-    if limit:
-        args += ["--limit", str(limit)]
+    if bumper_id:
+        with db.conn() as c:
+            row = c.execute("SELECT type FROM playables WHERE id=?",
+                            (bumper_id,)).fetchone()
+        if row is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if row["type"] != "card":
+            return JSONResponse({"error": "not a card"}, status_code=400)
+        args += ["--id", bumper_id]
+        label = ("render card %s" % bumper_id)[:80]
+    else:
+        if limit:
+            args += ["--limit", str(limit)]
+        label = "render cards"
     if force:
         args += ["--force"]
     def work():
@@ -805,7 +958,7 @@ async def render_cards(limit: int = Query(None, ge=1, le=1000), force: bool = Fa
         return {"ok": r.returncode == 0,
                 "stdout": (r.stdout or "")[-4000:],
                 "stderr": (r.stderr or "")[-2000:]}
-    return _start_job("render cards", work)
+    return _start_job(label, work)
 
 
 @app.post("/api/station/conform")

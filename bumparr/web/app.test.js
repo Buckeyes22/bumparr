@@ -1358,14 +1358,64 @@ test("leaving a view stops its refresh and aborts the reads it left behind", asy
   assert.ok(signals.length >= 2, "the overview started its reads");
   assert.ok(signals.every((s) => s.signal.aborted === false));
 
+  const left = signals.slice();
   applyHash("#/operations");
   await flush();
-  assert.ok(signals.every((s) => s.signal.aborted),
+  assert.ok(left.every((s) => s.signal.aborted),
             "an in-flight read is cancelled when its view goes away");
   const before = signals.length;
   t.mock.timers.tick(REFRESH_MS * 3);
   await flush();
   assert.equal(signals.length, before, "the departed view's 20s refresh is cleared");
+});
+
+test("a route change during a status read leaves the new view a read of its own",
+     async () => {
+  // The cancel is synchronous but the rejection is not, so a `loading` flag
+  // cleared only in the catch made the destination view believe a read was
+  // still coming: Library opened with no kind chips and the header claimed the
+  // profile was unavailable until the operator navigated a second time.
+  const started = [];
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    started.push({ url: String(url), signal: opts.signal });
+    opts.signal.addEventListener("abort", () => {
+      const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+    });
+  });
+  const statusReads = () => started.filter((s) => s.url.startsWith("/api/status"));
+  applyHash("#/overview");
+  await flush();
+  assert.equal(statusReads().length, 1);
+
+  applyHash("#/library");
+  await flush();
+  assert.equal(statusReads().length, 2, "the library reads the counts its chips need");
+  assert.equal(statusReads()[0].signal.aborted, true, "the abandoned read is cancelled");
+  assert.equal(statusReads()[1].signal.aborted, false, "the replacement is not");
+  assert.equal(STATE.status.loading, true);
+  // Leave nothing in flight: an unanswered read holds api()'s 15s timer, which
+  // would keep the test process alive long after the assertions are done.
+  app.exitRoute(STATE.route);
+});
+
+test("an abandoned read cannot clear the flags of the one that replaced it", async () => {
+  const pending = [];
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    pending.push({ url: String(url), resolve });
+    opts.signal.addEventListener("abort", () => {
+      const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+    });
+  });
+  applyHash("#/overview");
+  await flush();
+  applyHash("#/library");
+  await flush();
+  // The first status read's rejection lands only now, after its replacement is
+  // already in flight.
+  await flush();
+  assert.equal(STATE.status.loading, true, "the replacement is still reading");
+  assert.equal(STATE.status.error, null, "an abandoned read reports no failure");
+  app.exitRoute(STATE.route);
 });
 
 test("the overview refreshes on its own clock only while it is the visible view", async (t) => {
@@ -1734,4 +1784,44 @@ test("a different set of filters does not show the previous answer's rows", asyn
   assert.equal($("#browse-state").dataset.state, "loading");
   release(jsonReply({ count: 0, total: 0, bumpers: [] }));
   await flush();
+});
+
+// ---------------------------------------------------------------------------
+// Unread is not unsupported
+// ---------------------------------------------------------------------------
+
+test("before the first read the shell says nothing has been read, not that a field is missing",
+     () => {
+  renderOverview();
+  const unread = [$("#header-profile"), $("#config-summary"), $("#service-summary")];
+  unread.forEach((el) => {
+    assert.doesNotMatch(textOf(el), /Not available in this version/,
+                        "a server that has not answered has claimed no such thing");
+    assert.match(textOf(el), /not read yet/);
+  });
+});
+
+test("a failed status read is never reported as a server that lacks the field", async () => {
+  global.fetch = async () => { throw new TypeError("Failed to fetch"); };
+  await applyHash("#/overview");
+  assert.equal(STATE.status.value, null);
+  assert.equal($("#pool-state").dataset.state, "error");
+  assert.match(textOf($("#pool-state")), /could not be reached/,
+               "the failure itself is still spelled out once");
+  [$("#header-profile"), $("#config-summary"), $("#service-summary")].forEach((el) => {
+    assert.doesNotMatch(textOf(el), /Not available in this version/);
+    assert.match(textOf(el), /not read/);
+  });
+  assert.equal($("#warnings-state").dataset.state, "error");
+  assert.match(textOf($("#warnings-state")), /nothing has been checked/i,
+               "an unread overview does not look like a clean bill of health");
+});
+
+test("a read that landed without the field is the one case that says unavailable", () => {
+  STATE.status.value = { total: 1, playable_now: 1, by_kind: {}, by_type: {} };
+  STATE.status.updatedAt = 1000;
+  renderOverview();
+  assert.match(textOf($("#header-profile")), /Not available in this version/);
+  assert.match(textOf($("#config-summary")), /Not available in this version/);
+  assert.doesNotMatch(textOf($("#config-summary")), /not read/);
 });

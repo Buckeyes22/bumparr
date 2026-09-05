@@ -295,11 +295,26 @@ function exitRoute(name) {
   if (view && view.exit) view.exit();
 }
 
+// Cancelling a read is finished the moment it is asked for, not a microtask
+// later when the rejection arrives: the next view's `enter` runs in this same
+// turn, and a `loading` flag left standing would tell it a read is still on its
+// way and stop it issuing one of its own.
 function abortReads() {
-  [statusAbort, stationAbort, libraryAbort].forEach((c) => { if (c) c.abort(); });
-  statusAbort = null;
-  stationAbort = null;
-  libraryAbort = null;
+  if (statusAbort) {
+    statusAbort.abort();
+    statusAbort = null;
+    STATE.status.loading = false;
+  }
+  if (stationAbort) {
+    stationAbort.abort();
+    stationAbort = null;
+    STATE.station.loading = false;
+  }
+  if (libraryAbort) {
+    libraryAbort.abort();
+    libraryAbort = null;
+    STATE.library.loading = false;
+  }
 }
 
 function startRefresh() {
@@ -334,11 +349,30 @@ function renderChrome(at) {
   renderFooter();
 }
 
+// Why there is no /api/status body to read a field out of, or "" when there is
+// one. "Not available in this version." is reserved for a read that landed and
+// simply did not carry the field: never read, still reading, and read-and-failed
+// are three different facts, and a server that has not answered has not told us
+// anything about what it supports. The failure itself is spelled out by the
+// panel's own error state, so this stays short enough to repeat in a field row.
+function statusGap() {
+  const s = STATE.status;
+  if (s.value) return "";
+  if (s.error) return "not read: the last try failed";
+  if (s.loading) return "reading the service…";
+  return "not read yet";
+}
+
 function renderHeaderMeta(at) {
   const profileEl = $("#header-profile");
   if (profileEl) {
+    const gap = statusGap();
     const profile = STATE.status.value && STATE.status.value.profile;
-    if (!profile || typeof profile !== "object") {
+    if (gap) {
+      profileEl.replaceChildren(STATE.status.error
+        ? statusBadge("offline", "profile · " + gap)
+        : makeEl("span", "hmeta-text", "profile · " + gap));
+    } else if (!profile || typeof profile !== "object") {
       profileEl.replaceChildren(makeEl("span", "hmeta-text", "profile · " + NOT_AVAILABLE));
     } else {
       const bad = profile.valid === false || profile.source === "fallback-after-error";
@@ -779,7 +813,15 @@ function renderMemory(s) {
 // Configuration is file-owned: this reports what the server loaded and never
 // offers to change it. `source` is a server-controlled string, so it goes
 // through textContent like any other API value.
-function configLines(s) {
+//
+// `gap` is why there is no status body at all (see statusGap): while it is set,
+// nothing is known about these fields, which is not the same claim as the
+// server not supporting them.
+function configLines(s, gap) {
+  if (gap) {
+    return [{ label: "profile", text: String(gap), level: null },
+            { label: "music", text: String(gap), level: null }];
+  }
   const status = s && typeof s === "object" ? s : {};
   const say = (part) => String(part.source == null ? "unknown source" : part.source) +
     (part.valid === false ? " · invalid, running the shipped default" : " · valid");
@@ -813,7 +855,7 @@ function configLines(s) {
 function renderConfig() {
   const el = $("#config-summary");
   if (!el) return;
-  el.replaceChildren(...configLines(STATE.status.value).map((line) => {
+  el.replaceChildren(...configLines(STATE.status.value, statusGap()).map((line) => {
     const row = makeEl("div", "summary-row");
     row.append(makeEl("span", "lbl", line.label));
     row.append(line.level ? statusBadge(line.level, line.text)
@@ -830,14 +872,18 @@ function renderService() {
                         : (s.value ? "healthy" : "working");
   const detail = s.error ? s.error
     : (s.value ? "answering on this host" : "reading the service…");
+  const gap = statusGap();
   const brand = s.value && s.value.brand;
   const version = s.value && s.value.version;
   el.replaceChildren(
     statusBadge(level, detail),
-    summaryRow("brand", brand == null || brand === "" ? NOT_AVAILABLE : String(brand)),
+    // The badge above carries the real failure; these rows only say whether
+    // there is an answer to read a field out of at all.
+    summaryRow("brand",
+      gap || (brand == null || brand === "" ? NOT_AVAILABLE : String(brand))),
     summaryRow("version",
-      version === undefined || version === null || version === ""
-        ? "not reported" : String(version)),
+      gap || (version === undefined || version === null || version === ""
+        ? "not reported" : String(version))),
     summaryRow("last refresh",
       s.updatedAt ? formatAge(s.updatedAt) : "not read yet"));
 }
@@ -945,6 +991,13 @@ function renderWarnings() {
   const el = $("#warnings-state");
   if (!el) return null;
   if (!STATE.status.value && !STATE.station.value) {
+    // Nothing was read, so nothing was checked. Saying "loading" over a read
+    // that already failed would read as "all clear so far". The Retry sits on
+    // the pool region directly above rather than being offered twice.
+    if (STATE.status.error || STATE.station.error) {
+      return renderPanelState(el, { state: "error",
+        message: "Nothing could be read, so nothing has been checked." });
+    }
     return renderPanelState(el, { state: "loading" });
   }
   if (!warnings.length) {
@@ -988,16 +1041,18 @@ function renderOverview() {
 
 async function loadStatus() {
   if (statusAbort) statusAbort.abort();
-  statusAbort = new AbortController();
+  const controller = new AbortController();
+  statusAbort = controller;
   STATE.status.loading = true;
   renderOverviewState();
   let s;
   try {
-    s = await api("/api/status", { signal: statusAbort.signal });
+    s = await api("/api/status", { signal: controller.signal });
   } catch (err) {
-    // A cancelled read is not a failure: it leaves the last known counts and
-    // the panel state exactly as they were, but it must not leave the panel
-    // believing a read is still on its way.
+    // Only the read that is still the current one may write. A read that was
+    // superseded or dropped by a route change has already had its flags
+    // settled, and clearing them again here would undo its replacement's.
+    if (statusAbort !== controller) return null;
     STATE.status.loading = false;
     if (isApiAbort(err)) return null;
     STATE.status.error = err.message;
@@ -1513,13 +1568,15 @@ function renderStation() {
 
 async function loadStation() {
   if (stationAbort) stationAbort.abort();
-  stationAbort = new AbortController();
+  const controller = new AbortController();
+  stationAbort = controller;
   STATE.station.loading = true;
   renderStationState();
   let s;
   try {
-    s = await api("/api/station", { signal: stationAbort.signal });
+    s = await api("/api/station", { signal: controller.signal });
   } catch (err) {
+    if (stationAbort !== controller) return null;
     STATE.station.loading = false;
     if (isApiAbort(err)) return null;
     STATE.station.error = err.message;

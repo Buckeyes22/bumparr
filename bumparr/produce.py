@@ -325,6 +325,9 @@ def cut_clip(src, dest, start, length, brand, spec, static_face, bed=None, nativ
     if credit:
         credit_file = _brand_textfile(credit)
         face = static_face or (spec or {}).get("landing")
+        if not face:
+            pool = brandslam.font_pool()
+            face = pool[0] if pool else None
         if face and video.endswith("[v]"):
             video = video[:-3] + (
                 ",drawtext=fontfile='%s':textfile='%s':x=%d:y=%d:fontsize=22:"

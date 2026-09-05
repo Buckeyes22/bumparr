@@ -185,7 +185,13 @@ def _legacy_id(rel):
     return ident
 
 
-def _uncredited_bed(rel, resolved, *, energy="neutral"):
+def _uncredited_bed(rel, resolved):
+    """Compatibility-mode bed: operator-owned, uncredited, no editorial energy.
+
+    Energy is unspecified (None), not a fabricated 'neutral'. pick_bed treats
+    that as compatible with any clip energy so directory-scan beds can attach
+    to typical produced quiet/scenic clips. Manifest beds still exact-match.
+    """
     return Bed(
         id=_legacy_id(rel),
         path=rel,
@@ -196,7 +202,7 @@ def _uncredited_bed(rel, resolved, *, energy="neutral"):
         license="",
         license_url="",
         attribution="",
-        energy=energy,
+        energy=None,
         families=tuple(creative.FAMILIES),
         enabled=True,
         operator_owned=True,
@@ -255,6 +261,11 @@ def _validate_bed(raw, *, sound_dir, seen_ids):
     source_page = _bound_string(raw.get("source_page"), "source_page")
     license_url = _bound_string(raw.get("license_url"), "license_url")
     attribution = _bound_string(raw.get("attribution"), "attribution")
+    if not owned:
+        if not title.strip() or not creator.strip() or not license_name.strip():
+            raise MusicError(
+                "bed %s title, creator, and license must be non-empty "
+                "unless operator_owned" % ident)
     if not owned and attribution_required(license_name):
         if not (attribution.strip() or title.strip() or creator.strip()):
             raise MusicError("bed %s license requires credits" % ident)
@@ -351,9 +362,10 @@ def _record_status(valid, source, enabled_beds=0):
     }
 
 
-def _legacy_beds(existing_ids):
+def _legacy_beds(existing_ids, existing_paths=None):
     if not allow_unmanifested():
         return []
+    claimed = {str(p).replace("\\", "/") for p in (existing_paths or ())}
     out = []
     for path in _iter_sound_files(config.SOUND_DIR):
         try:
@@ -361,13 +373,14 @@ def _legacy_beds(existing_ids):
         except ValueError:
             continue
         ident = _legacy_id(rel)
-        if ident in existing_ids:
+        if ident in existing_ids or rel.replace("\\", "/") in claimed:
             continue
         contained = _contained_file(config.SOUND_DIR, rel)
         if contained is None:
             continue
         out.append(_uncredited_bed(rel, contained))
         existing_ids.add(ident)
+        claimed.add(rel.replace("\\", "/"))
     return out
 
 
@@ -402,7 +415,7 @@ def load_manifest(path=None, *, strict=False):
     enabled = sum(1 for bed in beds if bed.enabled)
     _record_status(True, source, enabled)
     seen = {bed.id for bed in beds}
-    return list(beds) + _legacy_beds(seen)
+    return list(beds) + _legacy_beds(seen, {bed.path for bed in beds})
 
 
 def _ensure():
@@ -417,12 +430,20 @@ def selectable_beds():
     return [bed for bed in _ensure() if bed.enabled]
 
 
+def _energy_compatible(bed, energy):
+    """Manifest beds exact-match energy; unspecified (compat-mode) matches any."""
+    if bed.energy is None:
+        return True
+    return bed.energy == energy
+
+
 def pick_bed(family, energy, rng, recent_ids=None, pool=None):
     """Choose an enabled family/energy-compatible bed, avoiding recent ids."""
     recent = set(recent_ids or ())
     pool = list(pool if pool is not None else selectable_beds())
     compatible = [bed for bed in pool
-                  if bed.enabled and family in bed.families and bed.energy == energy]
+                  if bed.enabled and family in bed.families
+                  and _energy_compatible(bed, energy)]
     if not compatible:
         return None
     avoid = [bed for bed in compatible if bed.id not in recent]

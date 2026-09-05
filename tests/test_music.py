@@ -200,6 +200,18 @@ class ManifestValidation(MusicHarness):
             music.load_manifest(strict=True)
         self.assertIn("family", str(ctx.exception).lower())
 
+    def test_non_owned_beds_require_nonempty_title_creator_license(self):
+        self._write_file()
+        self._write_manifest(_bed_yaml(title="", creator="", license="CC0-1.0"))
+        with self.assertRaises(music.MusicError) as ctx:
+            music.load_manifest(strict=True)
+        self.assertRegex(str(ctx.exception).lower(), r"title|creator|license")
+        self._write_manifest(_bed_yaml(title="", creator="", license="",
+                                       operator_owned=True))
+        beds = music.load_manifest(strict=True)
+        self.assertEqual(len(beds), 1)
+        self.assertTrue(beds[0].operator_owned)
+
     def test_unreadable_path_fails_strict_and_is_skipped_runtime(self):
         self._write_manifest(_bed_yaml(path="missing.flac"))
         with self.assertRaises(music.MusicError):
@@ -292,11 +304,40 @@ class CompatibilityMode(MusicHarness):
         beds = music.selectable_beds()
         self.assertEqual(len(beds), 1)
         self.assertTrue(beds[0].operator_owned)
+        self.assertIsNone(beds[0].energy)
         snap = music.snapshot_credits(beds[0])
         self.assertEqual(snap["title"], "")
         self.assertEqual(snap["creator"], "")
         self.assertEqual(snap["license"], "")
         self.assertNotRegex(json.dumps(snap).lower(), r"unknown|example artist|anonymous")
+
+    def test_compatibility_directory_beds_pair_onto_typical_produced_clips(self):
+        self._write_file("loose.wav")
+        self._write_file("loud-only.flac")
+        config.ALLOW_UNMANIFESTED_MUSIC = "1"
+        self._write_manifest(_bed_yaml(
+            ident="loud-only", path="loud-only.flac", energy="loud",
+            families="[scenic]"))
+        cr = creative.resolve_creative(
+            {"type": "video", "kind": "ambient", "source": "produced"})
+        self.assertEqual(cr["family"], "scenic")
+        self.assertEqual(cr["energy"], "quiet")
+        picked = music.pick_bed(cr["family"], cr["energy"], random.Random(1))
+        self.assertIsNotNone(picked)
+        self.assertTrue(picked.operator_owned)
+        self.assertIsNone(picked.energy)
+        self.assertIn("loose", picked.path)
+        snap = music.snapshot_credits(picked)
+        self.assertEqual(snap["title"], "")
+        self.assertEqual(snap["creator"], "")
+        loud = music.pick_bed("scenic", "loud", random.Random(0))
+        self.assertIsNotNone(loud)
+        # Manifest energy matching stays exact: the loud-only bed is not a quiet pick.
+        self.assertNotEqual(picked.id, "loud-only")
+        config.ALLOW_UNMANIFESTED_MUSIC = ""
+        music.reset_runtime_state()
+        self.assertIsNone(music.pick_bed("scenic", "quiet", random.Random(1)))
+        self.assertEqual(music.pick_bed("scenic", "loud", random.Random(0)).id, "loud-only")
 
     def test_unmanifested_scan_skips_escaping_symlink(self):
         outside = Path(self.tmp.name) / "secret.wav"

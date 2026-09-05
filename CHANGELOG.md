@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+**Music manifest, credits, and offline loudness**
+- `bumparr/music.py` plus shipped empty-valid `config_files/music_beds.yaml`.
+  Manifest ids, contained regular readable paths, energy/families, and
+  explicit enable. Runtime skips invalid/unreadable rows; `python -m
+  bumparr.music --check` is strict. `MUSIC_MANIFEST` optional;
+  `ALLOW_UNMANIFESTED_MUSIC=1` (default off) is the only compatibility
+  switch for directory scan and legacy `payload.music`. Those files are
+  operator-owned and uncredited; credits are never fabricated.
+- New rows store `creative.music_id` and a `payload.music_credits` snapshot
+  (`id`, `title`, `creator`, `source_page`, `license`, `license_url`,
+  `attribution`). Missing, disabled, or unreadable beds become explicit
+  silence with no partial file. Native sound is preserved. `native`,
+  `music`, `designed`, and `silence` stay distinct. Live streams are not
+  normalized.
+- One offline ffmpeg policy for beds: −16 LUFS, −1.5 dBTP, bounded excerpts
+  with short fades, AAC 48 kHz stereo. On-screen attribution only when a
+  license requires it. API/preview expose additive `music_credits`.
+  `/api/status` adds `music: {version, valid, source, enabled_beds,
+  compatibility}` (never a filesystem path).
+- Simulation reports music repeats, treatment shares, and large energy
+  transitions.
+
 **Operator voice and restrained card templates**
 - Model card prompts are built from fixed per-kind schema instructions plus
   the validated channel-profile voice block and the item count. Traits are

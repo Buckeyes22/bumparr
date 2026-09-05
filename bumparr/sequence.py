@@ -148,6 +148,7 @@ def _context_view(item):
             "family": creative.get("family"),
             "text_heavy": bool(creative.get("text_heavy")),
             "energy": creative.get("energy"),
+            "audio": creative.get("audio"),
             "music_id": creative.get("music_id"),
             "roles": list(creative.get("roles") or []),
         }
@@ -159,6 +160,7 @@ def _context_view(item):
                 "family": creative.get("family"),
                 "text_heavy": bool(creative.get("text_heavy")),
                 "energy": creative.get("energy"),
+                "audio": creative.get("audio"),
                 "music_id": creative.get("music_id"),
                 "roles": list(creative.get("roles") or []),
             }
@@ -168,6 +170,7 @@ def _context_view(item):
                 "family": item.get("family"),
                 "text_heavy": bool(item.get("text_heavy")),
                 "energy": item.get("energy"),
+                "audio": item.get("audio"),
                 "music_id": item.get("music_id"),
                 "roles": list(item.get("roles") or []),
             }
@@ -176,6 +179,7 @@ def _context_view(item):
         "family": getattr(item, "family", None),
         "text_heavy": bool(getattr(item, "text_heavy", False)),
         "energy": getattr(item, "energy", None),
+        "audio": getattr(item, "audio", None),
         "music_id": getattr(item, "music_id", None),
         "roles": list(getattr(item, "roles", None) or []),
     }
@@ -188,6 +192,33 @@ def _recent_views(recent):
         if view is not None:
             views.append(view)
     return views
+
+
+def sequence_diagnostics(views):
+    """Repeated beds, treatment shares, and large energy transitions."""
+    items = list(views or [])
+    n = len(items)
+    music_repeats = 0
+    energy_jumps = 0
+    treatments = {}
+    for i, view in enumerate(items):
+        audio = view.get("audio") or "unknown"
+        treatments[audio] = treatments.get(audio, 0) + 1
+        if i == 0:
+            continue
+        prev = items[i - 1]
+        music_id = view.get("music_id")
+        if music_id and music_id == prev.get("music_id"):
+            music_repeats += 1
+        if {prev.get("energy"), view.get("energy")} == {"quiet", "loud"}:
+            energy_jumps += 1
+    shares = {key: {"count": count, "share": round(count / n, 4) if n else 0.0}
+              for key, count in sorted(treatments.items())}
+    return {
+        "music_repeats": music_repeats,
+        "energy_jumps": energy_jumps,
+        "treatment_shares": shares,
+    }
 
 
 def _is_exit(creative):

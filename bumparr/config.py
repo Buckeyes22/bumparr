@@ -150,3 +150,11 @@ STANDBY_KINDS = tuple(k.strip() for k in env(
 # Empty uses the shipped YAML at bumparr/config_files/channel_profile.yaml.
 # Changes take effect on process restart; the loader does not hot-reload.
 CHANNEL_PROFILE = env("CHANNEL_PROFILE", "").strip()
+
+# Optional music-bed manifest. Empty uses the shipped empty-valid YAML at
+# bumparr/config_files/music_beds.yaml. Paths inside the document are relative
+# to SOUND_DIR. Changes take effect on process restart; no hot-reload.
+MUSIC_MANIFEST = env("MUSIC_MANIFEST", "").strip()
+# Legacy directory-scan / payload.music compatibility. Exact value "1" enables
+# it; any other value (including empty, true, yes) stays off. Default off.
+ALLOW_UNMANIFESTED_MUSIC = env("ALLOW_UNMANIFESTED_MUSIC", "")

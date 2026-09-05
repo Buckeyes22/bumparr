@@ -25,7 +25,9 @@ Pool overview.
 {"brand": "Bumparr", "total": 412, "playable_now": 350,
  "by_type": {"video": 210, "card": 150, "stream": 20, "image": 32},
  "by_kind": {"ambient": 40, "trivia": 60, ...},
- "profile": {"version": 1, "valid": true, "source": "shipped-default"}}
+ "profile": {"version": 1, "valid": true, "source": "shipped-default"},
+ "music": {"version": 1, "valid": true, "source": "shipped-default",
+           "enabled_beds": 0, "compatibility": false}}
 ```
 
 `playable_now` is the enabled-and-healthy count before dynamic seasonal and
@@ -35,6 +37,10 @@ duration filters. The gap to `total` is disabled or dead items.
 `source` is only `shipped-default`, `custom`, or `fallback-after-error`.
 `valid` is false when runtime fell back to the full shipped default after an
 invalid or missing operator file.
+
+`music` is the loaded music-bed manifest's health, never a filesystem path.
+`source` uses the same three tokens. `enabled_beds` is the count of enabled
+manifest rows. `compatibility` is true only when `ALLOW_UNMANIFESTED_MUSIC=1`.
 
 ### `GET /api/bumpers`
 
@@ -55,16 +61,20 @@ keeps showing both. `?enabled=false` is how you find what the system parked
 without paging the whole pool by eye; `POST /api/pool/enable` is the way back.
 
 Response: `{"count": N, "bumpers": [{id, type, kind, source, duration, title,
-tags, enabled, health, media_url, payload, creative}]}`. `payload` is the
+tags, enabled, health, media_url, payload, creative, music_credits?}]}`. `payload` is the
 parsed JSON card content (lines/answer/number/meaning/…), null-ish for plain
 media. `creative` is the resolved vocabulary from `bumparr.creative` (family,
-roles, energy, audio, …); it does not replace `payload`.
+roles, energy, audio, …); it does not replace `payload`. `music_credits` is
+additive when a payload snapshot exists (`id`, `title`, `creator`,
+`source_page`, `license`, `license_url`, `attribution`) and is omitted
+otherwise.
 
 ### `GET /api/bumpers/{bumper_id}`
 
 One bumper as JSON: every registry column plus `media_url` and resolved
 `creative`. 404 if unknown. `payload` remains the stored JSON (string on this
-detail route); `creative` is additive.
+detail route); `creative` is additive. `music_credits` is additive when the
+payload snapshot exists.
 
 | Param | Default | Meaning |
 |---|---|---|
@@ -110,7 +120,7 @@ scheduler.
 | `explain` | `false` | if true, add per-item `selection.factors` |
 
 Response: `{"count": N, "bumpers": [{id, type, kind, title, duration, source,
-media_url, payload, creative}]}`. Only enabled + healthy items with a finite
+media_url, payload, creative, music_credits?}]}`. Only enabled + healthy items with a finite
 computed score strictly greater than zero are candidates. Gated rows are never
 returned. Default fields stay the same when `explain` is omitted except for
 the additive `creative` object; with `explain=true` each bumper also has

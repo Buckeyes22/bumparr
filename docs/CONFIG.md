@@ -33,6 +33,13 @@ Variables are function-named, no prefix, no product name in a variable.
 |---|---|---|
 | `CHANNEL_PROFILE` | shipped `bumparr/config_files/channel_profile.yaml` | Operator-owned voice, mix, sequence, presentation, and audio policy. Empty uses the shipped file. Changes require a process restart (no hot reload). Voice (`persona`, subjects, boundaries, avoid phrases/topics) is applied only to newly generated cards. Presentation defaults are `default_template: minimal_center` and `default_brand_mode: reveal`. An invalid file is never applied partially: runtime logs one warning and uses the full shipped default. Strict-validate with `python -m bumparr.channel_profile --check`. `/api/status` reports `profile.source` as `shipped-default`, `custom`, or `fallback-after-error` — never a filesystem path. |
 
+## Music beds
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MUSIC_MANIFEST` | shipped `bumparr/config_files/music_beds.yaml` | Editorial music-bed manifest (ids, paths, credits, energy, families, enable). Empty uses the shipped empty-valid file (`beds: []`). Paths inside the document are relative to `SOUNDS`. An invalid file is never applied partially: runtime skips bad rows and logs one warning. Strict-validate with `python -m bumparr.music --check`. `/api/status` reports `music.source` as `shipped-default`, `custom`, or `fallback-after-error` — never a filesystem path. |
+| `ALLOW_UNMANIFESTED_MUSIC` | off | Exact value `1` re-enables legacy directory scan of `SOUNDS` and `payload.music` (ASSET_ROOT-relative). Those files are labeled operator-owned and uncredited; credits are never fabricated. Any other value, including empty/`true`/`yes`, stays off. |
+
 ## Storage
 
 | Variable | Default | Effect |
@@ -41,7 +48,7 @@ Variables are function-named, no prefix, no product name in a variable.
 | `DB_PATH` | `<repo>/data/bumparr.db` | The SQLite database (registry + playout + history). |
 | `VIDEOS` | `ASSET_ROOT` | Where the **quarry** looks for source video (produce scans this). |
 | `IMAGES` | `ASSET_ROOT` | Where stills for station-ID plates are looked up. |
-| `SOUNDS` | `ASSET_ROOT/music_beds` | Music beds for silent produced clips. Empty = silent clips stay silent. |
+| `SOUNDS` | `ASSET_ROOT/music_beds` | Music-bed files named by the manifest (`MUSIC_MANIFEST`). Empty manifest = silent clips stay silent. Directory scan only when `ALLOW_UNMANIFESTED_MUSIC=1`. |
 | `OUTPUT` | `ASSET_ROOT/bumpers` | Where finished produced clips land (served under `/media/bumpers`). |
 | `DATA_DIR` | `/data` | Working state for the fetch queue (`fetch_done.json`). CLI-module-level. |
 | `WINDOWS_DIR` | `ASSET_ROOT/windows` | Where live-window snippets are written. Ephemeral: never quarried by produce. |

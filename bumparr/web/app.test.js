@@ -232,6 +232,29 @@ test("preview cards keep hostile creative strings as text", () => {
   assert.equal(globalThis.pwned, undefined);
 });
 
+test("music credits stay text and do not invent missing fields", () => {
+  const title = '<img src=x onerror="globalThis.pwned=11">';
+  const card = cardEl({
+    type: "card", kind: "psa", title: "x",
+    payload: { lines: ["Stay."] },
+    music_credits: { id: "night-room-01", title, creator: "Example Artist",
+                     license: "CC0-1.0", attribution: "" },
+  });
+  const node = descendants(card).find((n) => n.className === "pv-credits");
+  assert.ok(node);
+  assert.ok(node.textContent.includes(title));
+  assert.ok(node.textContent.includes("Example Artist"));
+  assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
+  const empty = cardEl({
+    type: "card", kind: "psa", title: "x",
+    payload: { lines: ["Stay."] },
+    music_credits: { id: "legacy.loose.wav", title: "", creator: "", license: "" },
+  });
+  const uncredited = descendants(empty).find((n) => n.className === "pv-credits");
+  assert.equal(uncredited.textContent, "legacy.loose.wav");
+  assert.ok(!uncredited.textContent.toLowerCase().includes("unknown"));
+});
+
 test("empty pack preview shows a message, not leftover cards", () => {
   const el = packSummaryEl({
     requested: 15, total: 0, gap: 15, exact: false, count: 0, bumpers: [],

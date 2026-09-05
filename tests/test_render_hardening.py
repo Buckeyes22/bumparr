@@ -36,6 +36,14 @@ class RenderHardening(unittest.TestCase):
         good.parent.mkdir(); good.write_bytes(b"audio")
         outside = Path(self.tmp.name) / "outside.mp3"; outside.write_bytes(b"secret")
         os.symlink(outside, config.ASSET_ROOT / "escape.mp3")
+        # Legacy payload.music is ignored unless ALLOW_UNMANIFESTED_MUSIC=1.
+        self.assertIsNone(render_cards._music_bed({"music": "music/good.mp3"}))
+        original = config.ALLOW_UNMANIFESTED_MUSIC
+        config.ALLOW_UNMANIFESTED_MUSIC = "1"
+        self.addCleanup(setattr, config, "ALLOW_UNMANIFESTED_MUSIC", original)
+        from bumparr import music
+        music.reset_runtime_state()
+        self.addCleanup(music.reset_runtime_state)
         self.assertEqual(render_cards._music_bed({"music": "music/good.mp3"}), str(good.resolve()))
         for value in (str(outside), "../outside.mp3", "escape.mp3"):
             self.assertIsNone(render_cards._music_bed({"music": value}))

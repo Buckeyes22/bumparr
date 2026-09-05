@@ -116,7 +116,7 @@ footer a:hover { text-decoration:underline; }
 .fchip.danger { border-color:#a33; color:#e28; }
 .fchip.danger:hover { background:#a33; color:#fff; }
 
-.pv-creative, .pv-factors, .pv-relax { font-size:.7rem; color:var(--dim); margin-top:.2rem; }
+.pv-creative, .pv-factors, .pv-relax, .pv-credits { font-size:.7rem; color:var(--dim); margin-top:.2rem; }
 .pack-summary { margin-bottom:.8rem; font-size:.85rem; }
 .pack-summary .attn { color:var(--accent2); margin-top:.3rem; }
 .ask-result.err, .preview-err { color:#e07a7a; }

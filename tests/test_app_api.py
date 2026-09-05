@@ -287,6 +287,39 @@ class AppApi(unittest.TestCase):
                       ("shipped-default", "custom", "fallback-after-error"))
         self.assertNotIn("/", profile["source"])
         self.assertNotIn("\\", profile["source"])
+        music = out["music"]
+        self.assertEqual(set(music), {"version", "valid", "source", "enabled_beds",
+                                      "compatibility"})
+        self.assertEqual(music["version"], 1)
+        self.assertIn(music["source"],
+                      ("shipped-default", "custom", "fallback-after-error"))
+        self.assertNotIn("/", music["source"])
+        self.assertNotIn("\\", music["source"])
+        self.assertIsInstance(music["enabled_beds"], int)
+        self.assertIsInstance(music["compatibility"], bool)
+
+    def test_get_and_list_include_music_credits_snapshot(self):
+        payload = json.dumps({
+            "lines": ["Stay."],
+            "music_credits": {
+                "id": "night-room-01", "title": "Night Room",
+                "creator": "Example Artist",
+                "source_page": "https://example.invalid/night-room",
+                "license": "CC0-1.0",
+                "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+                "attribution": "",
+            },
+            "other": "kept",
+        })
+        seed = [_row(1, 4.0, type="card", kind="psa")]
+        seed[0]["payload"] = payload
+        detail = self._run_child("get", seed, bumper_id="t:item-1")
+        self.assertEqual(detail["music_credits"]["title"], "Night Room")
+        self.assertEqual(detail["music_credits"]["creator"], "Example Artist")
+        self.assertIn("other", json.loads(detail["payload"]))
+        listed = self._run_child("list", seed, limit=10, offset=0)
+        self.assertEqual(listed["bumpers"][0]["music_credits"]["id"], "night-room-01")
+        self.assertEqual(listed["bumpers"][0]["payload"]["other"], "kept")
 
     def test_get_and_list_include_resolved_creative(self):
         seed = [_row(1, 4.0, kind="station_id")]

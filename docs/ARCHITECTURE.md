@@ -97,8 +97,10 @@ flowchart TD
 
 - **`produce.py`** — quarries source video: scene-detected, overlapping,
   length-banded windows, cut, branded with the brand slam, audio resolved by
-  measurement (keep native sound, add a bed to some of the silent ones, leave
-  the rest silent). Output goes to the OUTPUT tree, never back into the quarry.
+  measurement (keep native sound, pair an enabled family/energy-compatible
+  manifest bed onto some silent clips, leave the rest silent). Missing,
+  disabled, or unreadable beds become explicit silence. Output goes to the
+  OUTPUT tree, never back into the quarry.
 - **`station_ids.py`** — combinatorial station IDs: a handful of backgrounds
   crossed with independently-rolled font roulettes.
 - **`render_cards.py`** — text cards are JSON payloads until this module turns
@@ -232,6 +234,7 @@ preview reads never extend a timeline or write history.
 | `bumparr/creative.py` | payload.creative resolver (`resolve_creative` / `merge_creative`) |
 | `bumparr/channel_profile.py` | operator channel profile loader and `--check` |
 | `bumparr/sequence.py` | pure break composer and station adjacency |
+| `bumparr/music.py` | music-bed manifest, credits snapshot, offline loudness |
 | `bumparr/simulate.py` | read-only seeded selection mix report |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |
@@ -243,6 +246,6 @@ preview reads never extend a timeline or write history.
 | `bumparr/station/routes.py` | HLS, channel M3U, guide, status, and conform routes |
 | `bumparr/generators/` | card production: model, grounded, dated, weather, bg |
 | `bumparr/sources/` | self-maintaining sources: window capture, fetch queue |
-| `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog, channel profile) |
+| `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog, channel profile, music beds) |
 | `bumparr/web/` | dashboard (vanilla JS over the API) |
 | `bumparr/tools/overnight.sh` | scheduled batch: generate cards, then quarry |

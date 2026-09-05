@@ -26,8 +26,11 @@ playables row (type=card)
             ├─ draw:    PIL — base layer (bg image + scrim + text),
             │           transparent reveal layer, transparent brand layer
             └─ encode:  ffmpeg → 1080p30 H.264 + AAC (silent track if no
-                        music), alpha fades for the timed reveals,
-                        yuv420p + faststart for transcoders/set-top players
+                        music; manifest beds are normalized to −16 LUFS /
+                        −1.5 dBTP, AAC 48 kHz stereo), alpha fades for the
+                        timed reveals, yuv420p + faststart for transcoders/
+                        set-top players. On-screen attribution only when a
+                        license requires it.
   └─ registry:  set uri, health='ok', stamp payload.brand/branded
 ```
 

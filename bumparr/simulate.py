@@ -153,6 +153,8 @@ def run(rows, *, picks, seed, start):
     if text_len > max_text:
         text_runs += 1
 
+    diag = sequence.sequence_diagnostics(
+        [sequence._context_view(item) for item in recent])
     return {
         "picks": picks,
         "seed": seed,
@@ -172,6 +174,9 @@ def run(rows, *, picks, seed, start):
         "seasonal": dict(sorted(seasonal.items())),
         "daypart": dict(sorted(daypart_counts.items())),
         "audio": dict(sorted(audio_counts.items())),
+        "music_repeats": diag["music_repeats"],
+        "energy_jumps": diag["energy_jumps"],
+        "treatment_shares": diag["treatment_shares"],
     }
 
 
@@ -184,11 +189,13 @@ def _positive_int(value):
 
 def _print_report(report):
     print("picks=%d seed=%s start=%s chosen=%d zero-score=%d exact-repeats=%d "
-          "same-kind-runs=%d text-runs=%d role-violations=%d"
+          "same-kind-runs=%d text-runs=%d role-violations=%d music-repeats=%d "
+          "energy-jumps=%d"
           % (report["picks"], report["seed"], report["start"], report["chosen"],
              report["zero_score_picks"], report["exact_repeats"],
              report["same_kind_runs"], report.get("text_runs", 0),
-             report.get("role_violations", 0)))
+             report.get("role_violations", 0), report.get("music_repeats", 0),
+             report.get("energy_jumps", 0)))
     print("kind_shares %s" % report["kind_shares"])
     print("family_shares %s" % report.get("family_shares", {}))
     print("relaxations %s" % report.get("relaxations", {}))
@@ -196,6 +203,7 @@ def _print_report(report):
     print("seasonal %s" % report["seasonal"])
     print("daypart %s" % report["daypart"])
     print("audio %s" % report["audio"])
+    print("treatment_shares %s" % report.get("treatment_shares", {}))
 
 
 def main(argv=None):

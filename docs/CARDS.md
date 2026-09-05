@@ -4,7 +4,8 @@ Cards are the text bumpers — the trivia, the fake PSAs, the "please stand by".
 They are the part of Bumparr with a *voice*, and the shipped ones are
 deliberately plain so you replace them. This is how. New cards persist
 optional `payload.creative` metadata (family, roles, energy, audio, template,
-render_seed, brand_mode); the operator voice block lives in
+render_seed, brand_mode, music_id); music credits snapshot into
+`payload.music_credits` when a bed is actually used. The operator voice block lives in
 `config_files/channel_profile.yaml` (see [CONFIG.md](CONFIG.md)). Model prompts
 are built from fixed per-kind schema instructions plus that validated voice
 block. Changing the voice never rewrites cards already in the pool.

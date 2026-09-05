@@ -29,7 +29,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from bumparr import config, creative, db, ffmpeg_pipe
+from bumparr import config, creative, db, ffmpeg_pipe, music
 
 # ---------------------------------------------------------------- geometry --
 # The reference player sizes everything in `vmin`. At 1920x1080 one vmin is
@@ -642,6 +642,19 @@ def _compose(kind, payload, title, duration, card_font, brand_font, brand,
     return base, reveal_layer, brand_layer, reveal_after, brand_at
 
 
+def _stamp_credit(img, text, font_path):
+    """Draw required attribution inside the title-safe lower-left corner."""
+    if not text:
+        return img
+    font = _load(font_path, 1.6 * VMIN)
+    layer = img.convert("RGBA") if img.mode != "RGBA" else img.copy()
+    draw = ImageDraw.Draw(layer)
+    x, y = SAFE_LEFT, SAFE_BOTTOM - font.size - int(0.4 * VMIN)
+    fill = (220, 220, 220, 200)
+    _draw_at(draw, x, y, text, font, fill, 0.0)
+    return layer.convert(img.mode) if img.mode != "RGBA" else layer
+
+
 def _column(draw, items, gap, y_center=True, bg_top=0, bg_bottom=H):
     """Lay out a centred vertical stack of (text, font, fill, tracking, margin_top).
 
@@ -928,23 +941,17 @@ def _compose_technical_difficulties(payload, brand, card_font, brand_font):
 
 
 # ----------------------------------------------------------------- encoding --
-def _music_bed(payload):
-    """Resolve a card's optional music bed (payload.music, relative to
-    ASSET_ROOT) to a file path, or None. Missing files degrade to silence
-    rather than failing the render."""
-    m = payload.get("music")
-    if not m:
+def _music_bed(payload, row=None):
+    """Resolve a card's music bed to a contained file path, or None (silence).
+
+    New rows use creative.music_id from the manifest. Legacy payload.music is
+    honoured only when ALLOW_UNMANIFESTED_MUSIC=1. Escaping symlinks, missing
+    files, and disabled beds become silence.
+    """
+    bed = music.resolve_playable(payload, row)
+    if bed is None:
         return None
-    if Path(m).is_absolute():
-        return None
-    root = Path(config.ASSET_ROOT).resolve()
-    try:
-        p = (root / m).resolve()
-        if not p.is_relative_to(root):
-            return None
-    except (OSError, ValueError):
-        return None
-    return str(p) if p.is_file() else None
+    return bed.resolved_path
 
 
 def _encode(dest, base, reveal, brand_img, duration, reveal_at, brand_at, music):
@@ -989,9 +996,9 @@ def _encode(dest, base, reveal, brand_img, duration, reveal_at, brand_at, music)
         cmd += ["-filter_complex", ";".join(chains), "-map", "[v]", "-map", "%d:a" % ai]
         if music:
             cmd += ["-shortest", "-c:a", "aac", "-b:a", "128k",
-                    "-af", "volume=0.35,afade=out:st=%.2f:d=0.6" % max(0.0, duration - 0.6)]
+                    "-ar", "48000", "-ac", "2"]
         else:
-            cmd += ["-c:a", "aac", "-b:a", "96k"]
+            cmd += ["-c:a", "aac", "-b:a", "96k", "-ar", "48000", "-ac", "2"]
         cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-r", "30",
                 "-movflags", "+faststart", str(dest)]
@@ -1030,11 +1037,9 @@ def _encode_frames(dest, frame_fn, duration, music=None, fps=30):
             % max(0.0, duration - 0.5),
             "-c:v", "libx264", "-preset", "medium", "-crf", "20",
             "-pix_fmt", "yuv420p", "-r", str(fps),
-            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(dest)]
-    if music:
-        cmd.insert(cmd.index("-c:a"), "-af")
-        cmd.insert(cmd.index("-af") + 1,
-                   "volume=0.35,afade=out:st=%.2f:d=0.6" % max(0.0, duration - 0.6))
+            "-c:a", "aac", "-b:a", "128k" if music else "96k",
+            "-ar", "48000", "-ac", "2",
+            "-movflags", "+faststart", str(dest)]
 
     def frames():
         for i in range(n):
@@ -1075,7 +1080,9 @@ def _encode_noise(dest, caption_img, duration, music=None, fps=30):
         cmd += ["-filter_complex", ";".join(chains), "-map", "[v]", "-map", "2:a",
                 "-shortest", "-c:v", "libx264", "-preset", "medium", "-crf", "22",
                 "-pix_fmt", "yuv420p", "-r", str(fps),
-                "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(dest)]
+                "-c:a", "aac", "-b:a", "128k" if music else "96k",
+                "-ar", "48000", "-ac", "2",
+                "-movflags", "+faststart", str(dest)]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if r.returncode != 0:
@@ -1107,11 +1114,16 @@ def is_stale(kind, dest):
     return (time.time() - dest.stat().st_mtime) > ttl
 
 
-def stamp_presentation(row, rel_uri=None):
+_SKIP_MUSIC = object()
+
+
+def stamp_presentation(row, rel_uri=None, bed=_SKIP_MUSIC):
     """Payload with template/render_seed/brand_mode merged. Does not write SQLite.
 
     Used by explicit render/refresh so legacy rows persist a derived seed only
     when a file is actually (re)written — never during inspection or selection.
+    Music credits are snapshotted only when `bed` is supplied (a real render),
+    not on cache hits, so historical evidence is not rewritten by inspection.
     """
     try:
         payload = json.loads(row["payload"] or "{}")
@@ -1127,6 +1139,8 @@ def stamp_presentation(row, rel_uri=None):
         "render_seed": int(resolved["render_seed"]),
         "brand_mode": resolved["brand_mode"],
     })
+    if bed is not _SKIP_MUSIC:
+        payload = music.apply_playable_audio(payload, bed, preserve_non_music=True)
     payload["brand"] = config.BRAND
     payload["branded"] = True
     return payload
@@ -1137,6 +1151,8 @@ def render_one(row, card_font, brand_font, brand, force=False):
 
     Every kind renders. The animated ones go frame by frame, analogue static is
     generated by ffmpeg, and the rest are a static layout with timed fades.
+    Missing/disabled/unreadable music becomes explicit silence; no partial file
+    is left behind.
     """
     kind = row["kind"]
     try:
@@ -1145,7 +1161,8 @@ def render_one(row, card_font, brand_font, brand, force=False):
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    resolved = creative.resolve_creative({**dict(row), "payload": payload})
+    row_view = {**dict(row), "payload": payload}
+    resolved = creative.resolve_creative(row_view)
     template = creative.resolve_template(
         kind, resolved["family"], resolved.get("template"), strict=False)
     brand_mode = resolved["brand_mode"]
@@ -1158,29 +1175,72 @@ def render_one(row, card_font, brand_font, brand, force=False):
     if dest.is_file() and dest.stat().st_size > 0 and not force and not is_stale(kind, dest):
         return "cached", rel
 
-    music = _music_bed(payload)
+    bed = music.resolve_playable(payload, row_view)
+    audio_path = None
+    excerpt_dir = None
+    credit = ""
+    if bed is not None:
+        excerpt_dir = tempfile.mkdtemp(prefix="bumparr-card-bed-")
+        excerpt = Path(excerpt_dir) / "bed.m4a"
+        try:
+            music.normalize_excerpt(bed.resolved_path, excerpt, duration)
+            audio_path = str(excerpt)
+            credit = music.onscreen_attribution(music.snapshot_credits(bed))
+        except Exception:
+            bed = None
+            audio_path = None
+            shutil.rmtree(excerpt_dir, ignore_errors=True)
+            excerpt_dir = None
+
+    def _apply_credit(img):
+        return _stamp_credit(img, credit, card_font) if credit else img
+
+    def _wrap_frames(frame_fn):
+        if not credit:
+            return frame_fn
+        def wrapped(t):
+            return _apply_credit(frame_fn(t))
+        return wrapped
+
     partial = dest.with_name(".%s.%s.part.mp4" % (dest.stem, uuid.uuid4().hex))
-    try:
+
+    def _encode_card(audio):
         if kind in ANIMATED_BUILDERS:
-            frame_fn = ANIMATED_BUILDERS[kind](
-                payload, brand, card_font, brand_font, duration, brand_mode)
-            _encode_frames(partial, frame_fn, duration, music)
+            frame_fn = _wrap_frames(ANIMATED_BUILDERS[kind](
+                payload, brand, card_font, brand_font, duration, brand_mode))
+            _encode_frames(partial, frame_fn, duration, audio)
         elif kind == "technical_difficulties" and payload.get("variant") == "static":
-            # caption only; ffmpeg supplies the grain underneath it
-            _encode_noise(partial, _td_caption(payload, brand, card_font), duration, music)
+            cap = _apply_credit(_td_caption(payload, brand, card_font))
+            _encode_noise(partial, cap, duration, audio)
         elif kind == "technical_difficulties":
-            img = _compose_technical_difficulties(payload, brand, card_font, brand_font)
+            img = _apply_credit(
+                _compose_technical_difficulties(payload, brand, card_font, brand_font))
             blank = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             _encode(partial, img, blank, blank, duration, duration + 1,
-                    duration + 1, music)
+                    duration + 1, audio)
         else:
             base, rev, bmg, reveal_at, brand_at = _compose(
                 kind, payload, row["title"], duration, card_font, brand_font, brand,
                 template=template, brand_mode=brand_mode, render_seed=render_seed)
             if not reveal_at:
-                reveal_at = duration + 1        # nothing to reveal: never fires
-            _encode(partial, base, rev, bmg, duration, reveal_at, brand_at, music)
+                reveal_at = duration + 1
+            _encode(partial, _apply_credit(base), rev, bmg, duration, reveal_at,
+                    brand_at, audio)
 
+    try:
+        try:
+            _encode_card(audio_path)
+        except Exception:
+            if audio_path is None:
+                raise
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+            bed = None
+            audio_path = None
+            credit = ""
+            _encode_card(None)
         if not partial.is_file() or partial.stat().st_size == 0:
             raise RuntimeError("ffmpeg produced no output")
         os.replace(partial, dest)
@@ -1190,6 +1250,11 @@ def render_one(row, card_font, brand_font, brand, force=False):
         except OSError:
             pass
         raise
+    finally:
+        if excerpt_dir:
+            shutil.rmtree(excerpt_dir, ignore_errors=True)
+    if isinstance(row, dict):
+        row["_applied_bed"] = bed
     return "rendered", rel
 
 
@@ -1225,6 +1290,7 @@ def render_all(limit=None, kinds=None, force=False):
     stats = {"rendered": 0, "cached": 0, "failed": 0}
     failures = []
     for row in rows:
+        row = dict(row)
         try:
             status, info = render_one(row, card_font, brand_font, brand, force=force)
         except Exception as e:
@@ -1235,7 +1301,9 @@ def render_all(limit=None, kinds=None, force=False):
         stats[status] += 1
         with db.conn() as c:
             # Stamp brand plus presentation; only happens on explicit render.
-            pay = stamp_presentation(row, info)
+            bed = row.get("_applied_bed", _SKIP_MUSIC) if status == "rendered" else _SKIP_MUSIC
+            pay = stamp_presentation(row, info, bed=bed)
+            pay.pop("_applied_bed", None)
             c.execute("UPDATE playables SET uri=?, health='ok', payload=? WHERE id=?",
                       (info, json.dumps(pay), row["id"]))
             c.commit()

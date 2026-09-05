@@ -65,7 +65,8 @@ class SimulateReport(unittest.TestCase):
         for key in ("item_shares", "kind_shares", "exact_repeats",
                     "same_kind_runs", "zero_score_picks", "seasonal",
                     "daypart", "audio", "family_shares", "text_runs",
-                    "role_violations", "relaxations", "profile"):
+                    "role_violations", "relaxations", "profile",
+                    "music_repeats", "energy_jumps", "treatment_shares"):
             self.assertIn(key, a)
         self.assertEqual(a["chosen"] + a["zero_score_picks"], 40)
         self.assertGreater(a["chosen"], 0)

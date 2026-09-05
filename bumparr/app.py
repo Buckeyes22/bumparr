@@ -29,7 +29,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from bumparr import channel_profile, config, creative, db, seed, live_cams, stream_proxy, ingest, paths, rotation, selection, sequence
+from bumparr import channel_profile, config, creative, db, music, seed, live_cams, stream_proxy, ingest, paths, rotation, selection, sequence
 from bumparr.urls import absolutize as _absolutize
 from bumparr.station import routes as station_routes
 
@@ -134,7 +134,8 @@ def status():
         live += r["live"]
     return {"brand": config.BRAND, "total": total, "playable_now": live,
             "by_type": by_type, "by_kind": by_kind,
-            "profile": channel_profile.profile_status()}
+            "profile": channel_profile.profile_status(),
+            "music": music.manifest_status()}
 
 
 @app.get("/api/bumpers")
@@ -176,11 +177,13 @@ def list_bumpers(request: Request, type: str = None, kind: str = None,
         rows = c.execute(sql, args).fetchall()
     out = []
     for r in rows:
-        out.append({"id": r["id"], "type": r["type"], "kind": r["kind"],
-                    "source": r["source"], "duration": r["duration"], "title": r["title"],
-                    "tags": r["tags"], "enabled": r["enabled"], "health": r["health"],
-                    "media_url": _media_url(r, request), "payload": _payload_obj(r),
-                    "creative": creative.resolve_creative(r)})
+        payload = _payload_obj(r)
+        item = {"id": r["id"], "type": r["type"], "kind": r["kind"],
+                "source": r["source"], "duration": r["duration"], "title": r["title"],
+                "tags": r["tags"], "enabled": r["enabled"], "health": r["health"],
+                "media_url": _media_url(r, request), "payload": payload,
+                "creative": creative.resolve_creative(r)}
+        out.append(_attach_credits(item, payload))
     return {"count": len(out), "bumpers": out}
 
 
@@ -191,6 +194,14 @@ def _payload_obj(row):
     except Exception:
         payload = {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _attach_credits(item, payload):
+    """Additive music_credits from the payload snapshot; omits the key if none."""
+    credits = music.credits_from_payload(payload)
+    if credits:
+        item["music_credits"] = credits
+    return item
 
 
 def _media_url(row, request=None):
@@ -253,11 +264,13 @@ def random_bumpers(request: Request,
         if r["id"] in seen:
             continue
         seen.add(r["id"])
+        payload = _payload_obj(r)
         item = {"id": r["id"], "type": r["type"], "kind": r["kind"],
                 "title": r["title"], "duration": r["duration"],
                 "source": r.get("source"),
-                "media_url": _media_url(r, request), "payload": _payload_obj(r),
+                "media_url": _media_url(r, request), "payload": payload,
                 "creative": creative.resolve_creative(r)}
+        _attach_credits(item, payload)
         if explain:
             item["selection"] = {"factors": selection.factor_view(r, ctx)}
         out.append(item)
@@ -330,11 +343,13 @@ def fill(request: Request,
     out = []
     for cand in composed.candidates:
         r = cand.row
+        payload = _payload_obj(r)
         item = {"id": r["id"], "type": r["type"], "kind": r["kind"],
                 "title": r["title"], "duration": r["duration"],
                 "source": r.get("source"),
-                "media_url": _media_url(r, request), "payload": _payload_obj(r),
+                "media_url": _media_url(r, request), "payload": payload,
                 "creative": cand.creative or creative.resolve_creative(r)}
+        _attach_credits(item, payload)
         if explain:
             item["selection"] = {"factors": selection.factor_view(r, ctx)}
         out.append(item)
@@ -360,6 +375,7 @@ def get_bumper(bumper_id: str, request: Request = None, explain: bool = False):
     d = dict(r)
     d["media_url"] = _media_url(r, request)
     d["creative"] = creative.resolve_creative(d)
+    _attach_credits(d, _payload_obj(d))
     if explain:
         # Context comes from the statically eligible pool so median and
         # affinity match what /random and the station would have used.

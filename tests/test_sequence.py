@@ -17,6 +17,7 @@ from bumparr.sequence import (
     Composition,
     choose_next,
     compose_break,
+    sequence_diagnostics,
 )
 
 
@@ -279,6 +280,22 @@ class RelaxationAndConstrainedPools(unittest.TestCase):
         out = _compose(pool, seconds=20.0, max_items=2)
         self.assertEqual(len(out.candidates), 2)
         self.assertIn("same_music", out.relaxed_rules)
+
+    def test_diagnostics_count_repeats_treatments_and_energy_jumps(self):
+        views = [
+            {"id": "a", "family": "scenic", "energy": "quiet", "audio": "music",
+             "music_id": "x", "text_heavy": False, "roles": []},
+            {"id": "b", "family": "archive", "energy": "loud", "audio": "native",
+             "music_id": "x", "text_heavy": False, "roles": []},
+            {"id": "c", "family": "text", "energy": "quiet", "audio": "silence",
+             "music_id": None, "text_heavy": True, "roles": []},
+        ]
+        diag = sequence_diagnostics(views)
+        self.assertEqual(diag["music_repeats"], 1)
+        self.assertEqual(diag["energy_jumps"], 2)
+        self.assertEqual(diag["treatment_shares"]["music"]["count"], 1)
+        self.assertEqual(diag["treatment_shares"]["native"]["count"], 1)
+        self.assertEqual(diag["treatment_shares"]["silence"]["count"], 1)
 
 
 class ChooseNext(unittest.TestCase):

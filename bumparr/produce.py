@@ -34,7 +34,7 @@ import time
 import uuid
 from pathlib import Path
 
-from bumparr import brandslam, config, db
+from bumparr import brandslam, config, creative, db, music
 from bumparr.creative import with_presentation
 
 FPS = 30
@@ -50,7 +50,6 @@ SILENCE_DB = float(config.env("SILENCE_DB", "-40"))
 ADD_SOUND_MIN = float(config.env("ADD_SOUND_MIN", "0.40"))
 ADD_SOUND_MAX = float(config.env("ADD_SOUND_MAX", "0.75"))
 
-SOUND_EXT = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus")
 VIDEO_EXT = (".mp4", ".mkv", ".webm", ".m4v", ".mov", ".avi")
 
 # Source directories holding EPHEMERAL captures, which must never be quarried.
@@ -195,15 +194,13 @@ def clips_for_duration(src_duration):
 
 # ------------------------------------------------------------------ audio ----
 def sound_pool():
-    """All music beds the deployer has mounted under SOUNDS, sorted for stable rolls.
+    """Enabled manifest beds (plus unmanifested files only in compatibility mode).
 
     An empty pool is normal and fine: silent clips stay silent (see the
     NOTE printed in run()), which is a deliberate share of the output.
+    Directory scans are not used unless ALLOW_UNMANIFESTED_MUSIC=1.
     """
-    d = Path(config.SOUND_DIR)
-    if not d.is_dir():
-        return []
-    return [f for f in sorted(d.rglob("*")) if f.suffix.lower() in SOUND_EXT]
+    return music.selectable_beds()
 
 
 def _escape_filter_value(p):
@@ -311,22 +308,34 @@ def _video_chain(src_w, src_h, brand, spec, static_face, length):
     )
 
 
-def cut_clip(src, dest, start, length, brand, spec, static_face, bed=None, native=True):
-    """Cut one window, brand it, and resolve its audio in a single encode."""
+def cut_clip(src, dest, start, length, brand, spec, static_face, bed=None, native=True,
+             credit=""):
+    """Cut one window, brand it, and resolve its audio in a single encode.
+
+    Native sound is preserved (fades only). Music beds are already normalized
+    excerpts. Live streams are not handled here.
+    """
     src_w, src_h = dimensions_of(src)
     cmd = ["ffmpeg", "-y", "-loglevel", "error",
            "-ss", "%.3f" % start, "-i", str(src), "-t", "%.3f" % length]
     if bed:
-        # Start the bed at a random offset so repeated use of one track does not
-        # always open on the same bar.
-        cmd += ["-ss", "%.3f" % bed["offset"], "-i", str(bed["path"])]
+        cmd += ["-i", str(bed["path"])]
 
-    filters = [_video_chain(src_w, src_h, brand, spec, static_face, length)]
+    video = _video_chain(src_w, src_h, brand, spec, static_face, length)
+    if credit:
+        credit_file = _brand_textfile(credit)
+        face = static_face or (spec or {}).get("landing")
+        if face and video.endswith("[v]"):
+            video = video[:-3] + (
+                ",drawtext=fontfile='%s':textfile='%s':x=%d:y=%d:fontsize=22:"
+                "fontcolor=white@0.85:shadowcolor=black@0.5:shadowx=1:shadowy=1:"
+                "expansion=none[v]"
+                % (_escape_filter_value(face), _escape_filter_value(credit_file),
+                   int(W * 0.10), int(H * 0.90)))
+    filters = [video]
     maps = ["-map", "[v]"]
     if bed:
-        filters.append("[1:a]volume=%.2f,afade=in:st=0:d=0.4,afade=out:st=%.2f:d=0.6[a]"
-                       % (bed["volume"], max(0.0, length - 0.6)))
-        maps += ["-map", "[a]"]
+        maps += ["-map", "1:a"]
     elif native:
         filters.append("[0:a]afade=in:st=0:d=0.3,afade=out:st=%.2f:d=0.4[a]"
                        % max(0.0, length - 0.4))
@@ -383,7 +392,7 @@ def weight_index(default=0.9):
 
 
 def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=False,
-                        count=None, band_offset=0):
+                        count=None, band_offset=0, recent_music=None):
     """Cut, brand and register every clip a single source is worth."""
     src = Path(src)
     src_dur = duration_of(src)
@@ -403,18 +412,43 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
     out_dir.mkdir(parents=True, exist_ok=True)
 
     made = []
+    if recent_music is None:
+        recent_music = []
+    inferred = creative.resolve_creative(
+        {"type": "video", "kind": kind, "source": "produced"})
     for i, (start, length) in enumerate(windows):
         vol = mean_volume(src, start, length)
         has_native = vol is not None and vol > SILENCE_DB
         bed = None
+        bed_rec = None
+        excerpt = None
         if not has_native and sounds:
             if rng.random() < rng.uniform(ADD_SOUND_MIN, ADD_SOUND_MAX):
-                track = rng.choice(sounds)
-                tdur = duration_of(track)
-                bed = {"path": track,
-                       "offset": round(rng.uniform(0, max(0.1, tdur - length - 1)), 2)
-                       if tdur > length + 2 else 0.0,
-                       "volume": round(rng.uniform(0.22, 0.40), 2)}
+                bed_rec = music.pick_bed(
+                    inferred.get("family"), inferred.get("energy"), rng,
+                    recent_ids=recent_music, pool=sounds)
+                if bed_rec is not None:
+                    tdur = duration_of(bed_rec.resolved_path)
+                    offset = (round(rng.uniform(0, max(0.1, tdur - length - 1)), 2)
+                              if tdur > length + 2 else 0.0)
+                    excerpt = Path(tempfile.mkdtemp(prefix="bumparr-bed-")) / "bed.m4a"
+                    try:
+                        music.normalize_excerpt(
+                            bed_rec.resolved_path, excerpt, length, offset)
+                        bed = {"path": excerpt, "offset": 0.0, "volume": 1.0}
+                    except Exception:
+                        bed = None
+                        bed_rec = None
+                        if excerpt is not None:
+                            try:
+                                excerpt.unlink()
+                            except OSError:
+                                pass
+                            try:
+                                excerpt.parent.rmdir()
+                            except OSError:
+                                pass
+                        excerpt = None
 
         spec = brandslam.roll(rng, pool)
         static = brandslam.static_face(rng, pool)
@@ -424,9 +458,23 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
         stem = "%s_%s_%d_%s" % (kind, src.stem[:38].replace(" ", "_"), i, tag)
         name = "%s/%s.mp4" % (kind, stem)
         dest = Path(config.OUTPUT_DIR) / name
+        credit = music.onscreen_attribution(music.snapshot_credits(bed_rec)) if bed_rec else ""
         try:
-            cut_clip(src, dest, start, length, config.BRAND, spec, static,
-                     bed=bed, native=has_native)
+            try:
+                cut_clip(src, dest, start, length, config.BRAND, spec, static,
+                         bed=bed, native=has_native, credit=credit)
+            except Exception:
+                if bed is None:
+                    raise
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                bed = None
+                bed_rec = None
+                credit = ""
+                cut_clip(src, dest, start, length, config.BRAND, spec, static,
+                         bed=None, native=has_native, credit="")
         except Exception as e:
             try:
                 dest.unlink()
@@ -434,9 +482,19 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
                 pass
             print("    FAIL %-42s %s" % (stem, str(e)[:120]))
             continue
+        finally:
+            if excerpt is not None:
+                try:
+                    excerpt.unlink()
+                except OSError:
+                    pass
+                try:
+                    excerpt.parent.rmdir()
+                except OSError:
+                    pass
         actual = duration_of(dest)
         audio = ("native" if has_native else
-                 ("bed:" + Path(bed["path"]).stem[:18] if bed else "silent"))
+                 ("bed:" + bed_rec.id[:18] if bed_rec else "silent"))
         pid = "clip:%s:%d" % (stem, int(time.time()))
         payload = with_presentation(
             {"from": src.name, "window": [start, length],
@@ -457,6 +515,13 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
              # compounding whatever was current at mint time.
              "base_weight": weight},
             {"id": pid, "type": "video", "kind": kind, "source": "produced"})
+        if has_native:
+            payload = music.apply_playable_audio(payload, None, preserve_non_music=True)
+            payload = creative.merge_creative(payload, {"audio": "native", "music_id": None})
+        else:
+            payload = music.apply_playable_audio(payload, bed_rec)
+        if bed_rec is not None:
+            recent_music.append(bed_rec.id)
         try:
             with db.conn() as c:
                 cursor = c.execute(
@@ -522,6 +587,7 @@ def run(category=None, limit=None, delete_source=False, seed=None, per_source=No
     if limit:
         sources = sources[:limit]
 
+    recent_music = []
     print("[produce] %d source(s); %d font(s); %d sound(s); delete_source=%s"
           % (len(sources), len(pool), len(sounds), delete_source))
     if len(pool) < config.ROULETTE_MIN_FONTS:
@@ -534,7 +600,7 @@ def run(category=None, limit=None, delete_source=False, seed=None, per_source=No
         print("[produce] skipping ephemeral live-capture dir(s): %s"
               % ", ".join(sorted(EPHEMERAL_DIRS)))
     if not sounds:
-        print("[produce] NOTE: no audio in SOUNDS — silent clips stay silent.")
+        print("[produce] NOTE: no enabled music-bed manifest entries — silent clips stay silent.")
 
     weights = weight_index()
     total, rolling, band_offset, failures = [], 0, 0, []
@@ -547,7 +613,8 @@ def run(category=None, limit=None, delete_source=False, seed=None, per_source=No
         try:
             made, err = produce_from_source(src, cat, rng, pool, sounds, weights,
                                             delete_source=delete_source, count=per_source,
-                                            band_offset=band_offset)
+                                            band_offset=band_offset,
+                                            recent_music=recent_music)
         except Exception as e:
             failures.append("%s: %s" % (src.name, e))
             print("    SKIPPED %s: %s" % (src.name[:44], str(e)[:110]))

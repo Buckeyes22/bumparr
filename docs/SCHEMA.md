@@ -21,7 +21,7 @@ a row does not play, and a row is only playable when `enabled=1` and
 | `uri` | TEXT | The media pointer. Videos/images: path relative to `ASSET_ROOT`; produced output: `bumpers/<path>` relative to `OUTPUT`; streams: the upstream HLS URL. **NULL until a card is rendered** — that NULL is what keeps unrendered cards out of `/playlist.m3u` and out of `media_url`. |
 | `duration` | REAL | Seconds this item occupies the channel. The fill endpoint's contract depends on these being true, so writers set real measured durations (window captures re-probe on every re-capture). |
 | `title` | TEXT | Display name. |
-| `payload` | TEXT (JSON) | Per-type content. Cards: `lines` / `answer` / `number` / `meaning` / `reveal_after` / optional background query, creator/source/license metadata / `music`. Produced clips: `from`, `window`, `audio`, `slam`, `branded`, `brand`, `base_weight`. Streams: `direct`, `label`, `region`, optional `proxy_hosts` CDN allowlist. Optional `creative` object (family, roles, energy, audio, text_heavy, template, render_seed, brand_mode, music_id) is namespaced here — not sibling columns. Missing values are inferred at read time by `bumparr.creative.resolve_creative`; there is no schema migration. |
+| `payload` | TEXT (JSON) | Per-type content. Cards: `lines` / `answer` / `number` / `meaning` / `reveal_after` / optional background query, creator/source/license metadata / `music` (legacy; compatibility mode only). Produced clips: `from`, `window`, `audio`, `slam`, `branded`, `brand`, `base_weight`. Streams: `direct`, `label`, `region`, optional `proxy_hosts` CDN allowlist. Optional `creative` object (family, roles, energy, audio, text_heavy, template, render_seed, brand_mode, music_id) is namespaced here — not sibling columns. Optional `music_credits` snapshot (`id`, `title`, `creator`, `source_page`, `license`, `license_url`, `attribution`) is historical/export evidence; the manifest remains the config source. Missing values are inferred at read time by `bumparr.creative.resolve_creative`; there is no schema migration. |
 | `tags` | TEXT | Comma string, freeform. |
 | `weight` | REAL | **Declared** editorial weight — the `base` in the rotation model. The system never mutates it; seasonality multiplies at selection time. `0` = deliberately off air. |
 | `enabled` | INTEGER | On/off switch. Dated cards (on_this_day) are parked here by the daily rotation; disabling is preferred over deleting because it is reversible. |
@@ -51,7 +51,7 @@ read time; explicit valid fields win. Allowed values:
 | `template` | `minimal_center`, `minimal_corner`, `image_caption`, `information_board`, `signal`, `ident`. Missing means the compatible default. Strict creation/preview rejects an incompatible explicit value; runtime rendering falls back. |
 | `render_seed` | non-negative integer for stable variation |
 | `brand_mode` | `reveal`, `static`, `none` |
-| `music_id` | Phase 4 manifest id or null |
+| `music_id` | Manifest id or null. New rows store this; legacy `payload.music` is compatibility-mode only. |
 
 ### `type='card'` lifecycle
 

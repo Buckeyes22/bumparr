@@ -1,0 +1,22 @@
+# Music-bed manifest. An empty beds list is valid: silence is an editorial
+# choice, not a missing file. Paths are relative to SOUNDS (SOUND_DIR).
+# Never add commercial tracks. Never invent credits for files that do not exist.
+#
+# Example (comment only — do not create this file unless you actually have it):
+#
+# version: 1
+# beds:
+#   - id: night-room-01
+#     path: night-room-01.flac
+#     title: Night Room
+#     creator: Example Artist
+#     source_page: https://example.invalid/night-room
+#     license: CC0-1.0
+#     license_url: https://creativecommons.org/publicdomain/zero/1.0/
+#     attribution: ""
+#     energy: quiet
+#     families: [text, scenic, data]
+#     enabled: true
+#     operator_owned: false
+version: 1
+beds: []

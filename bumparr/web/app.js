@@ -164,6 +164,18 @@ function provenanceLine(b) {
   return bits.join(" · ");
 }
 
+function creditsLine(b) {
+  const c = b.music_credits || (b.payload && b.payload.music_credits) || {};
+  if (!c || typeof c !== "object") return "";
+  const bits = [];
+  [c.title, c.creator, c.license].forEach((value) => {
+    const text = value == null ? "" : String(value);
+    if (text && bits.indexOf(text) === -1) bits.push(text);
+  });
+  if (!bits.length && c.id) bits.push(String(c.id));
+  return bits.join(" · ");
+}
+
 function creativeLine(b) {
   const cr = b.creative || {};
   const bits = [cr.family, cr.template, cr.brand_mode, cr.energy, cr.audio]
@@ -185,6 +197,8 @@ function factorsLine(b) {
 function decorateCard(card, b) {
   const cr = creativeLine(b);
   if (cr) card.append(makeEl("div", "pv-creative", cr));
+  const cred = creditsLine(b);
+  if (cred) card.append(makeEl("div", "pv-credits", cred));
   const prov = provenanceLine(b);
   if (prov) card.append(makeEl("div", "pv-meta", prov));
   const fac = factorsLine(b);

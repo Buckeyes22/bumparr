@@ -235,7 +235,7 @@ video:
     mechanism: fetch
     category: music_beds
     license: pd-cc
-    implementation: "config.SOUND_DIR; produce.py sound_pool; render_cards.py _music_bed; tests/test_render_hardening.py test_music_bed_containment. No bundled audio; empty pool is intentional silence."
+    implementation: "bumparr/music.py; config_files/music_beds.yaml; produce.py sound_pool; render_cards.py _music_bed; tests/test_music.py; tests/test_render_hardening.py test_music_bed_containment. No bundled audio; empty shipped manifest is intentional silence."
     notes: "PD/CC music clips to play UNDER some text cards instead of silence. Operator-mounted only; no commercial defaults."
 
 # ---- IMAGE (download + reveal) ------------------------------------------------

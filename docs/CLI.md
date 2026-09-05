@@ -92,8 +92,9 @@ and does not download, render, conform, or probe.
 The report includes item/kind/family shares, exact repeats, same-kind runs,
 text runs over `max_text_run`, zero-score picks, role violations,
 relaxations (`exit_ident`, `energy_jump`, `same_family`, `text_run`,
-`same_music`), profile source/version, seasonal/daypart distribution, and
-audio balance from resolved creative data.
+`same_music`), profile source/version, seasonal/daypart distribution,
+audio balance, music repeats, large energy transitions, and treatment
+shares from resolved creative data.
 
 ### `bumparr.channel_profile` — validate the operator profile
 
@@ -107,6 +108,21 @@ Loads `CHANNEL_PROFILE` if set, otherwise the shipped
 Runtime (the API process) never partially applies a malformed file: one
 warning, then the full shipped default. `--check` is the operator/CI path
 that fails closed instead.
+
+### `bumparr.music` — validate the music-bed manifest
+
+Loads `MUSIC_MANIFEST` if set, otherwise the shipped
+`bumparr/config_files/music_beds.yaml`. Paths in the document are relative
+to `SOUNDS` and must be contained regular readable files.
+
+| Flag | Meaning |
+|---|---|
+| `--check` | strict validation; exit 0 if the document is a complete version-1 manifest (empty `beds: []` is valid), nonzero with an actionable error otherwise |
+
+Runtime skips invalid or unreadable entries and treats them as silence.
+`--check` fails closed. Offline loudness policy for beds is −16 LUFS,
+−1.5 dBTP, AAC 48 kHz stereo, bounded excerpts with short fades. Native
+sound and live streams are not normalized.
 
 ## Maintenance
 

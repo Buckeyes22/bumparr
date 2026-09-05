@@ -492,3 +492,64 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
   .cmpbar input, .cmpbar select { width:100%; min-width:0; }
   .cmp-presets button, .cmp-playback button { flex:1; }
 }
+
+/* ---- F4 station + operations ---- */
+
+/* Hiding a control is not authorization, so the warning is stated rather than
+   the buttons removed. Compact, at the top of the view it applies to. */
+.notice-panel { border:1px solid var(--warning); border-radius:var(--radius-md);
+  background:var(--surface-1); color:var(--warning); padding:var(--space-3);
+  margin-bottom:var(--space-4); font-size:.85rem; }
+
+/* What an action needs before it will work, beside the group it belongs to. */
+.req { color:var(--muted); font-weight:400; text-transform:none;
+  letter-spacing:normal; }
+.action-group .note { width:100%; margin:0; }
+.action-group .note code { font-family:var(--font-mono); font-size:.8rem;
+  background:var(--bg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:0 var(--space-1); }
+
+/* One block per channel: its state in words, then the facts behind it. */
+.station-ch, .station-urls { border:1px solid var(--border);
+  border-radius:var(--radius-md); background:var(--surface-1);
+  padding:var(--space-3); margin:var(--space-3) 0; }
+.station-ch-name { margin:0 0 var(--space-2); font-size:.75rem; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.08em; }
+.station-ch > .badge { margin-bottom:var(--space-2); }
+.station-row .next { font-family:var(--font-mono); font-size:.85rem;
+  overflow-wrap:anywhere; }
+
+/* Copy's outcome sits on its own line with reserved height, so saying it does
+   not shift the row that was just clicked. */
+.station-url { align-items:center; }
+.st-copy { width:100%; min-height:1.4em; margin:0; font-size:.8rem; }
+.station-pv { margin-top:var(--space-2); }
+.station-pv .note { margin:0 0 var(--space-2); }
+
+/* The preview is built only on request and lives outside the redrawn summary. */
+.station-preview:empty { display:none; }
+.st-preview { border:1px solid var(--warning); border-radius:var(--radius-md);
+  background:var(--surface-1); padding:var(--space-3); margin-top:var(--space-4); }
+.st-preview video { width:100%; max-height:360px; background:var(--bg);
+  border-radius:var(--radius-sm); display:block; }
+
+.conform-body { margin-bottom:var(--space-3); }
+.conform-body .badge { margin-top:var(--space-2); }
+
+/* A job's raw result, bounded and foldable, instead of one truncated log. */
+.jobrow-details { width:100%; min-width:0; }
+.jobrow-details summary { color:var(--muted); font-size:.75rem; cursor:pointer; }
+.jobrow-details pre.jobrow-result { margin-top:var(--space-1);
+  padding:var(--space-2); background:var(--bg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); max-height:200px; overflow:auto;
+  white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* Every primary target on these two views clears 44x44px like the rest. */
+.st-copy-btn, .st-open, .jobrow-retry, .jobrow-check, [data-station], [data-starter],
+[data-prep], [data-maint], [data-gen], [data-src] { min-height:44px; }
+
+@media (max-width: 480px) {
+  .station-ch, .station-urls { padding:var(--space-2); }
+  .st-copy-btn, .jobrow-retry, .jobrow-check { width:100%; }
+  .jobrow { flex-direction:column; align-items:stretch; gap:var(--space-2); }
+}

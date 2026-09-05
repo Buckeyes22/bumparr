@@ -250,29 +250,52 @@
         </section>
       </section>
 
-      <!-- Operate the HLS station. -->
+      <!-- Operate the HLS station. Every read here is inspection only; the one
+           control that makes this page a real playlist client is Open preview,
+           which says so before it is pressed. -->
       <section class="view" id="view-station" aria-labelledby="h-station" hidden>
         <div class="viewhead">
           <h2 id="h-station">Station</h2>
-          <div class="viewtools">
-            <button data-station="conform">Conform now <em>(prepare the pool for the live channels)</em></button>
-          </div>
         </div>
-        <div class="panel wide">
+        <section class="panel wide" id="panel-channels" aria-labelledby="h-channels">
+          <h3 id="h-channels">Channels</h3>
           <div id="station-state" class="panel-state"></div>
           <div id="station" class="station"></div>
-        </div>
+          <!-- Owned by the preview alone: the summary above is redrawn every 20
+               seconds, and rebuilding an open video element would reopen the
+               stream each time. -->
+          <div id="station-preview" class="station-preview"></div>
+        </section>
+
+        <section class="panel wide" id="panel-conform" aria-labelledby="h-conform">
+          <h3 id="h-conform">Conform</h3>
+          <p class="note">Conforming re-encodes eligible items into HLS segments so the
+            channels have something to play. It can be slow — a large backlog takes
+            minutes — and the job keeps running on the server if you leave this view.</p>
+          <div id="conform-state" class="panel-state"></div>
+          <div id="conform" class="summary"></div>
+          <div class="viewtools">
+            <button data-station="conform" data-job-key="station conform">Conform now
+              <em>(needs ffmpeg)</em></button>
+          </div>
+        </section>
       </section>
 
-      <!-- Create and maintain: everything that starts a job. -->
+      <!-- Create and maintain: everything that starts a job, grouped by what it
+           costs to run. Every group states its requirements before execution;
+           nothing is hidden for safety, because hiding a button is not
+           authorization and the API is open either way. -->
       <section class="view" id="view-operations" aria-labelledby="h-operations" hidden>
         <div class="viewhead">
           <h2 id="h-operations">Operations</h2>
         </div>
 
-        <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
+        <p class="notice notice-panel">This operator API has no authentication. Do not
+          expose this service to the public internet.</p>
+
+        <!-- 1. Add material: natural-language ingest, and the starter seeds. -->
         <section class="panel wide askbar" id="panel-ask" aria-labelledby="h-ask">
-          <h3 id="h-ask">Add to the rotation</h3>
+          <h3 id="h-ask">1 · Add material</h3>
           <label class="ask-label" for="ask">Describe what to pull in</label>
           <div class="ask-row">
             <input id="ask" class="ask" autocomplete="off"
@@ -281,6 +304,11 @@
           </div>
           <div id="ask-result" class="ask-result"></div>
           <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
+          <div class="action-group">
+            <span class="lbl">Starter pack <span class="req">needs network · uses your API keys</span></span>
+            <button data-starter="dry" data-job-key="check starter">Preview seeds</button>
+            <button data-starter="run" data-job-key="run starter">Seed the pool</button>
+          </div>
         </section>
 
         <section class="panel wide" id="panel-actions" aria-labelledby="h-actions">
@@ -288,26 +316,45 @@
           <div id="actions-state" class="panel-state"></div>
           <div class="actions">
             <div class="action-group">
-              <span class="lbl">Generate cards</span>
-              <button data-gen="trivia">Trivia <em>(grounded)</em></button>
-              <button data-gen="fun_facts">Fun facts <em>(grounded)</em></button>
-              <button data-gen="on_this_day">On this day</button>
-              <button data-gen="psa">PSAs <em>(model)</em></button>
+              <span class="lbl">2 · Generate cards <span class="req">20 items per run</span></span>
+              <button data-gen="trivia" data-job-key="generate trivia">Trivia <em>(grounded)</em></button>
+              <button data-gen="fun_facts" data-job-key="generate fun_facts">Fun facts <em>(grounded)</em></button>
+              <button data-gen="number" data-job-key="generate number">Numbers <em>(grounded)</em></button>
+              <button data-gen="on_this_day" data-job-key="generate on_this_day">On this day <em>(needs network)</em></button>
+              <button data-gen="weather" data-job-key="generate weather">Weather <em>(needs network)</em></button>
+              <button data-gen="psa" data-job-key="generate psa">PSAs <em>(model)</em></button>
+              <button data-gen="corrections" data-job-key="generate corrections">Corrections <em>(model)</em></button>
+              <button data-gen="achievements" data-job-key="generate achievements">Achievements <em>(model)</em></button>
+              <button data-gen="coming_up" data-job-key="generate coming_up">Coming up <em>(model)</em></button>
+              <button data-gen="tiny_games" data-job-key="generate tiny_games">Tiny games <em>(model)</em></button>
             </div>
             <div class="action-group">
-              <span class="lbl">Refresh sources</span>
-              <button data-src="capture-windows">Recapture live cams</button>
-              <button data-src="fetch-queue">Run fetch queue</button>
+              <span class="lbl">3 · Refresh sources <span class="req">needs network</span></span>
+              <button data-src="capture-windows" data-job-key="capture-windows">Recapture live cams</button>
+              <button data-src="fetch-queue" data-job-key="fetch-queue">Run fetch queue</button>
             </div>
             <div class="action-group">
-              <span class="lbl">Starter pack</span>
-              <button data-starter="dry">Preview seeds</button>
-              <button data-starter="run">Seed the pool <em>(uses your API keys)</em></button>
+              <span class="lbl">4 · Prepare output <span class="req">needs ffmpeg</span></span>
+              <button data-prep="render" data-job-key="render cards">Render cards <em>(text cards → MP4)</em></button>
+              <button data-prep="conform" data-job-key="station conform">Conform station <em>(can be slow)</em></button>
             </div>
             <div class="action-group">
-              <span class="lbl">Maintenance</span>
-              <button data-maint="tidy">Tidy up <em>(empty dirs, 0-byte files)</em></button>
-              <button data-maint="revive">Recheck retired <em>(restore playable)</em></button>
+              <span class="lbl">5 · Maintenance <span class="req">local only</span></span>
+              <button data-maint="tidy-dry" data-job-key="preview tidy">Preview tidy</button>
+              <button data-maint="tidy" data-job-key="tidy up">Tidy up <em>(empty dirs, 0-byte files)</em></button>
+              <button data-maint="revive-dry" data-job-key="preview recheck">Preview recheck</button>
+              <button data-maint="revive" data-job-key="recheck retired">Recheck retired <em>(restore playable)</em></button>
+            </div>
+            <div class="action-group">
+              <span class="lbl">Destructive work lives elsewhere</span>
+              <p class="note">Deleting every item in a kind is in the
+                <a href="#/library">Library danger zone</a>. Pruning off-shape material
+                and dropping a whole category are CLI-only and irreversible —
+                <code>python -m bumparr.prune --apply</code> and
+                <code>--drop-category NAME</code>, documented in
+                <a href="https://github.com/mikemcg94/bumparr/blob/main/docs/CLI.md"
+                   target="_blank" rel="noopener">docs/CLI.md</a>. Nothing on this page
+                runs them.</p>
             </div>
             <div class="action-group">
               <span class="lbl">Consume</span>
@@ -315,6 +362,12 @@
               <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
             </div>
           </div>
+        </section>
+
+        <section class="panel wide" id="panel-ops-jobs" aria-labelledby="h-ops-jobs">
+          <h3 id="h-ops-jobs">Recent jobs</h3>
+          <div id="ops-jobs-state" class="panel-state"></div>
+          <ul id="ops-jobs-list" class="joblist"></ul>
           <h4 id="h-log">Action output</h4>
           <pre id="log" class="log" aria-labelledby="h-log" tabindex="0">ready.</pre>
         </section>

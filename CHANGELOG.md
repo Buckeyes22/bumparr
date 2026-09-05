@@ -30,6 +30,84 @@
   Nothing is substituted client-side: the sequence on screen stays exactly what
   the server composed until it is composed again.
 
+**Operator dashboard: station diagnostics, grouped operations, and a real jobs list**
+- The Station view now says which of four different things is wrong, in the
+  operator's own words and from explicit fields rather than a parsed sentence:
+  *"Idle — no playlist client has requested this channel recently."*,
+  *"Unavailable — conform at least one eligible item."*, *"Using slate — all
+  playable candidates are currently gated."*, and *"Cannot conform — ffmpeg is
+  unavailable in the service."* A station that could not be read says
+  *"Station status unavailable; last successful update was …"* and keeps the
+  last good body on screen rather than blanking it. Each channel shows now and
+  next with their times and remaining duration, plus the last playlist request
+  and the lookahead the channel reports — reading them never sets them, and a
+  build that does not send them says so instead of showing a zero.
+- All four handoff URLs — channel M3U, XMLTV guide, and the live and standby
+  HLS playlists — are read-only fields with a **Copy** control that uses the
+  Clipboard API where the browser grants it, falls back to selecting the field
+  where it does not, and says which happened either way, inline and out loud.
+  Focusing a URL still selects it.
+- A channel can be opened in a video element only where the browser reports
+  native HLS (`canPlayType("application/vnd.apple.mpegurl")`), and then only
+  behind an explicit **Open preview**, under a note saying that opening it
+  makes this page a real playlist client that may advance and report playout.
+  Chromium and Firefox, which generally cannot play HLS natively, are offered
+  the URL and *Open in external player (VLC, mpv, IINA)* rather than a video
+  element that would never play. No remote HLS library is loaded either way.
+  The preview is built by the press, is muted with `preload="none"`, never
+  autoplays, survives the 20-second refresh without reopening the stream, and
+  is detached when it is closed or the view is left.
+- A **Conform** panel shows conformed/eligible, pending, ffmpeg and the last
+  sweep with its counts and age, says out loud that conforming can be slow, and
+  carries **Conform now** — which now disables only itself.
+- Operations opens with the unauthenticated-API warning and groups every action
+  by what it costs — add material, generate cards, refresh sources, prepare
+  output, maintenance — with each group stating what it needs (grounded, the
+  local model, network, ffmpeg) before it is run. Every supported card kind is
+  offered, both housekeeping passes lead with the endpoint's own dry run, and
+  destructive work is linked rather than duplicated: bulk kind deletion stays
+  in the Library's danger zone, and `bumparr.prune --apply` and
+  `--drop-category` are named as the CLI-only operations they are. Only the
+  starter *run* stops to confirm.
+- Starting a job no longer freezes the whole panel. Only the duplicate of the
+  running action is disabled — the Station's **Conform now** and the Operations
+  **Conform station** lock together, and nothing else does — so unrelated
+  controls stay usable within the server's own concurrency. A `429` is reported
+  as the server declining to start rather than as the work failing, and never
+  costs the operator the text they had typed.
+- **Recent jobs** is now one list from two registries: the server's
+  `GET /api/jobs` merged by job id with the jobs this page started. The
+  Overview shows the five newest as triage lines; Operations shows them all,
+  each with its created and updated age, the bounded raw result or error in an
+  expandable block, and **Retry** only where running it a second time is safe —
+  never for the starter, an ingest of arbitrary text, or anything that deletes.
+  Every working job is followed at three seconds whoever started it, a lost
+  read keeps it *status unknown* and backs off to ten rather than inventing a
+  failure, a job the server has forgotten ends as expired instead of as a
+  success, and reaching a terminal state refreshes the counts, the station and
+  the library. No poll outlives the view that started it.
+- Fixed: the failed-job warning on the Overview scanned all twenty registry
+  entries and could not be cleared. It is now bounded to the same five rows the
+  panel below it shows, so refreshing the list clears it.
+- The Overview reads the job list too, so its "recent jobs" really is the whole
+  registry rather than only this tab's work, and a job that failed elsewhere —
+  in another tab, or on the schedule — raises the warning that points at
+  Operations. Its 20-second clock keeps that list current.
+- Retry is no longer a way around the action lock: a job that is still running
+  is offered none at all, and the button that is offered answers to the same
+  lock as the panel button for that action. The lock counts holders rather than
+  being a flag, so with two runs of one action in flight — the server allows
+  two — the first to finish no longer hands back a control the second is still
+  holding. Where a status *poll* has been lost, the row offers **Check now**,
+  which asks the server again instead of starting a second copy of the work.
+- A jobs list that could not be refreshed after a good read is now marked stale
+  with its age and a Retry, like every other read-backed region, instead of
+  showing rows that look current with the read failure nowhere on screen.
+- Which panel reports a running action is decided by the view it was started
+  from rather than by the action: a conform retried from Operations reported
+  into the Station's panel, which is hidden at the time, so the operator watched
+  a blank region for the whole run.
+
 **Operator dashboard: a library inspector and reversible curation**
 - The Library toolbar is now labelled controls instead of chips: search, type,
   kind (from `status.by_kind`, with counts), state, page size (24/48/100 — the

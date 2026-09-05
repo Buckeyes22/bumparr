@@ -108,9 +108,15 @@ function initialState() {
       // Where the local preview has got to. `index` is -1 while stopped.
       playback: { index: -1, playing: false, startedAt: null, elapsed: 0, duration: 0 },
     },
-    // Jobs THIS page started, newest first. There is no server jobs list yet,
-    // so this registry is the whole truth and says so when it is empty.
-    jobs: { items: [], error: null },
+    // Jobs, from two sources. `items` is what THIS page started, newest first
+    // (it knows a label before the POST answers, and covers the synchronous
+    // actions the registry never sees); `server` is the last GET /api/jobs.
+    jobs: { items: [], server: [], loading: false, error: null, updatedAt: null },
+    // The operator surfaces' own state: which URL was last copied and how it
+    // went, which channel preview is open, which actions are running (so only
+    // the duplicate is disabled), a per-job doubt note, and the browser's
+    // one-time answer about native HLS.
+    ops: { copied: null, preview: null, running: {}, jobNotes: {}, hls: null },
     notices: [],
   };
 }
@@ -121,6 +127,7 @@ let searchTimer = null;
 let libraryAbort = null;
 let statusAbort = null;
 let stationAbort = null;
+let jobsAbort = null;
 let refreshTimer = null;
 // What has actually been entered, as opposed to STATE.route (what is drawn).
 // Re-entering the same route with the same query is a no-op, which is what
@@ -463,6 +470,11 @@ function abortReads() {
     composerAbort = null;
     STATE.composer.loading = false;
   }
+  if (jobsAbort) {
+    jobsAbort.abort();
+    jobsAbort = null;
+    STATE.jobs.loading = false;
+  }
   // A route-level read like any other: an answer arriving after the view is
   // gone must not write into the dialog it was opened from.
   if (inspectorAbort) {
@@ -568,12 +580,15 @@ function ensureStatus() {
   return loadStatus();
 }
 
-// Overview reads GET /api/status and GET /api/station and nothing else: no
-// station timeline is created or advanced by opening it.
+// Overview reads GET /api/status, GET /api/station and GET /api/jobs, and
+// nothing else. All three are pure — /api/jobs is documented as never starting,
+// cancelling or changing a job — so no station timeline is created or advanced
+// by opening it. The jobs read is what makes the recent list and the failed-job
+// warning cover the whole registry rather than only this tab's own work.
 function enterOverview() {
   renderOverview();
   startRefresh();
-  return Promise.all([loadStatus(), loadStation()]);
+  return Promise.all([loadStatus(), loadStation(), loadJobs()]);
 }
 
 function exitOverview() { return null; }
@@ -608,17 +623,23 @@ function exitComposer() { return stopComposerPlayback(); }
 
 function enterStation() {
   renderStationState();
+  renderStation();
+  renderActionLocks();
   startRefresh();
   return Promise.all([ensureStatus(), loadStation()]);
 }
 
-function exitStation() { return null; }
+// The preview is the one thing here that holds a connection open.
+function exitStation() { return closeStationPreview(); }
 
 function enterOperations() {
-  return ensureStatus();
+  renderActionLocks();
+  renderJobs();
+  return Promise.all([ensureStatus(), loadJobs()]);
 }
 
-function exitOperations() { return null; }
+// Every background job poll belongs to this view; none outlives it.
+function exitOperations() { return stopJobWatches(); }
 
 // ---------------------------------------------------------------------------
 // 5. Shared components: badges, panel states, notices, cards
@@ -1393,7 +1414,9 @@ function overviewWarnings(status, station, jobs) {
     .find((job) => job && job.status === "error");
   if (failed) {
     add("failed-job", "#/operations",
-        "A job started from this page failed: " + String(failed.label) + ".",
+        // The list is the whole registry now, not only this tab's work, so the
+        // warning no longer claims to know where the job came from.
+        "A job failed: " + String(failed.label) + ".",
         "Open operations");
   }
   return list;
@@ -1414,9 +1437,13 @@ function warningEl(warning) {
 
 // Warnings come before the healthy detail, and an overview with nothing wrong
 // says so rather than showing an empty box.
+// The failed-job warning is drawn from the same five rows the panel below it
+// shows, not from all twenty in the registry: a failure the operator can no
+// longer see listed is one they cannot act on, and a warning with nothing to
+// click is one they cannot clear. Refreshing the list is what clears it.
 function renderWarnings() {
   const warnings = overviewWarnings(STATE.status.value, STATE.station.value,
-                                    STATE.jobs.items);
+                                    recentJobs(jobsList()));
   const list = $("#warnings");
   if (list) list.replaceChildren(...warnings.map(warningEl));
   const el = $("#warnings-state");
@@ -3063,8 +3090,32 @@ function wireComposer() {
 // 9. Station
 // ---------------------------------------------------------------------------
 
-// Icon + word + colour, from the station body alone.
-function stationState(s) {
+// The plan's operator sentences, verbatim. Each is reached from one explicit
+// field, never from parsing a human string the server happened to send.
+const STATION_MESSAGES = {
+  idle: "Idle — no playlist client has requested this channel recently.",
+  unavailable: "Unavailable — conform at least one eligible item.",
+  slate: "Using slate — all playable candidates are currently gated.",
+  ffmpeg: "Cannot conform — ffmpeg is unavailable in the service.",
+  playing: "On air — playing a conformed item.",
+};
+const STATION_UNREAD = "Station status unavailable; last successful update was ";
+
+// Opening a channel in a <video> is not a read: it makes this page a playlist
+// client, which is the one thing on this view that can advance playout.
+const HLS_CLIENT_NOTE =
+  "Opening the preview is a real playlist client and may advance and report playout.";
+// Chromium and Firefox generally answer "" to canPlayType for HLS. No remote
+// media library is loaded to paper over that — the plan forbids one — so the
+// honest offer is the URL and somewhere to paste it.
+const HLS_NO_NATIVE = "Copy the URL and Open in external player (VLC, mpv, IINA): " +
+  "this browser has no native HLS playback, so no preview is offered here.";
+
+const CHANNEL_LEVELS = { active: "healthy", idle: "attention",
+                         unavailable: "failed", unknown: "offline" };
+
+// Icon + word + colour for the whole station, from the station body alone.
+function stationRollup(s) {
   if (!s || typeof s !== "object") {
     return { level: "offline", detail: "the station could not be read" };
   }
@@ -3075,6 +3126,71 @@ function stationState(s) {
   const live = s.channels && s.channels.live && s.channels.live.now;
   if (!live) return { level: "attention", detail: "live channel is off air · " + conformed };
   return { level: "healthy", detail: conformed };
+}
+
+/**
+ * Two questions, one name.
+ *
+ * `stationState(body)` — no channel named — is the whole station's roll-up
+ * badge, which is what the Overview shows: `{level, detail}`.
+ *
+ * `stationState(channel, body, meta)` is one channel's operator state:
+ * `{state, message, level}`, where `state` is the API's own vocabulary plus
+ * "unknown" and `message` is the plan's sentence for exactly that condition.
+ * `meta` carries `{updatedAt, at}` so a failed read can say how old the last
+ * good one is. Pure: no DOM, and no clock beyond what `at` supplies.
+ *
+ * "no client", "nothing conformed", "gated" and "ffmpeg absent" stay four
+ * different answers. ffmpeg absence outranks "nothing conformed" because it is
+ * that state's cause — with ffmpeg present the two still read differently.
+ */
+function stationState(channel, station, meta) {
+  if (typeof channel !== "string") return stationRollup(channel);
+  const m = meta || {};
+  const s = station && typeof station === "object" ? station : null;
+  const say = (state, key, level) => ({
+    state, message: STATION_MESSAGES[key],
+    level: level || CHANNEL_LEVELS[state] || "attention" });
+  if (!s) {
+    return { state: "unknown", level: "offline",
+             message: STATION_UNREAD +
+               (m.updatedAt ? formatAge(m.updatedAt, m.at) : "never") + "." };
+  }
+  const channels = s.channels && typeof s.channels === "object" ? s.channels : {};
+  const ch = channels[channel] && typeof channels[channel] === "object"
+    ? channels[channel] : null;
+  // A build that does not send the channel, or does not diagnose it, has told
+  // us nothing — which is not the same claim as "idle".
+  if (!ch || typeof ch.state !== "string") {
+    return { state: "unknown", level: "offline", message: NOT_AVAILABLE };
+  }
+  if (ch.state === "unavailable") {
+    return say("unavailable", s.ffmpeg === false ? "ffmpeg" : "unavailable");
+  }
+  if (ch.state === "idle") return say("idle", "idle");
+  if (ch.state === "active") {
+    // The slate plays, so the channel is up — but it is the brand card, not
+    // content, and that is an amber fact rather than a green one.
+    return ch.reason === "slate" ? say("active", "slate", "attention")
+                                 : say("active", "playing");
+  }
+  return { state: "unknown", level: "offline", message: NOT_AVAILABLE };
+}
+
+// Detected once per session and cached in STATE, so the answer survives a
+// redraw and is cleared with everything else between tests. No remote HLS
+// script is loaded either way: an unsupported browser is told the truth.
+function hlsSupported() {
+  if (STATE.ops.hls === null) {
+    let ok = false;
+    try {
+      const probe = document.createElement("video");
+      ok = typeof probe.canPlayType === "function" &&
+        Boolean(probe.canPlayType("application/vnd.apple.mpegurl"));
+    } catch (e) { ok = false; }
+    STATE.ops.hls = ok;
+  }
+  return STATE.ops.hls;
 }
 
 // What each channel is playing, from the body the page already holds. Read
@@ -3099,41 +3215,225 @@ function stationNow(s) {
   });
 }
 
-function stationEl(s) {
+// A read-only field, a Copy button, and a visible sentence about what happened.
+// The Clipboard API is a permission a browser may simply refuse, and a Copy
+// that did nothing is indistinguishable from one that worked, so every path
+// ends in a badge and an announcement. Focusing the field still selects it.
+// A URL this build does not send is named and reported missing, not shown as
+// an empty box.
+function copyField(key, label, value) {
+  const row = makeEl("div", "station-url");
+  if (value === undefined || value === null || value === "") {
+    row.append(makeEl("span", "lbl", label), makeEl("span", "val", NOT_AVAILABLE));
+    return row;
+  }
+  const id = "station-url-" + key;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.readOnly = true;
+  input.className = "url";
+  input.value = String(value);
+  input.id = id;
+  const select = () => { if (input.select) input.select(); };
+  input.addEventListener("focus", select);
+  const caption = makeEl("label", "lbl", label);
+  caption.setAttribute("for", id);
+  // The outcome lives in STATE so a redraw repeats it, and is written straight
+  // into `said` so pressing Copy does not rebuild the panel under the button.
+  const said = makeEl("p", "st-copy");
+  const show = () => {
+    const done = STATE.ops.copied;
+    said.replaceChildren(...(done && done.key === key
+      ? [statusBadge(done.level, done.message)] : []));
+  };
+  const report = (level, message) => {
+    STATE.ops.copied = { key, level, message };
+    show();
+    announce(message);
+  };
+  const byHand = () => { select(); report("attention", COPY_BY_HAND); };
+  const copy = makeButton("Copy", "st-copy-btn mini", () => {
+    const clip = typeof navigator !== "undefined" && navigator && navigator.clipboard;
+    if (!clip || !clip.writeText) return byHand();
+    return clip.writeText(input.value).then(
+      () => report("healthy", label + " copied to the clipboard"), byHand);
+  }, "Copy the " + label);
+  show();
+  row.append(caption, input, copy, said);
+  return row;
+}
+
+// Epoch seconds as a wall clock, which is what an operator matches against a
+// player. A field the server did not send says so rather than showing an epoch.
+function formatClock(seconds) {
+  const n = typeof seconds === "number" ? seconds : Number(seconds);
+  if (!isFinite(n) || n <= 0) return NOT_AVAILABLE;
+  return new Date(n * 1000).toISOString().slice(11, 19) + " UTC";
+}
+
+// Never a <video> until Open preview is pressed, and never one at all where the
+// browser has no native HLS: a player that cannot play is worse than a URL.
+function channelPreview(name, url) {
+  const box = makeEl("div", "station-pv");
+  if (!url) {
+    box.append(makeEl("p", "panel-state-msg", "No playlist URL — " + NOT_AVAILABLE));
+    return box;
+  }
+  if (!hlsSupported()) {
+    box.append(makeEl("p", "note", HLS_NO_NATIVE));
+    return box;
+  }
+  box.append(makeEl("p", "note", HLS_CLIENT_NOTE));
+  box.append(STATE.ops.preview === name
+    ? makeButton("Close preview", "st-open mini", () => { closeStationPreview(); },
+                 "Close the " + name + " channel preview")
+    : makeButton("Open preview", "st-open mini", () => { openStationPreview(name, url); },
+                 "Open a preview of the " + name + " channel"));
+  return box;
+}
+
+function channelEl(name, s, meta) {
+  const ch = ((s && s.channels) || {})[name] || {};
+  const box = makeEl("section", "station-ch");
+  const verdict = stationState(name, s, meta);
+  box.append(makeEl("h4", "station-ch-name", name),
+             statusBadge(verdict.level, verdict.message));
+  const playing = ch.now && typeof ch.now === "object" ? ch.now : null;
+  const left = playing
+    ? Math.max(0, Math.round((playing.ends_at || 0) - Date.now() / 1000)) : 0;
+  const row = makeEl("div", "station-row");
+  row.append(makeEl("span", "lbl", "now"));
+  if (playing) {
+    row.append(makeEl("span", "now",
+      String(playing.title == null ? "" : playing.title) + " (" +
+      String(playing.kind == null ? "" : playing.kind) + ", " + left + "s left)"));
+  } else {
+    row.append(makeEl("span", "now muted", "off air"));
+  }
+  box.append(row);
+  const next = ch.next && typeof ch.next === "object" ? ch.next : null;
+  const nextRow = makeEl("div", "station-row");
+  nextRow.append(makeEl("span", "lbl", "next"),
+    next ? makeEl("span", "next", String(next.title == null ? "" : next.title) +
+      (next.kind == null || next.kind === "" ? "" : " (" + String(next.kind) + ")"))
+         : makeEl("span", "next muted", "nothing scheduled"));
+  box.append(nextRow);
+  box.append(
+    summaryRow("on air", playing
+      ? formatClock(playing.started_at) + " → " + formatClock(playing.ends_at)
+      : "nothing scheduled"),
+    summaryRow("remaining", playing ? formatDuration(left) : "nothing scheduled"),
+    // Reading this never sets it: /api/station reports the channel's own
+    // record of when a playlist client last asked for it.
+    summaryRow("last playlist request", ch.last_playlist_request === undefined
+      ? NOT_AVAILABLE
+      : (ch.last_playlist_request === null ? "no client has asked yet"
+         : formatAge(Number(ch.last_playlist_request) * 1000, meta && meta.at))),
+    summaryRow("lookahead", typeof ch.lookahead_seconds === "number"
+      ? formatDuration(ch.lookahead_seconds) : NOT_AVAILABLE));
+  box.append(channelPreview(name, ((s && s.urls) || {})[name]));
+  return box;
+}
+
+function stationEl(s, meta) {
   const root = makeEl("div", "station-body");
   const state = stationState(s);
   root.append(statusBadge(state.level, state.detail));
-  for (const name of ["live", "standby"]) {
-    const ch = (s.channels || {})[name] || {};
-    const row = makeEl("div", "station-row");
-    row.append(makeEl("span", "lbl", name));
-    if (ch.now) {
-      const left = Math.max(0, Math.round((ch.now.ends_at || 0) - Date.now() / 1000));
-      row.append(makeEl("span", "now", ch.now.title + " (" + ch.now.kind + ", " + left + "s left)"));
-    } else {
-      row.append(makeEl("span", "now muted", "off air"));
-    }
-    if (ch.next) row.append(makeEl("span", "next muted", "next: " + ch.next.title));
-    root.append(row);
-  }
-  const urls = s.urls || {};
-  for (const [label, key] of [["Channel M3U", "channel_m3u"], ["Guide XMLTV", "guide_xml"], ["Standby HLS", "standby"]]) {
-    const row = makeEl("div", "station-url");
-    const id = "station-url-" + key;
-    const caption = makeEl("label", "lbl", label);
-    caption.setAttribute("for", id);
-    row.append(caption);
-    const input = document.createElement("input");
-    input.readOnly = true; input.className = "url"; input.value = urls[key] || "";
-    input.id = id;
-    input.addEventListener("focus", () => input.select && input.select());
-    row.append(input);
-    root.append(row);
-  }
-  root.append(makeEl("div", "muted", s.ffmpeg === false
-    ? "ffmpeg not found: nothing can be conformed"
-    : (s.conformed || 0) + " / " + (s.eligible || 0) + " conformed"));
+  root.append(channelEl("live", s, meta), channelEl("standby", s, meta));
+  const urls = (s && s.urls) || {};
+  const block = makeEl("div", "station-urls");
+  block.append(makeEl("h4", "station-ch-name", "Handoff URLs"));
+  [["Channel M3U", "channel_m3u"], ["Guide XMLTV", "guide_xml"],
+   ["Live HLS", "live"], ["Standby HLS", "standby"]]
+    .forEach(([label, key]) => block.append(copyField(key, label, urls[key])));
+  root.append(block);
+  root.append(makeEl("div", "muted",
+    ((s && s.conformed) || 0) + " / " + ((s && s.eligible) || 0) + " conformed" +
+    (s && s.ffmpeg === false ? " · ffmpeg not found" : "")));
   return root;
+}
+
+// Conform progress, what the last sweep did, and whether ffmpeg is there to run
+// the next one. A build that sends no `last_conform` says so; one that sends
+// null has simply not swept yet, which is a different fact.
+function conformEl(s) {
+  const box = makeEl("div", "conform-body");
+  if (!s || typeof s !== "object") {
+    // Why there is no body is the Channels panel's state region's job to say;
+    // this only reports that there are no figures to show for it.
+    box.append(makeEl("p", "panel-state-msg",
+      "No conform figures — the station body has not been read."));
+    return box;
+  }
+  box.append(
+    summaryRow("ffmpeg", s.ffmpeg === false ? "not found"
+      : (s.ffmpeg === true ? "found" : NOT_AVAILABLE)),
+    summaryRow("conformed", (s.conformed || 0) + " / " + (s.eligible || 0)),
+    summaryRow("pending", typeof s.pending === "number"
+      ? String(s.pending) : NOT_AVAILABLE));
+  if (s.ffmpeg === false) box.append(statusBadge("failed", STATION_MESSAGES.ffmpeg));
+  const sweep = s.last_conform;
+  if (sweep === undefined) {
+    box.append(summaryRow("last sweep", NOT_AVAILABLE));
+  } else if (sweep === null || typeof sweep !== "object") {
+    box.append(summaryRow("last sweep", "no sweep has finished in this service yet"));
+  } else {
+    box.append(summaryRow("last sweep", formatAge(Number(sweep.at) * 1000)),
+      summaryRow("last sweep result",
+        [["conformed", sweep.conformed], ["failed", sweep.failed],
+         ["pruned", sweep.pruned], ["skipped", sweep.skipped]]
+          .map(([k, v]) => k + " " + (typeof v === "number" ? v : "?")).join(" · ") +
+        (sweep.ffmpeg === false ? " · ffmpeg was missing" : "")));
+  }
+  return box;
+}
+
+// The button that toggles the preview is inside the region the redraw replaces,
+// so pressing it would drop focus to <body>. Its replacement is handed the
+// focus instead, and only when the press is what moved it.
+function keepPreviewFocus(held, label) {
+  if (!held) return null;
+  const next = $$("#station .st-open").find((b) => b.textContent === label);
+  if (next && next.focus) next.focus();
+  return next;
+}
+
+const previewFocusHeld = () => {
+  const root = $("#station");
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  return Boolean(root && active && root.contains && root.contains(active));
+};
+
+// The preview lives in its own container, which a redraw never touches: the
+// summary refreshes every 20 seconds, and rebuilding an open <video> would
+// reopen the stream each time. Never autoplayed — the element is built muted,
+// controlled and preload="none", and the operator presses play.
+function openStationPreview(name, url) {
+  const box = $("#station-preview");
+  if (!box) return null;
+  const held = previewFocusHeld();
+  const video = mediaVideo(url, name + " channel preview", "none");
+  const wrap = makeEl("div", "st-preview");
+  wrap.append(makeEl("h4", "station-ch-name", name + " preview"),
+              makeEl("p", "note", HLS_CLIENT_NOTE), video);
+  box.replaceChildren(wrap);
+  STATE.ops.preview = name;
+  claimMedia(video);
+  announce("preview opened for the " + name + " channel — this page is now a " +
+           "playlist client of it");
+  renderStation();
+  keepPreviewFocus(held, "Close preview");
+  return video;
+}
+
+function closeStationPreview() {
+  const box = $("#station-preview");
+  const had = STATE.ops.preview;
+  const held = previewFocusHeld();
+  STATE.ops.preview = null;
+  if (box) { releaseMedia(box); box.replaceChildren(); }
+  if (had) { renderStation(); keepPreviewFocus(held, "Open preview"); }
+  return null;
 }
 
 // The station body is shown twice — in full on the Station view, in summary on
@@ -3152,9 +3452,25 @@ function renderStationState() {
   return rendered;
 }
 
+// What the station body was told, so a channel with no answer can say how old
+// the last good one is rather than going blank.
+const stationMeta = () => ({ updatedAt: STATE.station.updatedAt });
+
 function renderStation() {
   const el = $("#station");
-  if (el && STATE.station.value) el.replaceChildren(stationEl(STATE.station.value));
+  if (el) {
+    // A failed read never clears known-good content: the panel-state region
+    // above marks it stale and the last body stays on screen.
+    if (STATE.station.value) {
+      el.replaceChildren(stationEl(STATE.station.value, stationMeta()));
+    } else if (STATE.station.error) {
+      el.replaceChildren(statusBadge("offline",
+        stationState("live", null, stationMeta()).message));
+    }
+  }
+  const conform = $("#conform");
+  if (conform) conform.replaceChildren(conformEl(STATE.station.value));
+  renderActionLocks();
   renderOvStation();
 }
 
@@ -3172,6 +3488,7 @@ async function loadStation() {
     STATE.station.loading = false;
     if (isApiAbort(err)) return null;
     STATE.station.error = err.message;
+    renderStation();
     renderStationState();
     return null;
   }
@@ -3188,32 +3505,119 @@ async function loadStation() {
 // 10. Operations and jobs
 // ---------------------------------------------------------------------------
 
-// Housekeeping actions. Both are safe and idempotent — they only remove debris
-// or restore assets whose media is verifiably fine — so neither needs a confirm.
+// Housekeeping actions. Both are idempotent — they only remove debris or
+// restore assets whose media is verifiably fine — so neither needs a confirm,
+// and each offers the endpoint's own dry run first.
+// Both endpoints answer the same body for a dry run and for the real thing,
+// with `dry_run` saying which it was — so one sentence covers both, in the
+// tense the answer itself reports.
+const TIDY_SAY = (j) => (j.dry_run ? "would remove " : "removed ") +
+  j.zero_byte_files + " empty file(s), " + j.empty_dirs + " empty dir(s)";
+const REVIVE_SAY = (j) => j.restored + (j.dry_run ? " restorable" : " restored") +
+  ", " + j.still_dead + " still unplayable, " +
+  j.skipped_streams + " stream(s) skipped";
 const MAINT = {
-  tidy: { url: "/api/pool/tidy", say: (j) =>
-    "tidy: removed " + j.zero_byte_files + " empty file(s), " + j.empty_dirs + " empty dir(s)" },
-  revive: { url: "/api/pool/revive", say: (j) =>
-    "recheck: " + j.restored + " restored, " + j.still_dead + " still unplayable, " +
-    j.skipped_streams + " stream(s) skipped" },
+  "tidy-dry": { url: "/api/pool/tidy?dry_run=true", label: "preview tidy", say: TIDY_SAY },
+  tidy: { url: "/api/pool/tidy", label: "tidy up", say: TIDY_SAY },
+  "revive-dry": { url: "/api/pool/revive?dry_run=true", label: "preview recheck",
+                  say: REVIVE_SAY },
+  revive: { url: "/api/pool/revive", label: "recheck retired", say: REVIVE_SAY },
 };
+
+// Prepare-output actions, which both need ffmpeg. Conform is offered here and
+// on the Station view; they carry the same job key, so one lock covers both.
+const PREP = {
+  render: { url: "/api/render/cards", label: "render cards" },
+  conform: { url: "/api/station/conform", label: "station conform" },
+};
+
+// Costly and not reversible from this page, so it is the one action here that
+// stops to ask. Routine refresh never does.
+const STARTER_NOTE = "This downloads clips from the stock and archive sources " +
+  "using your own API keys. It can take several minutes and is deliberately " +
+  "paced so the archives do not throttle you, and nothing on this page undoes it.";
 
 const JOB_STOPPED = "stopped checking — the job may still be running";
 const JOB_FORGOTTEN = "status unknown: the server no longer tracks this job";
 
-// --- jobs this page started --------------------------------------------------
-// There is no server-side jobs list yet, so this registry is only what this tab
-// kicked off. The empty state says exactly that rather than implying the server
-// has been idle. A later slice merges a real GET /api/jobs into the same list.
+// --- the jobs list ------------------------------------------------------------
+// Two sources, one list. `STATE.jobs.items` is what THIS page started: it knows
+// a label before the POST answers and covers the synchronous actions the
+// server's registry never sees. `STATE.jobs.server` is the last GET /api/jobs,
+// which is authoritative for status and result and includes work another tab or
+// the schedule started. The Overview shows the five newest; Operations shows
+// the lot, with the raw result in a <details> and Retry where repeating is safe.
 
 const JOB_LEVELS = { working: "working", done: "healthy", error: "failed",
                      unknown: "attention" };
 const JOB_STATUSES = ["working", "done", "error", "unknown"];
 
-function recordJob(label) {
+// Repeating an action is offered only where a second run does the same work
+// again with no extra consequence. Never for the starter (it downloads, on the
+// operator's own API keys), never for an ingest of arbitrary text (it would
+// pull the material a second time), and never for anything that deletes.
+const RETRY_ACTIONS = {
+  "station conform": { url: "/api/station/conform" },
+  "capture-windows": { url: "/api/sources/capture-windows" },
+  "fetch-queue": { url: "/api/sources/fetch-queue" },
+  "render cards": { url: "/api/render/cards" },
+  "preview tidy": { url: MAINT["tidy-dry"].url, say: TIDY_SAY },
+  "tidy up": { url: MAINT.tidy.url, say: TIDY_SAY },
+  "preview recheck": { url: MAINT["revive-dry"].url, say: REVIVE_SAY },
+  "recheck retired": { url: MAINT.revive.url, say: REVIVE_SAY },
+};
+const GENERATE_LABEL = /^generate ([a-z_]{1,40})$/;
+
+/**
+ * How to run this job again, or null when repetition is not safe.
+ *
+ * A row this page started carries its own descriptor. A row that only the
+ * server knows about is matched by its registry label against the table above —
+ * an unrecognised label gets no Retry, which is the safe way round.
+ */
+function jobRetry(job) {
+  if (!job || typeof job !== "object") return null;
+  if (job.retry) return job.retry;
+  const label = String(job.label === undefined || job.label === null ? "" : job.label);
+  if (Object.prototype.hasOwnProperty.call(RETRY_ACTIONS, label)) {
+    return Object.assign({ label }, RETRY_ACTIONS[label]);
+  }
+  const gen = GENERATE_LABEL.exec(label);
+  if (gen) return { url: "/api/generate/" + gen[1] + "?n=20", label };
+  return null;
+}
+
+// A plain object read as a map: a key an inherited property would answer for
+// ("constructor", "__proto__") is not a value anyone stored.
+const own = (map, key) =>
+  Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+
+// A result is a string or the dict an action returns; either way it reaches the
+// DOM as text through a property, never as markup.
+function jobResultText(result) {
+  if (result === undefined || result === null) return "";
+  if (typeof result === "string") return result;
+  try { return JSON.stringify(result); } catch (e) { return String(result); }
+}
+
+// Bounded, but newlines kept: a <pre> inside <details> is where an action's
+// stdout is actually readable.
+function rawResult(value) {
+  const text = jobResultText(value);
+  return text.length > 2000 ? text.slice(0, 2000) + "…" : text;
+}
+
+const stampMs = (seconds) => {
+  const n = Number(seconds);
+  return isFinite(n) && n > 0 ? n * 1000 : null;
+};
+
+function recordJob(label, retry) {
   const at = now();
-  const record = { id: "page-" + (++jobSeq), label: String(label), status: "working",
-                   startedAt: at, updatedAt: at, result: "" };
+  const name = String(label);
+  const record = { id: "page-" + (++jobSeq), label: name, status: "working",
+                   startedAt: at, updatedAt: at, result: "", polling: false,
+                   retry: retry === undefined ? jobRetry({ label: name }) : retry };
   STATE.jobs.items.unshift(record);
   if (STATE.jobs.items.length > MAX_JOBS) STATE.jobs.items.length = MAX_JOBS;
   renderJobs();
@@ -3234,27 +3638,313 @@ function finishJob(record, status, result) {
 const recentJobs = (items, limit) =>
   (Array.isArray(items) ? items : []).slice(0, limit || RECENT_JOBS);
 
-function jobRowEl(job) {
+/**
+ * One list from the two registries, newest first.
+ *
+ * Rows are keyed by job id: once a POST answers, the page's record carries the
+ * server's id and the two merge into one row. The server wins on status and
+ * result (it is running the work); the page keeps the label it already showed
+ * if the server sends none, and keeps its own Retry descriptor. Pure.
+ */
+function mergeJobs(client, server) {
+  const rows = [];
+  const at = new Map();
+  const push = (row) => {
+    const seen = at.get(row.id);
+    if (seen === undefined) { at.set(row.id, rows.length); rows.push(row); return; }
+    rows[seen] = Object.assign({}, rows[seen], row, {
+      label: row.label || rows[seen].label,
+      retry: row.retry || rows[seen].retry,
+      source: "both",
+    });
+  };
+  (Array.isArray(client) ? client : []).forEach((job) => {
+    if (!job || typeof job !== "object") return;
+    push({ id: String(job.id), label: String(job.label), status: job.status,
+           createdAt: job.startedAt, updatedAt: job.updatedAt,
+           result: jobResultText(job.result), retry: job.retry || null,
+           source: "page" });
+  });
+  (Array.isArray(server) ? server : []).forEach((job) => {
+    if (!job || typeof job !== "object") return;
+    if (job.id === undefined || job.id === null || String(job.id) === "") return;
+    push({ id: String(job.id),
+           label: String(job.request === undefined || job.request === null
+             ? "" : job.request),
+           status: JOB_STATUSES.indexOf(job.status) === -1 ? "unknown" : job.status,
+           createdAt: stampMs(job.created_at), updatedAt: stampMs(job.updated_at),
+           result: jobResultText(job.result), source: "server" });
+  });
+  // Stable, so rows created inside the same millisecond keep the order the
+  // registries already had them in (newest first).
+  return rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+const jobsList = () => mergeJobs(STATE.jobs.items, STATE.jobs.server);
+
+/**
+ * One row. `opts.details` puts the bounded raw result in an expandable block
+ * (Operations); without it the row carries a single collapsed line (the
+ * Overview, which is triage and offers no controls of its own). `opts.retry`
+ * offers Retry where `jobRetry` says repeating is safe.
+ */
+function jobRowEl(job, opts) {
+  const options = opts || {};
   const li = makeEl("li", "jobrow");
   li.append(statusBadge(JOB_LEVELS[job.status] || "attention", job.label));
-  li.append(makeEl("span", "jobrow-age", formatAge(job.updatedAt)));
-  const result = humanMessage(job.result, "");
-  if (result) li.append(makeEl("span", "jobrow-result", result));
+  li.append(makeEl("span", "jobrow-age",
+    "started " + formatAge(job.createdAt, options.at) +
+    " · updated " + formatAge(job.updatedAt, options.at)));
+  const result = jobResultText(job.result);
+  if (result && options.details) {
+    const box = makeEl("details", "jobrow-details");
+    box.append(makeEl("summary", "", job.status === "error" ? "error" : "result"),
+               makeEl("pre", "jobrow-result", rawResult(result)));
+    li.append(box);
+  } else if (result) {
+    li.append(makeEl("span", "jobrow-result", humanMessage(result, "")));
+  }
+  // Keyed by a server-supplied id, so it is read as a map and not as an object
+  // whose prototype would answer for "constructor" or "__proto__".
+  const note = own(STATE.ops.jobNotes, job.id);
+  if (note) {
+    li.append(statusBadge("attention", String(note)));
+    // The escape from a lost poll is another poll, not another run of the job:
+    // the work is very likely still going, and starting a second copy of it is
+    // the one thing that would make the situation worse.
+    const watch = JOB_WATCH.get(job.id);
+    if (watch && watch.check) {
+      li.append(makeButton("Check now", "jobrow-check mini", () => { watch.check(); },
+                           "Check the status of " + job.label + " now"));
+    }
+  }
+  // Retry is a second way to start the same action, so it is one of the buttons
+  // that action's lock covers — and a job that is still running is not offered
+  // a copy of itself at all.
+  if (options.retry && job.status !== "working") {
+    const again = jobRetry(job);
+    if (again) {
+      const button = makeButton("Retry", "jobrow-retry mini", () => {
+        doAction(again.url, again.label, { say: again.say, retry: again });
+      }, "Run " + again.label + " again");
+      button.dataset.jobKey = again.label;
+      button.disabled = Boolean(own(STATE.ops.running, again.label));
+      li.append(button);
+    }
+  }
   return li;
 }
 
-function renderJobs() {
-  const items = recentJobs(STATE.jobs.items);
-  const list = $("#jobs-list");
-  if (list) list.replaceChildren(...items.map(jobRowEl));
-  const el = $("#jobs-state");
+/**
+ * One region, one state, for either list — on the same ladder as every other
+ * read-backed region, so a refresh that fails marks the rows stale with their
+ * age and a Retry instead of leaving them looking current.
+ *
+ * "Has a value" for this region means the server list has been read at least
+ * once. Before that the page's own registry is the whole truth and says so;
+ * after it, a failed read is staleness rather than emptiness.
+ */
+function renderJobsState(el, count) {
   if (!el) return null;
-  if (!items.length) {
-    return renderPanelState(el, {
-      state: "empty", message: "No jobs started from this page",
-    });
+  const j = STATE.jobs;
+  const opts = readState({ value: j.updatedAt ? j.server : null, error: j.error,
+                           updatedAt: j.updatedAt }, () => { loadJobs(); });
+  if (opts.state === "stale" || opts.state === "error") {
+    return renderPanelState(el, opts);
   }
-  return renderPanelState(el, { state: "populated" });
+  if (count) return renderPanelState(el, { state: "populated" });
+  return renderPanelState(el, { state: "empty", message: j.updatedAt
+    ? "No jobs — the server's registry is empty."
+    : "No jobs started from this page, and the server's list has not been read yet." });
+}
+
+function renderJobs(at) {
+  const items = recentJobs(jobsList());
+  const list = $("#jobs-list");
+  if (list) list.replaceChildren(...items.map((job) => jobRowEl(job, { at })));
+  renderJobsState($("#jobs-state"), items.length);
+  return renderOpsJobs(at);
+}
+
+function renderOpsJobs(at) {
+  const items = jobsList();
+  const list = $("#ops-jobs-list");
+  if (list) {
+    list.replaceChildren(...items.map(
+      (job) => jobRowEl(job, { at, details: true, retry: true })));
+  }
+  return renderJobsState($("#ops-jobs-state"), items.length);
+}
+
+// A read that fails leaves the page's own list standing: the jobs this tab
+// started are still true, and blanking them would lose the only record of a
+// job whose POST never reached the registry.
+async function loadJobs() {
+  if (jobsAbort) jobsAbort.abort();
+  const controller = new AbortController();
+  jobsAbort = controller;
+  STATE.jobs.loading = true;
+  let body;
+  try {
+    body = await api("/api/jobs?limit=" + MAX_JOBS, { signal: controller.signal });
+  } catch (err) {
+    if (jobsAbort !== controller) return null;
+    jobsAbort = null;
+    STATE.jobs.loading = false;
+    if (isApiAbort(err)) return null;
+    STATE.jobs.error = err.message;
+    renderJobs();
+    renderChrome();
+    return null;
+  }
+  if (jobsAbort === controller) jobsAbort = null;
+  STATE.jobs.loading = false;
+  STATE.jobs.error = null;
+  STATE.jobs.server = body && Array.isArray(body.jobs) ? body.jobs : [];
+  STATE.jobs.updatedAt = now();
+  renderJobs();
+  // The failed-job warning is derived from this list, so a read that changes
+  // the list has to redraw it — otherwise a failure the panel is showing has
+  // no warning above it until the next status read happens to repaint.
+  renderWarnings();
+  renderChrome();
+  syncJobWatches();
+  return body;
+}
+
+// --- following a job to a terminal state --------------------------------------
+// Every working job in the list is followed, whether this page started it or
+// the server already had it: a row that says "working" for ever is a lie, and a
+// job another tab started is still an operator's job.
+
+const JOB_WATCH = new Map();
+
+function noteJob(id, message) {
+  STATE.ops.jobNotes[id] = message;
+  renderJobs();
+  return null;
+}
+
+function refreshAfterJob() {
+  loadStatus();
+  loadGrid(true);
+  loadStation();
+  return null;
+}
+
+// A terminal state is news for more than its own row: pool counts, the station
+// and the library listing may all have changed under it.
+function applyJobResult(id, final) {
+  const answer = final && typeof final === "object" ? final : {};
+  const text = rawResult(answer.result === undefined ? answer : answer.result);
+  delete STATE.ops.jobNotes[id];
+  const record = STATE.jobs.items.find((r) => String(r.id) === id);
+  if (record) finishJob(record, jobOutcome(answer.status), text);
+  const row = STATE.jobs.server.find((r) => r && String(r.id) === id);
+  if (row) {
+    row.status = jobOutcome(answer.status);
+    row.result = text;
+    row.updated_at = now() / 1000;
+  }
+  renderJobs();
+  renderWarnings();
+  renderChrome();
+  refreshAfterJob();
+  return null;
+}
+
+function watchListedJob(id) {
+  if (JOB_WATCH.has(id)) return null;
+  let wake = null;
+  let stopped = false;
+  const entry = {
+    stop: () => { stopped = true; if (wake) wake(); },
+    // Cuts the current pause short, so an operator who can see the server is
+    // back does not sit out the ten-second backoff.
+    check: () => { if (wake) wake(); },
+  };
+  JOB_WATCH.set(id, entry);
+  const pause = (ms) => new Promise((resolve) => {
+    const timer = setTimeout(() => { wake = null; resolve(); }, ms);
+    wake = () => { clearTimeout(timer); wake = null; resolve(); };
+  });
+  const settle = (final) => {
+    JOB_WATCH.delete(id);
+    // An abandoned watch writes nothing: the view that owned it is gone.
+    if (stopped) return null;
+    return applyJobResult(id, final);
+  };
+  return pollJob({ job_id: id, status: "working" }, undefined, pause, {
+    stopped: () => stopped,
+    // A background poll does not shout into the live region every ten seconds;
+    // the row itself carries the doubt, and Retry is on the row.
+    onUnknown: (message) => { noteJob(id, message); },
+  }).then(settle, (err) => settle({ status: "unknown", result: err.message }));
+}
+
+function syncJobWatches() {
+  if (STATE.route !== "operations") return null;
+  jobsList().forEach((job) => {
+    if (job.status !== "working") return;
+    // No server id yet: the POST has not answered, so there is nothing to poll.
+    if (job.id.indexOf("page-") === 0) return;
+    // Its own surface is already waiting on it; two polls would double the load
+    // and race each other to write the answer.
+    const owner = STATE.jobs.items.find((r) => String(r.id) === job.id);
+    if (owner && owner.polling) return;
+    watchListedJob(job.id);
+  });
+  return null;
+}
+
+function stopJobWatches() {
+  JOB_WATCH.forEach((entry) => entry.stop());
+  JOB_WATCH.clear();
+  return null;
+}
+
+// A surface that starts a job takes it over from the background watch: two
+// polls would double the load on the registry and race to write the answer.
+function stopJobWatch(id) {
+  const entry = JOB_WATCH.get(id);
+  if (entry) { entry.stop(); JOB_WATCH.delete(id); }
+  return null;
+}
+
+// --- action locking -----------------------------------------------------------
+// Only the duplicate action is held while a job runs. The server runs two
+// blocking actions at a time; freezing every unrelated button because one of
+// them is busy is a UI decision, not a server one. Every button that starts the
+// same work carries the same data-job-key, so the Station's Conform now and the
+// Operations copy of it lock together, and nothing else does.
+
+// Which panel reports an action depends on where the operator started it, not
+// on what the action is: the same conform can be started from the Station's own
+// panel or from a Retry on Operations, and reporting it into a region inside
+// the view that is currently hidden would leave the operator watching nothing.
+const ACTION_REGIONS = { station: "#conform-state" };
+const activeActionRegion = () =>
+  own(ACTION_REGIONS, STATE.route) || "#actions-state";
+
+function renderActionLocks() {
+  $$("[data-job-key]").forEach((button) => {
+    button.disabled = Boolean(own(STATE.ops.running, button.dataset.jobKey));
+  });
+  return null;
+}
+
+// A count, not a flag: the server runs two blocking actions at a time, so the
+// same action can genuinely be running twice, and the first one to finish must
+// not hand back a control the second is still holding. Never goes negative — a
+// release with nothing held simply leaves it unheld.
+function lockAction(label, held) {
+  const key = String(label);
+  const at = own(STATE.ops.running, key) || 0;
+  if (held) STATE.ops.running[key] = at + 1;
+  else if (at <= 1) delete STATE.ops.running[key];
+  else STATE.ops.running[key] = at - 1;
+  renderActionLocks();
+  return STATE.ops.running;
 }
 
 // "unknown" is not "failed": a lost status read may well have been a job that
@@ -3328,46 +4018,73 @@ function watchJob(job, view) {
 }
 
 function wireMaintenance() {
-  $$("[data-maint]").forEach((b) => b.addEventListener("click", async () => {
+  // Routine housekeeping and its dry runs: idempotent, cheap, no modal.
+  $$("[data-maint]").forEach((b) => b.addEventListener("click", () => {
     const m = MAINT[b.dataset.maint];
-    const label = b.textContent;
-    b.disabled = true; b.textContent = "working…";
-    try {
-      const j = await api(m.url, { method: "POST", timeout: 0 });
-      announce(m.say(j));
-      await loadStatus();
-      loadGrid(true);
-    } catch (err) { announce("failed: " + err.message); }
-    b.disabled = false; b.textContent = label;
+    return m ? doAction(m.url, m.label, { say: m.say }) : null;
+  }));
+
+  $$("[data-prep]").forEach((b) => b.addEventListener("click", () => {
+    const p = PREP[b.dataset.prep];
+    return p ? doAction(p.url, p.label) : null;
   }));
 
   $$("[data-starter]").forEach((b) => b.addEventListener("click", async () => {
-    const dry = b.dataset.starter === "dry";
-    if (!dry && !confirm("Run the starter seeds?\n\nThis downloads clips from the stock " +
-                         "and archive sources using your own API keys. It can take several " +
-                         "minutes and is deliberately paced so the archives don't throttle you."))
-      return;
-    await doAction("/api/starter?dry_run=" + dry, dry ? "check starter" : "run starter");
+    // The dry run only reports, so it goes straight through; the real one
+    // spends the operator's API quota and bandwidth, so it stops to ask.
+    if (b.dataset.starter === "dry") {
+      return doAction("/api/starter?dry_run=true", "check starter", { retry: null });
+    }
+    const go = await confirmDialog({
+      title: "Run the starter seeds?", body: [STARTER_NOTE],
+      confirmLabel: "Seed the pool", cancelLabel: "Cancel",
+    });
+    if (!go) return null;
+    return doAction("/api/starter?dry_run=false", "run starter", { retry: null });
   }));
 }
 
-async function doAction(url, label) {
-  const btns = $$(".actions button");
-  const state = $("#actions-state");
+/**
+ * Start one action and follow its job to a terminal state.
+ *
+ * `opts.region` overrides the panel-state element that reports it; by default
+ * that is the region of the view the operator is on, so the same action started
+ * from the Station's own panel and from a Retry on Operations each reports
+ * somewhere visible. `opts.say` formats a synchronous body, and `opts.retry`
+ * overrides what Retry would repeat (null where it must not be offered at all).
+ *
+ * Only the duplicate action is disabled while the job runs; unrelated controls
+ * stay available. The shared region still belongs to the newest action, which
+ * is what `actionGeneration` decides, but a button's lock is its own.
+ */
+async function doAction(url, label, opts) {
+  const options = opts || {};
+  const state = $(options.region || activeActionRegion());
   const mine = ++actionGeneration;
-  const record = recordJob(label);
+  const record = recordJob(label, options.retry);
   const current = () => mine === actionGeneration;
-  // The panel is held only while the operator is actually being made to wait.
-  // The moment a status read is lost the buttons come back, so the escape from
+  // The lock is held only while the operator is actually being made to wait.
+  // The moment a status read is lost the button comes back, so the escape from
   // a silent server is a real control, not a page reload.
-  const release = () => { if (current()) btns.forEach((b) => { b.disabled = false; }); };
-  btns.forEach((b) => { b.disabled = true; });
+  // The lock counts holders, and a lost poll releases early, so this run's own
+  // release has to be idempotent: it took the lock once and gives it back once,
+  // however many times it is asked to.
+  let holding = true;
+  const release = () => {
+    if (!holding) return null;
+    holding = false;
+    return lockAction(label, false);
+  };
+  lockAction(label, true);
   announce("→ " + label + " …");
   renderJobState(state, "working", label + "…", []);
   try {
     let r = await api(url, { method: "POST", timeout: 0 });
-    if (r.job_id) {
+    const synchronous = !r || !r.job_id;
+    if (!synchronous) {
       record.id = String(r.job_id);
+      record.polling = true;
+      stopJobWatch(record.id);
       r = await watchJob(r, {
         superseded: () => !current(),
         release,
@@ -3378,26 +4095,41 @@ async function doAction(url, label) {
           if (current()) renderJobState(state, "attention", message, actions);
         },
       });
+      record.polling = false;
     }
-    const result = r.result === undefined ? r : r.result;
-    const msg = typeof result === "string" ? result : JSON.stringify(result);
+    const result = r && r.result !== undefined ? r.result : r;
+    let msg = jobResultText(result);
+    // A synchronous endpoint answers with its own counts; the action that asked
+    // knows how to read them, and a thrown formatter must not lose the body.
+    if (synchronous && options.say) {
+      try { msg = String(options.say(r)); } catch (e) { /* keep the raw body */ }
+    }
+    const status = r && r.status !== undefined ? r.status : "done";
     // "unknown" is not "failed": the run may well have completed.
-    const mark = r.status === "error" ? "✗ " : (r.status === "unknown" ? "▲ " : "✓ ");
+    const mark = status === "error" ? "✗ " : (status === "unknown" ? "▲ " : "✓ ");
     // Recorded whether or not this surface is still the current one: the job
-    // ran, and the overview's recent list is about jobs, not about panels.
-    finishJob(record, jobOutcome(r.status), msg);
+    // ran, and the jobs list is about jobs, not about panels.
+    finishJob(record, jobOutcome(status), msg);
     if (current()) {
       announce(mark + label + ": " + msg.trim().split("\n").slice(-2).join(" ") +
-               (r.status === "unknown" ? " — run it again to check" : ""));
+               (status === "unknown" ? " — run it again to check" : ""));
     }
   } catch (err) {
+    record.polling = false;
+    // 429 is the server saying "not now", not "this failed": the action never
+    // started, so it is worth saying plainly and worth trying again.
+    const capacity = err.status === 429;
     finishJob(record, "error", err.message);
-    if (current()) announce("✗ " + label + " failed: " + err.message);
+    if (current()) {
+      announce((capacity ? "▲ " : "✗ ") + label +
+               (capacity ? " not started: " + err.message + " — try again in a moment"
+                         : " failed: " + err.message));
+    }
   }
   release();
   if (current()) renderPanelState(state, { state: "populated" });
-  loadStatus(); loadGrid(true);
-  loadStation();
+  refreshAfterJob();
+  if (STATE.route === "operations") loadJobs();
 }
 
 async function submitAsk() {
@@ -3408,7 +4140,9 @@ async function submitAsk() {
   // the newest one is allowed to write to the result line.
   const mine = ++askGeneration;
   const current = () => mine === askGeneration;
-  const record = recordJob("add: " + text.slice(0, 60));
+  // Never retried from the jobs list: repeating an ingest of arbitrary text
+  // pulls the material a second time.
+  const record = recordJob("add: " + text.slice(0, 60), null);
   btn.disabled = true; inp.disabled = true;
   out.replaceChildren(statusBadge("working", "downloads and captures can take a bit"));
   const finish = (level, msg) => {
@@ -3428,7 +4162,14 @@ async function submitAsk() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-  } catch (err) { return finish("failed", err.message); }
+  } catch (err) {
+    // The field is deliberately not cleared on the way out: a refusal — a 429
+    // saying the registry is full above all — must not cost the operator what
+    // they typed. It is still there, still selected by focus, still sendable.
+    return finish(err.status === 429 ? "attention" : "failed",
+      err.status === 429 ? err.message + " — your text is still here, try again"
+                         : err.message);
+  }
   if (!job.job_id) return finish(job.status === "error" ? "failed" : "healthy", job.result || "done");
   record.id = String(job.job_id);
   inp.value = "";
@@ -3462,8 +4203,13 @@ const isVisible = () => typeof document === "undefined" ||
 // what it actually shows.
 async function refreshTick() {
   if (!isVisible()) return null;
-  if (STATE.route === "overview") return Promise.all([loadStatus(), loadStation()]);
+  if (STATE.route === "overview") {
+    return Promise.all([loadStatus(), loadStation(), loadJobs()]);
+  }
   if (STATE.route === "station") return loadStation();
+  // Operations has no clock of its own: only the two views that show live
+  // figures do. Its jobs list is kept current by one poll per working job,
+  // which is what the plan asks for and costs nothing while nothing is running.
   return null;
 }
 
@@ -3481,8 +4227,10 @@ function boot() {
     b.addEventListener("click", () => doAction("/api/generate/" + b.dataset.gen + "?n=20", "generate " + b.dataset.gen)));
   $$("[data-src]").forEach((b) =>
     b.addEventListener("click", () => doAction("/api/sources/" + b.dataset.src, b.dataset.src)));
+  // The Station view's own copy of the conform action. Where it reports is
+  // decided by the view the operator is on, not hard-coded here.
   $$("[data-station]").forEach((b) =>
-    b.addEventListener("click", () => doAction("/api/station/conform", "conform")));
+    b.addEventListener("click", () => doAction(PREP.conform.url, PREP.conform.label)));
   $("#shuffle").addEventListener("click", shufflePreview);
   $("#more").addEventListener("click", () => loadGrid(false));
   $("#search").addEventListener("input", (e) => scheduleSearch(e.target.value));
@@ -3545,15 +4293,22 @@ if (COMMONJS) {
     handleVisibilityChange, submitAsk,
     // composer
     gapLabel, composerProblems, composerParams, composeBreak, readComposerControls, setComposerPreset, renderComposer, timelineItemEl, playComposerSequence, advanceComposer, stopComposerPlayback, markComposerStale, playbackLine, wireComposer, RELAXED_TEXT, STALE_TEXT, COMPOSER_PRESETS,
+    // F4: station diagnostics, handoff copy, operations and the jobs list
+    stationRollup, conformEl, hlsSupported, renderStation, closeStationPreview,
+    STATION_MESSAGES, HLS_NO_NATIVE, RECENT_JOBS, mergeJobs, jobsList, jobRetry,
+    renderOpsJobs, loadJobs, lockAction, renderActionLocks, wireMaintenance,
+    syncJobWatches, stopJobWatches,
     resetStateForTests() {
       if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
       stopRefresh();
       stopComposerPlayback();
+      stopJobWatches();
       closeAllDialogs();
       libraryAbort = null;
       composerAbort = null;
       statusAbort = null;
       stationAbort = null;
+      jobsAbort = null;
       inspectorAbort = null;
       inspectorOnMutate = null;
       activeMedia = null;

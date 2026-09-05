@@ -823,6 +823,34 @@ def _calendar_disable_warning(kind, payload):
             "enable it again on its next pass." % (today, _DATED_ROTATION))
 
 
+def _set_enabled(bumper_id, want_enabled):
+    """Look up one row and set its `enabled` flag to `want_enabled`, if it
+    isn't already there.
+
+    The row-lookup-and-conditional-UPDATE shared by enable_playable and
+    disable_playable: same `SELECT`, same 404-if-missing, same "only write if
+    the value actually changes" — they differed only in which value (1 or 0)
+    and which direction `changed` was computed from. Touches nothing but
+    `enabled`: health, uri, and files are each endpoint's own business, never
+    this helper's.
+
+    Returns `(row, changed)`. `row` is the pre-update `sqlite3.Row` (with
+    `id`, `enabled`, `kind`, `payload`), or `None` if no such id exists —
+    callers turn that into the 404. `changed` is `True` only when the flag
+    actually flipped.
+    """
+    with db.conn() as c:
+        row = c.execute("SELECT id, enabled, kind, payload FROM playables WHERE id=?",
+                        (bumper_id,)).fetchone()
+        if row is None:
+            return None, False
+        changed = bool(row["enabled"]) != bool(want_enabled)
+        if changed:
+            c.execute("UPDATE playables SET enabled=? WHERE id=?",
+                     (1 if want_enabled else 0, bumper_id))
+    return row, changed
+
+
 @app.post("/api/pool/enable")
 def enable_playable(bumper_id: str):
     """Turn one parked row back on, no questions asked.
@@ -849,14 +877,9 @@ def enable_playable(bumper_id: str):
     (see _calendar_park_warning). The `{id, enabled, changed}` keys are
     unchanged and always present; `warning` is added only when there is one.
     """
-    with db.conn() as c:
-        row = c.execute("SELECT id, enabled, kind, payload FROM playables WHERE id=?",
-                        (bumper_id,)).fetchone()
-        if row is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        changed = not row["enabled"]
-        if changed:
-            c.execute("UPDATE playables SET enabled=1 WHERE id=?", (bumper_id,))
+    row, changed = _set_enabled(bumper_id, True)
+    if row is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
     out = {"id": bumper_id, "enabled": True, "changed": changed}
     warning = _calendar_park_warning(row["kind"], row["payload"])
     if warning:
@@ -880,14 +903,9 @@ def disable_playable(bumper_id: str):
     for another day, a config-owned live cam, and every ordinary row get no
     warning and no promise of permanence either way.
     """
-    with db.conn() as c:
-        row = c.execute("SELECT id, enabled, kind, payload FROM playables WHERE id=?",
-                        (bumper_id,)).fetchone()
-        if row is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        changed = bool(row["enabled"])
-        if changed:
-            c.execute("UPDATE playables SET enabled=0 WHERE id=?", (bumper_id,))
+    row, changed = _set_enabled(bumper_id, False)
+    if row is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
     out = {"id": bumper_id, "enabled": False, "changed": changed}
     warning = _calendar_disable_warning(row["kind"], row["payload"])
     if warning:

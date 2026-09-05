@@ -267,6 +267,17 @@
           <div id="station-preview" class="station-preview"></div>
         </section>
 
+        <!-- Read-only by construction: this block ships a heading and two empty
+             containers, and app.js fills them with text and badges alone. There
+             is no input, select, textarea or form here, because configuration
+             is edited in its files on the server and never from the browser. -->
+        <section class="panel wide" id="panel-station-config"
+                 aria-labelledby="h-station-config">
+          <h3 id="h-station-config">Configuration</h3>
+          <div id="station-config-state" class="panel-state"></div>
+          <div id="station-config" class="summary"></div>
+        </section>
+
         <section class="panel wide" id="panel-conform" aria-labelledby="h-conform">
           <h3 id="h-conform">Conform</h3>
           <p class="note">Conforming re-encodes eligible items into HLS segments so the

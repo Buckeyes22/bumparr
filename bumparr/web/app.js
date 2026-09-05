@@ -69,6 +69,30 @@ const REASON_TEXT = {
   non_finite_score: "non-finite score — the computed score is not a number",
 };
 
+// The score is a product, and these are its terms in the order rotation.explain
+// multiplies them. `score` is the server's own answer and is never recomputed.
+const FACTOR_ORDER = ["base", "season", "daypart", "recency", "affinity", "fatigue"];
+// Which `reasons` token the server raises when this term alone is the gate.
+// recency, affinity and fatigue have none; inventing one would be a lie.
+const ZERO_REASON = { base: "base_weight", season: "season", daypart: "daypart" };
+const ZERO_UNNAMED = "the server raises no reason token for this factor";
+
+// Said where a row records nothing at all about where it came from. It is a
+// note, not a block: no curation control is disabled because of it.
+const NO_PROVENANCE = "No provenance recorded";
+const PROVENANCE_NOTE = "Nothing in this row records where it came from. Every " +
+  "action above still works — this is a note, not a block.";
+// A credits field the snapshot carries but left empty. Different from
+// NOT_AVAILABLE: the build has the field, nobody filled it in.
+const NOT_RECORDED = "not recorded";
+
+// Configuration is read out of files the server loaded at startup. The
+// dashboard reports what it loaded and offers nothing that could write one.
+const FILE_OWNED = "Configuration is file-owned: the channel profile, the " +
+  "music-bed manifest and the operator messages are edited in their files on " +
+  "the server and loaded at startup. Nothing on this page writes them.";
+const CONFIG_FILES = ["channel profile", "music manifest", "channel memory"];
+
 // One explicit state object, divided by concern. The DOM is never the state:
 // every render below can be repeated from this object alone.
 //
@@ -945,6 +969,26 @@ function summaryRow(label, value) {
   return row;
 }
 
+// Whether the server actually sent something to show. `false` and `0` are
+// values a field can legitimately hold, so only absent and empty are missing.
+const present = (value) => value !== undefined && value !== null && value !== "";
+
+// A value the server sent, or the sentence that says it did not. `absent` is for
+// a field whose emptiness means something (no tags is not a missing column).
+function fieldText(value, absent) {
+  if (!present(value)) return absent === undefined ? NOT_AVAILABLE : absent;
+  return String(value);
+}
+
+// `[label, value]` pairs to labelled facts: a block is a list of what it shows.
+const facts = (pairs) => pairs.map(([label, value]) => summaryRow(label, value));
+
+// A boolean the server actually sent, said in words; NOT_AVAILABLE otherwise.
+const yesNo = (value, yes, no) => typeof value === "boolean" || value === 0 || value === 1
+  ? (value ? (yes || "yes") : (no || "no")) : NOT_AVAILABLE;
+
+const num = (value) => present(value) ? String(value) : NOT_AVAILABLE;
+
 // The tail of the last action, kept for scrollback.
 function log(message) {
   const el = $("#log");
@@ -1001,12 +1045,23 @@ function creditsLine(b) {
   return bits.join(" · ");
 }
 
-function creativeLine(b) {
-  const cr = b.creative || {};
-  const bits = [cr.family, cr.template, cr.brand_mode, cr.energy, cr.audio]
-    .filter((value) => value !== undefined && value !== null && value !== "");
-  if (cr.text_heavy) bits.push("text-heavy");
-  return bits.join(" · ");
+// Family and audio are what a shelf of cards is scanned by, so they are labelled
+// chips; roles, energy, template and brand mode are one press away in the
+// inspector. Neither resolved keeps F2's sentence rather than showing nothing.
+function creativeChips(b) {
+  const cr = b.creative && typeof b.creative === "object" ? b.creative : {};
+  const box = makeEl("div", "pv-chips");
+  const chips = [["family", cr.family], ["audio", cr.audio]]
+    .filter((pair) => present(pair[1]))
+    .map(([label, value]) => {
+      const chip = makeEl("span", "pv-chip");
+      chip.append(makeEl("span", "pv-chip-k", label),
+                  makeEl("span", "pv-chip-v", String(value)));
+      return chip;
+    });
+  box.append(...(chips.length ? chips
+                              : [makeEl("span", "pv-chip-none", NOT_AVAILABLE)]));
+  return box;
 }
 
 function factorsLine(b) {
@@ -1052,8 +1107,7 @@ function stateBadge(b) {
 }
 
 function decorateCard(card, b) {
-  const cr = creativeLine(b);
-  card.append(makeEl("div", "pv-creative", cr || NOT_AVAILABLE));
+  card.append(creativeChips(b));
   const cred = creditsLine(b);
   if (cred) card.append(makeEl("div", "pv-credits", cred));
   const prov = provenanceLine(b);
@@ -1269,22 +1323,26 @@ function renderMemory(s) {
 // `gap` is why there is no status body at all (see statusGap): while it is set,
 // nothing is known about these fields, which is not the same claim as the
 // server not supporting them.
+// Shared by the compact line here and the Station's full block, so the two can
+// never disagree; `fallback-after-error` is the server saying it could not read
+// what it was pointed at and is running the shipped default instead.
+const configLevel = (part) => part.valid === false ||
+  part.source === "fallback-after-error" ? "attention" : "healthy";
+const configSay = (part) =>
+  String(part.source == null ? "unknown source" : part.source) +
+  (part.valid === false ? " · invalid, running the shipped default" : " · valid");
+
 function configLines(s, gap) {
   if (gap) {
     return [{ label: "profile", text: String(gap), level: null },
             { label: "music", text: String(gap), level: null }];
   }
   const status = s && typeof s === "object" ? s : {};
-  const say = (part) => String(part.source == null ? "unknown source" : part.source) +
-    (part.valid === false ? " · invalid, running the shipped default" : " · valid");
   const lines = [];
   const profile = status.profile;
   if (profile && typeof profile === "object") {
-    lines.push({
-      label: "profile", text: say(profile),
-      level: profile.valid === false || profile.source === "fallback-after-error"
-        ? "attention" : "healthy",
-    });
+    lines.push({ label: "profile", text: configSay(profile),
+                 level: configLevel(profile) });
   } else {
     lines.push({ label: "profile", text: NOT_AVAILABLE, level: null });
   }
@@ -1292,9 +1350,8 @@ function configLines(s, gap) {
   if (music && typeof music === "object") {
     const beds = typeof music.enabled_beds === "number" ? music.enabled_beds : null;
     lines.push({
-      label: "music", level: music.valid === false ||
-        music.source === "fallback-after-error" ? "attention" : "healthy",
-      text: say(music) +
+      label: "music", level: configLevel(music),
+      text: configSay(music) +
         (beds === null ? "" : " · " + beds + " bed" + (beds === 1 ? "" : "s")) +
         (music.compatibility ? " · compatibility mode" : ""),
     });
@@ -1502,6 +1559,7 @@ async function loadStatus() {
     if (isApiAbort(err)) return null;
     STATE.status.error = err.message;
     renderOverview();
+    renderStationConfig();
     return null;
   }
   STATE.status.loading = false;
@@ -1510,6 +1568,9 @@ async function loadStatus() {
   STATE.status.updatedAt = now();
   renderOverview();
   renderFilters();
+  // Two other views read the same body: the library's kind list, and the
+  // Station's configuration block. One read, every surface that shows it.
+  renderStationConfig();
   return s;
 }
 
@@ -2050,15 +2111,6 @@ const parsePayload = (value) => {
   } catch (e) { return {}; }
 };
 
-// A value the server sent, or the sentence that says it did not. `absent` is for
-// a field whose emptiness means something (no tags is not a missing column).
-function fieldText(value, absent) {
-  if (value === undefined || value === null || value === "") {
-    return absent === undefined ? NOT_AVAILABLE : absent;
-  }
-  return String(value);
-}
-
 function formatStamp(seconds, zero) {
   const n = typeof seconds === "number" ? seconds : Number(seconds);
   if (!isFinite(n) || n <= 0) return zero === undefined ? NOT_AVAILABLE : zero;
@@ -2072,16 +2124,6 @@ function inspectorBlock(title, rows) {
   rows.forEach((row) => { if (row) block.append(row); });
   return block;
 }
-
-// `[label, value]` pairs to labelled facts: a block is a list of what it shows.
-const facts = (pairs) => pairs.map(([label, value]) => summaryRow(label, value));
-
-// A boolean the server actually sent, said in words; NOT_AVAILABLE otherwise.
-const yesNo = (value, yes, no) => typeof value === "boolean" || value === 0 || value === 1
-  ? (value ? (yes || "yes") : (no || "no")) : NOT_AVAILABLE;
-
-const num = (value) => value === undefined || value === null || value === ""
-  ? NOT_AVAILABLE : String(value);
 
 // The media/text preview, and the answer where the card has one.
 function inspectorPreview(row) {
@@ -2147,6 +2189,58 @@ function inspectorCreative(row) {
   ]));
 }
 
+// `selection.json_factors` writes null where a value is not finite, so a key
+// present-but-null and a key the build never sent are two different answers.
+function factorText(factors, key) {
+  if (!Object.prototype.hasOwnProperty.call(factors, key)) return NOT_AVAILABLE;
+  return factors[key] === null ? "not a number" : String(factors[key]);
+}
+
+// A term the product cannot recover from: an exact zero, or a value the server
+// could not express as a finite number. A hostile string is neither.
+const gatedTerm = (value) => value === 0 || value === null;
+
+// base × season × daypart × recency × affinity × fatigue = score. Each term is
+// a summaryRow, so the figures land in the page's own monospace `.val`.
+function factorEquation(factors) {
+  const eq = makeEl("div", "insp-eq");
+  const term = (key) => {
+    const row = summaryRow(key, factorText(factors, key));
+    if (gatedTerm(factors[key])) row.classList.add("insp-term-zero");
+    return row;
+  };
+  FACTOR_ORDER.forEach((key, at) => {
+    if (at) eq.append(makeEl("span", "insp-eq-op", "×"));
+    eq.append(term(key));
+  });
+  eq.append(makeEl("span", "insp-eq-op", "="), term("score"));
+  return eq;
+}
+
+// A product cannot recover from a zero, so whichever term is zero IS the gate.
+// The badge carries icon, word and colour; the sentence under it reads out the
+// server's own reason token, or says plainly that there is none for this term.
+function zeroGate(factors) {
+  const gated = FACTOR_ORDER.filter((key) => gatedTerm(factors[key]));
+  if (gated.length) {
+    return [statusBadge("attention", "zero gate — " + gated.join(", "))].concat(
+      gated.map((key) => {
+        const token = factors[key] === null ? "non_finite_score" : ZERO_REASON[key];
+        return makeEl("p", "insp-note", key + " is " + factorText(factors, key) +
+          ", so the score cannot be positive: " +
+          (token ? REASON_TEXT[token] : ZERO_UNNAMED));
+      }));
+  }
+  if (factors.score === null) {
+    return [statusBadge("attention", "gated — " + REASON_TEXT.non_finite_score)];
+  }
+  if (factors.score === 0) {
+    return [statusBadge("attention",
+      "zero gate — the score is zero although no single factor this build sent is")];
+  }
+  return [];
+}
+
 function inspectorSelection(row) {
   const sel = row.selection;
   if (!sel || typeof sel !== "object") {
@@ -2168,33 +2262,51 @@ function inspectorSelection(row) {
     rows.push(summaryRow("reasons", NOT_AVAILABLE));
   }
   const f = sel.factors;
-  if (f && typeof f === "object") {
-    ["base", "season", "daypart", "recency", "affinity", "fatigue", "score"]
-      .forEach((key) => {
-        if (f[key] !== undefined) rows.push(summaryRow(key, String(f[key])));
-      });
-  } else {
-    rows.push(summaryRow("factors", NOT_AVAILABLE));
-  }
+  if (f && typeof f === "object") rows.push(factorEquation(f), ...zeroGate(f));
+  else rows.push(summaryRow("factors", NOT_AVAILABLE));
   return inspectorBlock("Selection", rows);
 }
 
 // Whatever the snapshot actually carries: a missing creator is not "unknown".
-const joined = (values) => values
-  .filter((v) => v !== undefined && v !== null && v !== "")
-  .map(String).join(" · ") || NOT_AVAILABLE;
+const joined = (values) => values.filter(present).map(String).join(" · ")
+  || NOT_AVAILABLE;
+
+// Every field bumparr.music's CREDITS_KEYS can carry, so a licence that
+// requires attribution shows the attribution text it requires.
+const CREDIT_FIELDS = [
+  ["music title", "title"], ["music creator", "creator"],
+  ["music license", "license"], ["music attribution", "attribution"],
+  ["music source page", "source_page"], ["music license URL", "license_url"],
+  ["music bed id", "id"],
+];
+// What a payload can record about the background image enrich_bg attached.
+const BG_FIELDS = ["bg_creator", "bg_title", "bg_license", "bg_license_url",
+                   "bg_source_page"];
 
 function inspectorProvenance(row) {
   const payload = parsePayload(row.payload);
-  const credits = row.music_credits;
-  return inspectorBlock("Provenance", facts([
+  const credits = row.music_credits && typeof row.music_credits === "object"
+    ? row.music_credits : null;
+  // A snapshot that left a field empty is not a build that never carried it.
+  const hasCredits = Boolean(credits) && CREDIT_FIELDS.some(([, key]) =>
+    present(credits[key]));
+  const rows = facts([
     ["registered source", fieldText(row.source)],
     ["payload source", fieldText(payload.source)],
     ["background", joined([payload.bg_creator, payload.bg_title, payload.bg_license])],
-    ["music", credits && typeof credits === "object"
-      ? joined([credits.title, credits.creator, credits.license, credits.id])
-      : NOT_AVAILABLE],
-  ]));
+    ["background links", joined([payload.bg_source_page, payload.bg_license_url])],
+  ].concat(hasCredits
+    ? CREDIT_FIELDS.map(([label, key]) => [label, fieldText(credits[key], NOT_RECORDED)])
+    : [["music", NOT_AVAILABLE]]));
+  // Nothing recorded is a fact about the row, not a failure of the read. It is
+  // said out loud, and nothing above it is disabled because of it.
+  const recorded = [row.source, payload.source]
+    .concat(BG_FIELDS.map((key) => payload[key])).some(present) || hasCredits;
+  if (!recorded) {
+    rows.unshift(statusBadge("attention", NO_PROVENANCE),
+                 makeEl("p", "insp-note", PROVENANCE_NOTE));
+  }
+  return inspectorBlock("Provenance & rights", rows);
 }
 
 function inspectorHistory(row) {
@@ -3452,6 +3564,88 @@ function renderStationState() {
   return rendered;
 }
 
+// --- configuration, read-only -------------------------------------------------
+// What the server loaded from its three files at startup. Nothing here can
+// change one: no field, no picker, no form, and no request that writes.
+
+// One file's group: its name, one badge, and the fields behind it. `absent` is
+// the sentence shown where there is no badge to show.
+function configGroup(title, badge, rows, absent) {
+  const group = makeEl("div", "cfg-group");
+  const head = makeEl("div", "summary-row");
+  head.append(makeEl("span", "lbl", title),
+              badge || makeEl("span", "val", absent || NOT_AVAILABLE));
+  group.append(head, ...(rows || []));
+  return group;
+}
+
+// Each file the same way: name, one badge, then its own fields, every one read
+// straight off the status object it came from.
+function stationConfigGroups(status) {
+  const s = status && typeof status === "object" ? status : {};
+  const group = (title, part, pairs) => (part && typeof part === "object"
+    ? configGroup(title, statusBadge(configLevel(part), configSay(part)), facts(pairs(part)))
+    : configGroup(title, null, []));
+  const mem = s.memory && typeof s.memory === "object" ? s.memory : null;
+  const msgs = mem && mem.messages && typeof mem.messages === "object"
+    ? mem.messages : null;
+  const kinds = mem && Array.isArray(mem.enabled_kinds) ? mem.enabled_kinds : null;
+  return [
+    group("channel profile", s.profile, (p) => [
+      ["source", fieldText(p.source)],
+      ["version", num(p.version)],
+      ["valid", yesNo(p.valid)],
+    ]),
+    group("music manifest", s.music, (m) => [
+      ["source", fieldText(m.source)],
+      ["version", num(m.version)],
+      ["valid", yesNo(m.valid)],
+      ["enabled beds", num(m.enabled_beds)],
+      ["compatibility", yesNo(m.compatibility,
+        "yes — beds outside the manifest are allowed", "no — manifest only")],
+    ]),
+    // Memory reports no validity of its own; the operator messages file does.
+    mem ? configGroup("channel memory",
+      statusBadge(msgs ? configLevel(msgs) : "healthy",
+        kinds ? (kinds.length ? kinds.length + " memory kind" +
+                 (kinds.length === 1 ? "" : "s") + " enabled" : "no memory kinds enabled")
+              : "kinds not reported"),
+      facts([
+        ["refresh", mem.refresh_seconds === 0 ? "off — memory is not refreshed"
+          : (present(mem.refresh_seconds) ? String(mem.refresh_seconds) + "s"
+                                          : NOT_AVAILABLE)],
+        ["kinds", kinds ? (kinds.length ? kinds.map(String).join(", ") : "none")
+                        : NOT_AVAILABLE],
+        ["history channel", fieldText(mem.channel)],
+        ["operator messages", msgs ? configSay(msgs) : NOT_AVAILABLE],
+        ["messages enabled", msgs ? num(msgs.enabled) + " of " + num(msgs.total)
+                                  : NOT_AVAILABLE],
+      ]))
+      : configGroup("channel memory", null, []),
+  ];
+}
+
+// While there is no /api/status body, statusGap's sentence stands in for every
+// file: never read is not the same claim as a build that lacks the field.
+function renderStationConfig() {
+  const el = $("#station-config");
+  const gap = statusGap();
+  if (el) {
+    el.replaceChildren(makeEl("p", "note", FILE_OWNED),
+      ...(gap ? CONFIG_FILES.map((name) => configGroup(name, null, [], gap))
+              : stationConfigGroups(STATE.status.value)),
+      // These files change only when the service is restarted, so this view's
+      // 20-second clock re-reads the station and not the status. The age says
+      // so out loud rather than letting an hour-old answer look current.
+      summaryRow("last read", STATE.status.updatedAt
+        ? formatAge(STATE.status.updatedAt) : "not read yet"));
+  }
+  return renderPanelState($("#station-config-state"),
+    STATE.status.loading && !STATE.status.value
+      ? { state: "loading" }
+      : readState(STATE.status, () => { loadStatus(); }));
+}
+
 // What the station body was told, so a channel with no answer can say how old
 // the last good one is rather than going blank.
 const stationMeta = () => ({ updatedAt: STATE.station.updatedAt });
@@ -3470,6 +3664,7 @@ function renderStation() {
   }
   const conform = $("#conform");
   if (conform) conform.replaceChildren(conformEl(STATE.station.value));
+  renderStationConfig();
   renderActionLocks();
   renderOvStation();
 }
@@ -4298,6 +4493,9 @@ if (COMMONJS) {
     STATION_MESSAGES, HLS_NO_NATIVE, RECENT_JOBS, mergeJobs, jobsList, jobRetry,
     renderOpsJobs, loadJobs, lockAction, renderActionLocks, wireMaintenance,
     syncJobWatches, stopJobWatches,
+    // F5: creative, selection and provenance insight
+    REASON_TEXT, NO_PROVENANCE, FILE_OWNED, renderStationConfig,
+    stationConfigGroups,
     resetStateForTests() {
       if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
       stopRefresh();

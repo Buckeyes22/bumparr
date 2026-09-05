@@ -304,6 +304,12 @@ function buildDocument() {
             // connection to the channel and must survive the 20s refresh.
             el("div", { id: "station-preview", className: "station-preview" }),
           ]),
+          // Read-only: index.html gives this block a heading and two empty
+          // containers, and app.js is the only thing that ever fills them.
+          panel("panel-station-config", [
+            el("div", { id: "station-config-state", className: "panel-state" }),
+            el("div", { id: "station-config", className: "summary" }),
+          ]),
           panel("panel-conform", [
             el("div", { id: "conform-state", className: "panel-state" }),
             el("div", { id: "conform" }),
@@ -421,7 +427,8 @@ const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
         readComposerControls, setComposerPreset, renderComposer, timelineItemEl,
         playComposerSequence, advanceComposer, stopComposerPlayback,
         markComposerStale, playbackLine, wireComposer, RELAXED_TEXT, STALE_TEXT,
-        COMPOSER_PRESETS } = app;
+        COMPOSER_PRESETS,
+        REASON_TEXT, NO_PROVENANCE, renderStationConfig } = app;
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -926,10 +933,11 @@ test("preview cards keep hostile creative strings as text", () => {
     type: "card", kind: "psa", title: "x",
     source: '<script>globalThis.pwned=8</script>',
     payload: { lines: ["Stay."], source: "operator" },
-    creative: { family, template: "minimal_center", brand_mode: "reveal" },
+    creative: { family, audio: "music", template: "minimal_center",
+                brand_mode: "reveal" },
     selection: { factors: { base: 1, score: 0.5 } },
   });
-  const text = descendants(card).find((n) => n.className === "pv-creative").textContent;
+  const text = textOf(descendants(card).find((n) => n.className === "pv-chips"));
   assert.ok(text.includes(family));
   assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
   assert.equal(globalThis.pwned, undefined);
@@ -4530,3 +4538,297 @@ test("the same action started from the Station reports in the Station's panel",
   finish();
   await running;
 });
+
+// ---------------------------------------------------------------------------
+// F5: creative and provenance insight
+// ---------------------------------------------------------------------------
+
+// The eight tokens bumparr.selection.eligibility_reasons can return, exactly as
+// docs/API.md lists them. A ninth here would be an invented field.
+const REASON_TOKENS = ["disabled", "unhealthy", "missing_media", "base_weight",
+                       "season", "daypart", "non_finite_score", "eligible"];
+
+const equationEl = () => descendants($("#inspector-body"))
+  .find((n) => n.className === "insp-eq");
+const termsIn = (eq, cls) => descendants(eq).filter((n) => n.className === cls)
+  .map((n) => n.textContent);
+const gatedTerms = (eq) => descendants(eq)
+  .filter((n) => n.className.includes("insp-term-zero"))
+  .map((n) => textOf(n).trim());
+
+const withFactors = (factors, reasons) => stubInspector({ detail: {
+  selection: { eligible_now: reasons === undefined,
+               reasons: reasons || ["eligible"], factors },
+} });
+
+// --- the factor product ------------------------------------------------------
+
+test("the score is the product the server computed, shown term by term", async () => {
+  withFactors({ base: 1.5, season: 0.8, daypart: 1.2, recency: 0.9,
+                affinity: 1, fatigue: 0.7, score: 0.907 });
+  await openInspector("card:psa:abc");
+  const eq = equationEl();
+  assert.ok(eq, "the factors are drawn as one equation, not seven loose rows");
+  assert.deepEqual(termsIn(eq, "lbl"),
+                   ["base", "season", "daypart", "recency", "affinity",
+                    "fatigue", "score"]);
+  assert.deepEqual(termsIn(eq, "val"),
+                   ["1.5", "0.8", "1.2", "0.9", "1", "0.7", "0.907"]);
+  // Five multiplications between six factors, then one equals before the score.
+  assert.deepEqual(termsIn(eq, "insp-eq-op"), ["×", "×", "×", "×", "×", "="]);
+  assert.deepEqual(gatedTerms(eq), [], "nothing is zero, so nothing is marked");
+});
+
+test("a factor of zero is the gate, named in words and in the server's own token",
+     async () => {
+  withFactors({ base: 1, season: 0, daypart: 1, recency: 1, affinity: 1,
+                fatigue: 1, score: 0 }, ["season"]);
+  await openInspector("card:psa:abc");
+  assert.deepEqual(gatedTerms(equationEl()), ["season 0", "score 0"]);
+  const text = inspectorText();
+  assert.match(text, /zero gate/);
+  assert.match(text, /Attention/, "the gate is an icon and a word, not colour alone");
+  assert.ok(text.includes(REASON_TEXT.season), "the token is read out in words");
+  assert.ok(text.includes("season is 0"));
+});
+
+test("a zero the server has no reason token for is still named as the gate", async () => {
+  withFactors({ base: 1, season: 1, daypart: 1, recency: 0, affinity: 1,
+                fatigue: 1, score: 0 }, ["eligible"]);
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  assert.match(text, /recency is 0/);
+  assert.match(text, /no reason token/, "no token is invented for this factor");
+  assert.doesNotMatch(text, /undefined/);
+});
+
+test("a score the server could not express as a number says so, never a zero",
+     async () => {
+  withFactors({ base: 1, season: 1, daypart: 1, recency: 1, affinity: 1,
+                fatigue: 1, score: null }, ["non_finite_score"]);
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  assert.match(text, /not a number/);
+  assert.ok(text.includes(REASON_TEXT.non_finite_score));
+  assert.doesNotMatch(text, /score 0/);
+});
+
+test("every eligibility reason the API documents has a plain reading", async () => {
+  assert.deepEqual(Object.keys(REASON_TEXT).slice().sort(), REASON_TOKENS.slice().sort(),
+                   "no token is missing and none is invented");
+  REASON_TOKENS.forEach((token) => {
+    assert.ok(REASON_TEXT[token].includes(" — "), token + " is read out, not echoed");
+    assert.ok(REASON_TEXT[token].length > token.length + 6, token + " says something");
+  });
+  withFactors({ base: 0, season: 0, daypart: 0, recency: 1, affinity: 1,
+                fatigue: 1, score: 0 }, REASON_TOKENS);
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  REASON_TOKENS.forEach((token) => assert.ok(text.includes(REASON_TEXT[token]),
+    "the inspector never leaves " + token + " as a bare token"));
+});
+
+test("a factor this build does not send is named, never shown as a zero", async () => {
+  withFactors({ base: 1, score: 1 });
+  await openInspector("card:psa:abc");
+  const eq = equationEl();
+  assert.deepEqual(termsIn(eq, "val"),
+                   ["1", NOT_AVAILABLE, NOT_AVAILABLE, NOT_AVAILABLE,
+                    NOT_AVAILABLE, NOT_AVAILABLE, "1"]);
+  assert.deepEqual(gatedTerms(eq), [], "an absent factor is not a zero one");
+  assert.doesNotMatch(inspectorText(), /zero gate/);
+});
+
+test("hostile factor values stay text in the equation", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=71">';
+  withFactors({ base: hostile, season: hostile, daypart: 1, recency: 1,
+                affinity: 1, fatigue: 1, score: hostile }, [hostile]);
+  await openInspector("card:psa:abc");
+  const body = $("#inspector-body");
+  assert.ok(textOf(body).includes(hostile), "the server's own words are shown, as text");
+  assert.equal(descendants(body).filter((n) => n.tagName === "IMG").length, 0);
+  assert.deepEqual(gatedTerms(equationEl()), [],
+                   "a string that merely looks falsy is not a zero gate");
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// --- provenance and rights ---------------------------------------------------
+
+test("the rights block carries every field the credits snapshot holds", async () => {
+  stubInspector({ detail: {
+    payload: JSON.stringify({ lines: ["Back after this."], source: "operator",
+      bg_creator: "A Photographer", bg_title: "Harbour at dusk",
+      bg_license: "CC0 1.0", bg_license_url: "https://example.test/cc0",
+      bg_source_page: "https://example.test/photo" }),
+    music_credits: { id: "night-room-01", title: "Night Room",
+      creator: "Example Artist", source_page: "https://example.test/bed",
+      license: "CC BY 4.0", license_url: "https://example.test/by",
+      attribution: "Night Room by Example Artist (CC BY 4.0)" },
+  } });
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  ["Provenance & rights", "generated", "operator", "A Photographer",
+   "Harbour at dusk", "CC0 1.0", "https://example.test/photo",
+   "https://example.test/cc0", "Night Room", "Example Artist", "CC BY 4.0",
+   "https://example.test/by", "https://example.test/bed", "night-room-01",
+   "Night Room by Example Artist (CC BY 4.0)"].forEach((bit) => {
+    assert.ok(text.includes(bit), "the rights block is missing " + bit);
+  });
+  assert.ok(!text.includes(NO_PROVENANCE), "this row records plenty");
+});
+
+test("a credit the snapshot left empty is not reported as a missing field", async () => {
+  stubInspector({ detail: { music_credits: {
+    id: "legacy.loose.wav", title: "", creator: "", source_page: "",
+    license: "", license_url: "", attribution: "" } } });
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  assert.ok(text.includes("legacy.loose.wav"));
+  assert.match(text, /not recorded/, "an empty credit is unrecorded, not unsupported");
+  assert.ok(!text.toLowerCase().includes("unknown artist"));
+});
+
+test("an item with nothing recorded says so, and its actions still work", async () => {
+  stubInspector({ detail: { source: "", payload: "{}", music_credits: null } });
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  assert.ok(text.includes(NO_PROVENANCE));
+  assert.match(text, /Attention/, "an icon and a word, never colour alone");
+  assert.match(text, /not a block/);
+  const disable = inspectorButton("Disable from rotation");
+  assert.ok(disable, "the reversible action is still offered");
+  assert.equal(disable.disabled, false, "missing provenance never blocks curation");
+  assert.equal(inspectorButton("Delete permanently").disabled, false);
+});
+
+test("hostile provenance and credit strings stay text in the rights block", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=72">';
+  stubInspector({ detail: {
+    source: hostile,
+    payload: JSON.stringify({ source: hostile, bg_creator: hostile,
+                              bg_license_url: hostile, bg_source_page: hostile }),
+    music_credits: { id: hostile, title: hostile, creator: hostile,
+                     source_page: hostile, license: hostile,
+                     license_url: hostile, attribution: hostile },
+  } });
+  await openInspector("card:psa:abc");
+  const body = $("#inspector-body");
+  assert.ok(textOf(body).includes(hostile));
+  assert.equal(descendants(body).filter((n) => n.tagName === "A").length, 0,
+               "a hostile URL is never turned into a link");
+  assert.equal(descendants(body).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// --- the library card's creative chips ---------------------------------------
+
+test("a card labels family and audio as chips, and says so when it knows neither",
+     () => {
+  const card = cardEl({ type: "card", kind: "psa", title: "x",
+    payload: { lines: ["Stay."] },
+    creative: { family: "text", audio: "music", template: "minimal_center" } });
+  const chips = descendants(card).filter((n) => n.className === "pv-chip");
+  assert.deepEqual(chips.map((n) => textOf(n).trim()),
+                   ["family text", "audio music"]);
+  const bare = cardEl({ type: "card", kind: "psa", title: "x",
+                        payload: { lines: ["Stay."] } });
+  const box = descendants(bare).find((n) => n.className === "pv-chips");
+  assert.ok(box, "the row is still accounted for");
+  assert.equal(textOf(box).trim(), NOT_AVAILABLE);
+  assert.equal(descendants(bare).filter((n) => n.className === "pv-chip").length, 0);
+});
+
+test("a card that knows only one of the two chips shows only that one", () => {
+  const card = cardEl({ type: "card", kind: "psa", title: "x",
+    payload: { lines: ["Stay."] }, creative: { audio: "silence" } });
+  const chips = descendants(card).filter((n) => n.className === "pv-chip");
+  assert.deepEqual(chips.map((n) => textOf(n).trim()), ["audio silence"]);
+});
+
+// --- the Station's read-only configuration block ------------------------------
+
+async function stationConfig(over) {
+  stubRoutes(over);
+  await applyHash("#/station");
+  await flush();
+  await flush();
+  return $("#station-config");
+}
+
+test("the station configuration block holds no control that could write a file",
+     async () => {
+  const el = await stationConfig();
+  const panel = $("#panel-station-config");
+  assert.ok(panel && el, "the Station view carries a Configuration block");
+  assert.deepEqual(descendants(panel).filter((n) =>
+    ["INPUT", "SELECT", "TEXTAREA", "FORM"].includes(n.tagName)), [],
+    "configuration is read-only: no field, no picker, no form");
+  assert.deepEqual(descendants(panel).filter((n) => n.tagName === "BUTTON"), []);
+  const text = textOf(panel);
+  assert.match(text, /file-owned/);
+  assert.match(text, /edited in their files on the server/);
+  assert.match(text, /Nothing on this page writes them/);
+});
+
+test("configuration reports profile, manifest and memory from the server's fields",
+     async () => {
+  const text = textOf(await stationConfig());
+  ["channel profile", "shipped-default", "music manifest", "enabled beds",
+   "compatibility", "channel memory", "previously_on", "station:live",
+   "operator messages", "last read"].forEach((bit) => {
+    assert.ok(text.includes(bit), "the configuration block is missing " + bit);
+  });
+  assert.doesNotMatch(text, /undefined/);
+});
+
+test("a manifest that fell back after an error is an Attention, not a silent default",
+     async () => {
+  const el = await stationConfig({ status: {
+    profile: { version: 1, valid: false, source: "fallback-after-error" },
+    music: { version: 1, valid: false, source: "fallback-after-error",
+             enabled_beds: 0, compatibility: true },
+  } });
+  const attention = descendants(el).filter((n) => n.className.includes("badge-attention"));
+  assert.ok(attention.length >= 2, "both files say something is wrong");
+  const text = textOf(el);
+  assert.match(text, /Attention/);
+  assert.match(text, /fallback-after-error/);
+  assert.match(text, /invalid, running the shipped default/);
+  assert.match(text, /beds outside the manifest are allowed/);
+});
+
+test("a build that reports no configuration says so rather than inventing a default",
+     async () => {
+  const text = textOf(await stationConfig({ status: {
+    profile: undefined, music: undefined, memory: undefined } }));
+  assert.equal(text.split(NOT_AVAILABLE).length - 1, 3,
+               "each of the three files says so exactly once: " + text);
+  assert.doesNotMatch(text, /shipped-default/);
+});
+
+test("configuration not yet read is not the same claim as a build that lacks it", () => {
+  renderStationConfig();
+  const text = textOf($("#station-config"));
+  assert.match(text, /not read yet/);
+  assert.ok(!text.includes(NOT_AVAILABLE), "never read is not 'this build lacks it'");
+  assert.match(textOf($("#station-config-state")), /Loading|Working/);
+});
+
+test("hostile configuration strings stay text in the Station's block", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=73">';
+  const el = await stationConfig({ status: {
+    profile: { version: hostile, valid: true, source: hostile },
+    music: { version: 1, valid: true, source: hostile, enabled_beds: hostile,
+             compatibility: false },
+    memory: { refresh_seconds: hostile, enabled_kinds: [hostile], channel: hostile,
+              messages: { valid: true, source: hostile, enabled: hostile, total: 1 } },
+  } });
+  assert.ok(textOf(el).includes(hostile));
+  assert.equal(descendants(el).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// The last test in this file leaves whatever route it entered behind, and its
+// 20-second refresh interval would keep the runner alive past the suite. This
+// is the teardown beforeEach already does for every other test.
+test.after(() => { if (resetStateForTests) resetStateForTests(); });

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+**Operator dashboard: why an item was picked, and who it belongs to**
+- The inspector's **Selection** block now draws the score as the product it is
+  — `base × season × daypart × recency × affinity × fatigue = score` — with
+  every term in monospace. A term the server sent as `0` (or as `null`, its way
+  of saying "not finite") is marked and named as the **zero gate** under an
+  Attention badge, with the matching `reasons` token read out in words; where a
+  factor has no token of its own the block says so rather than inventing one. A
+  factor this build of the server does not send reads "Not available in this
+  version." instead of being shown as a zero.
+- **Provenance & rights** replaces the old provenance block: registered and
+  payload source, background attribution and its licence links, and every field
+  of the music-bed credits snapshot — title, creator, licence, attribution,
+  source page, licence URL and bed id — so a licence that requires attribution
+  shows the attribution it requires. A field the snapshot carries but left empty
+  reads "not recorded", which is not the same claim as a build that lacks it.
+- A row that records no source, no background and no credits says **"No
+  provenance recorded"** under an Attention badge, and says out loud that this
+  is a note and not a block: every curation control stays enabled.
+- Library cards now carry compact **family** and **audio** chips instead of a
+  run-on creative line; a row the server resolved neither for still says so.
+- The Station view gains a read-only **Configuration** block: the channel
+  profile, the music-bed manifest and channel memory, each with its source,
+  version, validity and own counts, under one status badge apiece — an invalid
+  file or a `fallback-after-error` source is an Attention, never a silent
+  default. It states that configuration is file-owned and edited in those files
+  on the server, and it holds no input, picker, form or button, because the
+  browser never writes YAML or environment.
+
 **Operator dashboard: a break composer you can review and play**
 - The Composer is now a break composer rather than a pack preview. Labelled
   controls — 15/30/60/90-second presets, a custom duration, tolerance, maximum

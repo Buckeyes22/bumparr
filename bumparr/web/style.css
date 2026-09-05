@@ -213,6 +213,19 @@ button:disabled { opacity:.55; cursor:wait; }
   font-size:.7rem; color:var(--muted); margin-top:var(--space-1);
   padding:0 var(--space-2); font-family:var(--font-mono); overflow-wrap:anywhere; }
 
+/* Family and audio: the two labels a shelf of cards is scanned by, each one a
+   named chip rather than a run-on line. */
+.pv-chips { display:flex; flex-wrap:wrap; gap:var(--space-1);
+  margin-top:var(--space-1); padding:0 var(--space-2); }
+.pv-chip { display:inline-flex; align-items:baseline; gap:var(--space-1);
+  background:var(--surface-3); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:0 var(--space-1); font-size:.7rem;
+  min-width:0; }
+.pv-chip-k { color:var(--muted); }
+.pv-chip-v { font-family:var(--font-mono); overflow-wrap:anywhere; }
+.pv-chip-none { font-size:.7rem; color:var(--muted);
+  font-family:var(--font-mono); }
+
 /* The pool state in words, with the card text rather than over the media. */
 .pv-state { padding:0 var(--space-2) var(--space-1); }
 
@@ -316,6 +329,17 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
 .insp-reasons { list-style:none; display:flex; flex-direction:column;
   gap:var(--space-1); font-size:.85rem; }
 .insp-reasons li::before { content:"▸ "; color:var(--muted); }
+/* The score is a product, so it is drawn as one. Each term reuses .summary-row,
+   which already puts figures in the page's monospace; a term the product cannot
+   recover from is underlined AND named in the sentence below, never colour
+   alone. */
+.insp-eq { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-2);
+  margin:var(--space-1) 0; }
+.insp-eq .summary-row { gap:var(--space-1); font-size:.8rem; }
+.insp-eq .summary-row .lbl { min-width:0; }
+.insp-eq-op { color:var(--muted); font-family:var(--font-mono); }
+.insp-term-zero { border-bottom:2px solid var(--warning); }
+.insp-term-zero .lbl, .insp-term-zero .val { color:var(--warning); }
 .insp-actions { display:flex; flex-wrap:wrap; gap:var(--space-2);
   margin-top:var(--space-2); }
 .insp-primary { font-weight:600; border-color:var(--accent);
@@ -356,6 +380,12 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
   font-size:.85rem; background:var(--bg); color:var(--text);
   border:1px solid var(--border); border-radius:var(--radius-sm); padding:var(--space-1); }
 .station .muted, .station-body .muted { color:var(--muted); }
+
+/* Configuration, read-only: one group per file the server loaded at startup. */
+.cfg-group { display:flex; flex-direction:column; gap:var(--space-1);
+  border-top:1px solid var(--border); padding-top:var(--space-2);
+  margin-top:var(--space-2); }
+#station-config > .note { margin-bottom:var(--space-2); }
 
 /* Below 760px the sidebar becomes a horizontally scrolling tab row under the
    header. Still every view, still one visible tap each — nothing moves behind

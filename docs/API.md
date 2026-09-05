@@ -496,8 +496,10 @@ closes any modal it had open, and pauses and detaches its media.
   each change so the address bar is always a deep link to what is on screen.
   Results report **Showing N of TOTAL** from `total`, and **Load more** appends
   the next page. Each card shows a preview, kind, title, duration or **LIVE**,
-  its pool state in words (playable / parked / dead / unrendered), the creative
-  line when the server sends one, and an always-visible **Inspect** button —
+  its pool state in words (playable / parked / dead / unrendered), compact
+  **family** and **audio** chips from the resolved `creative` (a row the server
+  resolved neither for says "Not available in this version." rather than
+  showing nothing), and an always-visible **Inspect** button —
   the card's only action control. Video is `preload="metadata"`, muted and
   controlled; only one preview plays at a time; a live stream is a badge and a
   **Play live stream** button that builds the player only when pressed, under a
@@ -511,10 +513,18 @@ closes any modal it had open, and pauses and detaches its media.
   preview and card answer, identity (id, title, type, kind, source, duration,
   tags), state (enabled, health, rendered, base weight, failures), creative
   (family, roles, energy, audio, text-heavy, template, brand mode), selection
-  (eligible now, the ordered `reasons` with a plain reading of each, and every
-  factor including `base` and `score`), provenance (registered and payload
-  source, background attribution, music credits), history (created, last
-  played, play count) and the media URL as a read-only field with a **Copy**
+  (eligible now, the ordered `reasons` with a plain reading of each, and the
+  score drawn as the product it is —
+  `base × season × daypart × recency × affinity × fatigue = score`, every term
+  in monospace, a term the server sent as `0` or as `null` marked and named as
+  the **zero gate** under an Attention badge with its matching `reasons` token
+  read out in words, and a term the build did not send shown as "Not available
+  in this version." rather than as a zero), **Provenance & rights** (registered
+  and payload source, background attribution and its links, and every field of
+  the `music_credits` snapshot — title, creator, license, attribution, source
+  page, license URL and bed id; a field the snapshot left empty reads "not
+  recorded", which is a different claim from a build that lacks it), history
+  (created, last played, play count) and the media URL as a read-only field with a **Copy**
   control — the Clipboard API where the browser grants it, a selection to copy
   by hand where it does not, and a visible sentence either way, since a silent
   Copy button cannot be told from a broken one. The primary action is the
@@ -541,7 +551,10 @@ closes any modal it had open, and pauses and detaches its media.
   (`DELETE /api/pool/kind/{kind}`) additionally requires typing the kind name
   exactly before its confirm button works. A `cleanup_failed` response keeps
   the inspector open carrying that news, because it is the only surface that
-  said so.
+  said so. A row that records no source, no background attribution and no music
+  credits says **"No provenance recorded"** under an Attention badge and adds
+  that this is a note, not a block: every curation control above it stays
+  enabled, because provenance is editorial news and not authorization.
 - **Composer** (`#/composer`) — review a break as an editorial unit. Labelled
   controls (15/30/60/90-second presets, a custom duration `0 < s <= 86400`,
   tolerance `0..3600` defaulting to 1.5, maximum items `1..40` defaulting to 8,
@@ -597,7 +610,18 @@ closes any modal it had open, and pauses and detaches its media.
   `last_conform` sweep (its age and its conformed/failed/pruned/skipped counts;
   `null` reads as "no sweep has finished in this service yet", an absent key as
   unavailable), says that conforming can be slow, and carries **Conform now**
-  (`POST /api/station/conform`), which disables only itself.
+  (`POST /api/station/conform`), which disables only itself. A read-only
+  **Configuration** block reports what the server loaded at startup from
+  `status.profile` (source, version, valid), `status.music` (source, version,
+  valid, enabled beds, compatibility mode) and `status.memory` (refresh
+  interval, enabled kinds, history channel, and the operator-messages file's
+  own source and validity), each under one status badge — `valid: false` or
+  `source: "fallback-after-error"` is an Attention, never a silent default. It
+  states that configuration is file-owned and edited in those files on the
+  server, and it contains no `<input>`, `<select>`, `<textarea>`, `<form>` or
+  button: the browser never writes YAML or environment. A file this build does
+  not report says "Not available in this version."; before `/api/status` has
+  answered, all three say why there is nothing to read yet instead.
 - **Operations** (`#/operations`) — opens with the unauthenticated-API warning,
   then groups every action by what it costs, each group stating its
   requirements before execution: **1 Add material** — the ask bar

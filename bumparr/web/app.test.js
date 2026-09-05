@@ -70,6 +70,17 @@ class FakeNode {
     this.hidden = false;
     this.disabled = false;
     this.id = "";
+    // Form and media state app.js reads back as properties rather than as
+    // attributes, exactly as a real element carries them.
+    this.value = "";
+    this.checked = false;
+    this.paused = true;
+    this.loads = 0;
+    // <dialog>: `open` plus showModal/close below. app.js only reaches for
+    // those when HTMLDialogElement exists, so deleting that global exercises
+    // the fallback panel against this same node.
+    this.open = false;
+    this.returnValue = "";
     // Back-references stay non-enumerable: several tests serialise a subtree
     // with JSON.stringify to prove no markup got in, and a parent/classList
     // link would make that a circular structure.
@@ -85,6 +96,13 @@ class FakeNode {
   replaceChildren(...nodes) {
     this.children.forEach((n) => { if (n && n.parent === this) n.parent = null; });
     this.children = this.adopt(nodes);
+  }
+  replaceChild(fresh, old) {
+    const at = this.children.indexOf(old);
+    if (at === -1) return old;
+    old.parent = null;
+    this.children[at] = this.adopt([fresh])[0];
+    return old;
   }
   remove() {
     if (!this.parent) return;
@@ -106,7 +124,10 @@ class FakeNode {
     if (name === "class") return this.className;
     return name in this.attributes ? this.attributes[name] : null;
   }
-  removeAttribute(name) { delete this.attributes[name]; }
+  removeAttribute(name) {
+    if (name.startsWith("data-")) { delete this.dataset[dataKey(name)]; return; }
+    delete this.attributes[name];
+  }
   addEventListener(type, fn) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(fn);
@@ -123,7 +144,24 @@ class FakeNode {
   click() { return this.dispatch("click"); }
   focus() { global.document.activeElement = this; }
   select() { this.selected = true; }
+  // Modal open/close. close() is idempotent, so a double teardown is harmless
+  // here for the same reason it is on the real element.
+  showModal() { this.open = true; this.setAttribute("open", ""); }
+  close(value) {
+    if (!this.open) return;
+    this.open = false;
+    this.removeAttribute("open");
+    this.returnValue = value === undefined ? "" : String(value);
+    this.dispatch("close");
+  }
+  // Media. play() resolves like the real promise-returning method so app.js's
+  // .catch() has something to attach to, and both fire their events, which is
+  // what lets a test prove only one preview is ever playing.
+  play() { this.paused = false; this.dispatch("play"); return Promise.resolve(); }
+  pause() { if (!this.paused) { this.paused = true; this.dispatch("pause"); } }
+  load() { this.loads++; }
   descendants() { return this.children.flatMap((c) => [c, ...c.descendants()]); }
+  contains(node) { return node === this || this.descendants().includes(node); }
   querySelector(selector) {
     return this.descendants().find((n) => matchesSelector(n, selector)) || null;
   }
@@ -197,14 +235,27 @@ function buildDocument() {
         ]),
         view("view-library", [
           el("div", { className: "viewtools" }, [
-            el("input", { id: "search", value: "" }),
             el("button", { id: "shuffle" }),
           ]),
           el("div", { className: "panel wide" }, [
-            el("div", { id: "filters" }),
+            el("div", { className: "libbar" }, [
+              el("label", { htmlFor: "search" }),
+              el("input", { id: "search", value: "" }),
+              el("select", { id: "filter-type", value: "" }),
+              el("select", { id: "filter-kind", value: "" }),
+              el("select", { id: "filter-state", value: "all" }),
+              el("select", { id: "page-size", value: "24" }),
+              el("select", { id: "density", value: "grid" }),
+              el("button", { id: "clear-filters" }),
+            ]),
+            el("p", { id: "library-counts", className: "libcounts" }),
             el("div", { id: "browse-state", className: "panel-state" }),
             el("div", { id: "grid", className: "grid" }),
             el("button", { id: "more", hidden: true }),
+          ]),
+          el("section", { id: "library-danger", className: "panel wide danger-zone" }, [
+            el("p", { id: "danger-note", className: "note" }),
+            el("button", { id: "drop-kind", disabled: true }),
           ]),
         ]),
         view("view-composer", [
@@ -247,6 +298,15 @@ function buildDocument() {
       ]),
     ]),
     el("footer", {}, [el("p", { id: "footer-version" })]),
+    // One inspector for the whole page, empty until something is inspected.
+    el("dialog", { id: "inspector", className: "dlg dlg-inspector" }, [
+      el("div", { className: "dlg-head" }, [
+        el("h2", { id: "inspector-title", textContent: "Item" }),
+        el("button", { id: "inspector-close", textContent: "Close" }),
+      ]),
+      el("div", { id: "inspector-state", className: "panel-state" }),
+      el("div", { id: "inspector-body", className: "dlg-body" }),
+    ]),
   ]);
   return body;
 }
@@ -276,6 +336,21 @@ global.document = {
   dispatch(type) { return Promise.all((docListeners.get(type) || []).map((fn) => fn({ type }))); },
 };
 global.confirm = () => true;
+// A browser with a real <dialog>. The fallback-panel test deletes this.
+global.HTMLDialogElement = function HTMLDialogElement() {};
+// Density is the only thing the dashboard is allowed to remember locally.
+const stored = new Map();
+let storageThrows = false;
+global.localStorage = {
+  getItem(key) {
+    if (storageThrows) throw new Error("access denied");
+    return stored.has(key) ? stored.get(key) : null;
+  },
+  setItem(key, value) {
+    if (storageThrows) throw new Error("access denied");
+    stored.set(key, String(value));
+  },
+};
 
 const app = require("./app.js");
 const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
@@ -286,7 +361,11 @@ const { cardEl, pollJob, enableBumper, deleteBumper, stationEl, stationState,
         doAction, submitAsk, resetStateForTests,
         ROUTES, DEFAULT_ROUTE, parseHash, applyHash, VIEWS, overviewWarnings,
         poolCounts, configLines, stationNow, recentJobs, recordJob, finishJob,
-        renderChrome, renderJobs, renderOverview } = app;
+        renderChrome, renderJobs, renderOverview,
+        openInspector, closeInspector, confirmDialog, disableBumper, dropKind,
+        setFilter, setPageSize, setDensity, clearFilters, renderFilters,
+        libraryCounts, libraryHash, poolState, PAGE, PAGE_SIZES,
+        LIBRARY_DENSITIES, NOT_AVAILABLE } = app;
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -298,6 +377,18 @@ const buttonClasses = (row) => descendants(cardEl(row))
 const $ = (sel) => document.querySelector(sel);
 const logText = () => $("#log").textContent;
 const textOf = (node) => descendants(node).map((n) => n.textContent).join(" ");
+
+// Dialogs. The inspector ships in index.html; confirmations are appended to
+// the body while they are up. "The" dialog is the topmost open one, which is
+// what a click would actually reach.
+const openDialogs = () => BODY.children.filter(
+  (n) => n.tagName === "DIALOG" && (n.open || n.getAttribute("open") !== null));
+const topDialog = () => openDialogs()[openDialogs().length - 1] || null;
+const dialogText = () => (topDialog() ? textOf(topDialog()) : "");
+const dialogControls = (tag) => (topDialog() ? descendants(topDialog()) : [])
+  .filter((n) => n.tagName === tag);
+const dialogButton = (label) => dialogControls("BUTTON")
+  .find((n) => n.textContent === label);
 const jsonReply = (body, init) => ({
   ok: (init && init.ok) !== undefined ? init.ok : true,
   status: (init && init.status) || 200,
@@ -317,8 +408,12 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 test.beforeEach(() => {
   BODY = buildDocument();
   global.confirm = () => true;
+  global.HTMLDialogElement = function HTMLDialogElement() {};
   global.location.hash = "";
   replaced.length = 0;
+  stored.clear();
+  storageThrows = false;
+  document.activeElement = null;
   if (resetStateForTests) resetStateForTests();
 });
 test.afterEach(() => { delete global.fetch; });
@@ -371,58 +466,69 @@ test("an attacker-controlled type cannot create an element", () => {
                "literal <script>not markup</script>");
 });
 
-const enableButton = (card) => descendants(card).find(
-  (node) => node.tagName === "BUTTON" && String(node.className).split(" ").includes("pv-enable"));
+const inspectButton = (card) => descendants(card).find(
+  (node) => node.tagName === "BUTTON" && String(node.className).split(" ").includes("pv-inspect"));
+const badgeText = (card) => descendants(card)
+  .filter((n) => String(n.className).split(" ").includes("pv-state"))
+  .map(textOf).join(" ");
 
-test("a parked row's card offers the enable control", () => {
-  const button = enableButton(cardEl(
-    { type: "stream", kind: "webcam", title: "harbour", enabled: 0 }));
-  assert.ok(button, "a parked row should carry an enable button");
-  assert.equal(button.textContent, "✓ enable");
+test("a card names its pool state in words rather than only in colour", () => {
+  // The state used to be readable only from which hover icon appeared. Now the
+  // card says it, and the same word is the one the state filter uses.
+  const row = { id: "a", type: "stream", kind: "webcam", title: "harbour",
+                media_url: "https://x/s.m3u8" };
+  assert.match(badgeText(cardEl({ ...row, enabled: 1, health: "ok" })), /Healthy.*playable/s);
+  assert.match(badgeText(cardEl({ ...row, enabled: 0, health: "ok" })), /Attention.*parked/s);
+  assert.match(badgeText(cardEl({ ...row, enabled: 1, health: "dead" })), /Failed.*dead/s);
+  assert.match(badgeText(cardEl({ id: "c", type: "card", kind: "psa", enabled: 1,
+                                  health: "ok", media_url: null, payload: {} })),
+               /Attention.*unrendered/s);
 });
 
-test("an enabled row's card has no enable control", () => {
-  // Asserted against the parked twin rather than against undefined: on its own,
-  // "the button is absent" is also what deleting addEnable entirely would say.
-  const row = { type: "stream", kind: "webcam", title: "harbour" };
-  assert.deepEqual(buttonClasses({ ...row, enabled: 1 }), ["pv-del"]);
-  assert.deepEqual(buttonClasses({ ...row, enabled: 0 }), ["pv-del", "fchip pv-enable"]);
-});
-
-test("a row that never says whether it is parked gets no enable control", () => {
+test("a row that never says whether it is parked claims no state at all", () => {
   // /api/bumpers/random — the shuffle preview — returns nothing but live rows
-  // and has no `enabled` key at all. Reading that undefined as parked put the
-  // pill on every card in the preview, each click a POST that logged
-  // "(already on)". Missing data is not evidence of a park.
-  const row = { type: "stream", kind: "webcam", title: "harbour" };
-  assert.equal(enableButton(cardEl(row)), undefined);
-  assert.deepEqual(buttonClasses(row), ["pv-del"]);
-  assert.deepEqual(buttonClasses({ ...row, enabled: null }), ["pv-del"]);
+  // and has no `enabled` key. Reading that undefined as a state would invent
+  // one; missing data is not evidence either way.
+  const row = { id: "a", type: "stream", kind: "webcam", title: "harbour" };
+  assert.equal(badgeText(cardEl(row)), "");
+  assert.equal(badgeText(cardEl({ ...row, enabled: null })), "");
+  assert.equal(poolState(row), "unknown");
 });
 
-test("the enable control is built from DOM nodes, not row markup", () => {
-  // Same rule as the first test: a hostile title reaches the button only as a
-  // property, never as parsed markup, and never as its label.
-  const title = '<img src=x onerror="globalThis.pwned=3">';
-  const button = enableButton(cardEl(
-    { type: "card", kind: "on_this_day", title, enabled: 0, payload: { text: "x" } }));
-  assert.equal(button.textContent, "✓ enable");
-  assert.equal(descendants(cardEl({ type: "card", title, enabled: 0 }))
-    .filter((node) => node.tagName === "IMG").length, 0);
-  assert.equal(globalThis.pwned, undefined);
-});
-
-test("per-card controls are always visible and carry a name, not just a glyph", () => {
-  // They used to appear on hover only, which is no control at all on a touch
-  // screen or by keyboard. The name has to survive a hostile title too.
+test("Inspect is the card's only action control, always visible and named", () => {
+  // Delete used to be a hover-only ✕, which is no control at all by keyboard
+  // or on a touch screen; enable was a second one that only some rows grew.
+  // Both moved into the inspector, and the name survives a hostile title.
+  // (A stream card also carries Play, which acts on the preview, not the row.)
   const title = '<img src=x onerror="globalThis.pwned=4">';
-  const card = cardEl({ type: "stream", kind: "webcam", title, enabled: 0 });
-  const del = descendants(card).find((n) => n.className === "pv-del");
-  assert.equal(del.hidden, false);
-  assert.ok(del.getAttribute("aria-label").includes(title));
+  const row = { id: "vid:x", type: "video", kind: "ambient", title,
+                media_url: "/media/x.mp4" };
+  assert.deepEqual(buttonClasses({ ...row, enabled: 1 }), ["pv-inspect mini"]);
+  assert.deepEqual(buttonClasses({ ...row, enabled: 0 }), ["pv-inspect mini"]);
+  const card = cardEl({ ...row, enabled: 0 });
+  const inspect = inspectButton(card);
+  assert.equal(inspect.hidden, false);
+  assert.equal(inspect.textContent, "Inspect");
+  assert.ok(inspect.getAttribute("aria-label").includes(title));
   assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
-  assert.ok(enableButton(card).getAttribute("aria-label").includes(title));
   assert.equal(globalThis.pwned, undefined);
+});
+
+test("no card anywhere carries a delete control", () => {
+  // The rule for the whole page, not just the library: permanent deletion
+  // exists in the inspector's danger zone and the bulk flow, nowhere else.
+  const rows = [
+    { id: "a", type: "video", kind: "ambient", title: "t", media_url: "/m/a.mp4", enabled: 1 },
+    { id: "b", type: "card", kind: "psa", title: "t", payload: { text: "x" }, enabled: 0 },
+    { id: "c", type: "stream", kind: "webcam", title: "t", enabled: 1, health: "dead" },
+  ];
+  rows.forEach((row) => {
+    const labels = descendants(cardEl(row))
+      .filter((n) => n.tagName === "BUTTON")
+      .map((n) => (n.textContent + " " + (n.getAttribute("aria-label") || "")).toLowerCase());
+    assert.ok(!labels.some((l) => l.includes("delete")),
+              "no delete control on a " + row.type + " card: " + JSON.stringify(labels));
+  });
 });
 
 test("a declined confirmation sends no destructive request", async () => {
@@ -431,9 +537,12 @@ test("a declined confirmation sends no destructive request", async () => {
     calls.push({ url: String(url), method: (opts && opts.method) || "GET" });
     return jsonReply({});
   };
-  global.confirm = () => false;
-  await deleteBumper({ id: "vid:x", title: "x" }, new FakeNode("div"));
+  const pending = deleteBumper({ id: "vid:x", title: "x" });
+  await flush();
+  dialogButton("Cancel").click();
+  await pending;
   assert.deepEqual(calls, []);
+  assert.match(logText(), /delete cancelled/);
 });
 
 // ---------------------------------------------------------------------------
@@ -1824,4 +1933,642 @@ test("a read that landed without the field is the one case that says unavailable
   assert.match(textOf($("#header-profile")), /Not available in this version/);
   assert.match(textOf($("#config-summary")), /Not available in this version/);
   assert.doesNotMatch(textOf($("#config-summary")), /not read/);
+});
+
+// ---------------------------------------------------------------------------
+// F2: library toolbar, results, media, inspector, reversible curation
+// ---------------------------------------------------------------------------
+
+// The detail route returns every registry column, `payload` as the stored JSON
+// STRING (not an object, unlike the listing), plus media_url, creative and —
+// with explain=true — selection.
+const DETAIL = {
+  id: "card:psa:abc", type: "card", kind: "psa", source: "generated",
+  uri: "bumpers/psa/abc.mp4", duration: 12, title: "Stay tuned",
+  payload: JSON.stringify({ lines: ["Back after this."], answer: "",
+                            source: "operator", bg_creator: "A Photographer",
+                            bg_title: "Harbour at dusk" }),
+  tags: "night,calm", weight: 1.5, enabled: 1, health: "ok", fail_count: 0,
+  last_played: 1700000500, play_count: 4, created_at: 1700000000,
+  media_url: "/media/bumpers/psa/abc.mp4",
+  creative: { family: "psa", roles: ["filler"], energy: "calm", audio: "bed",
+              text_heavy: true, template: "minimal_center", render_seed: 7,
+              brand_mode: "reveal", music_id: null },
+  music_credits: { id: "night-room-01", title: "Night Room", creator: "Example",
+                   license: "CC0-1.0" },
+  selection: { eligible_now: true, reasons: ["eligible"],
+               factors: { base: 1, season: 1, daypart: 1, recency: 1,
+                          affinity: 1, fatigue: 1, score: 1 } },
+};
+
+const isDetailUrl = (u) => /^\/api\/bumpers\/[^?]/.test(u) &&
+  !u.startsWith("/api/bumpers/random") && !u.startsWith("/api/bumpers/fill");
+
+// Answers the reads an inspector session makes. `over.detail` overrides the
+// row; `over.reply` is the whole answer to any POST/DELETE.
+function stubInspector(over) {
+  const o = over || {};
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    const method = (opts && opts.method) || "GET";
+    calls.push({ url: u, method });
+    if (u.startsWith("/api/status")) return jsonReply(OK_STATUS);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    if (isDetailUrl(u) && method === "GET") {
+      return jsonReply(Object.assign({}, DETAIL, o.detail));
+    }
+    if (u.startsWith("/api/bumpers")) {
+      return jsonReply(o.bumpers || { count: 0, total: 0, bumpers: [] });
+    }
+    return jsonReply(o.reply || { status: "done", result: "ok" });
+  };
+  return calls;
+}
+
+const inspectorText = () => textOf($("#inspector-body"));
+const inspectorButton = (label) => descendants($("#inspector"))
+  .find((n) => n.tagName === "BUTTON" && n.textContent === label);
+
+// --- toolbar ---------------------------------------------------------------
+
+test("every library filter is a labelled control the toolbar owns", () => {
+  // Hover chips are gone: each filter is a real control index.html labels, and
+  // the fake document only proves anything if it carries the same ones.
+  ["#search", "#filter-type", "#filter-kind", "#filter-state", "#page-size",
+   "#density", "#clear-filters", "#library-counts", "#drop-kind"].forEach((sel) => {
+    const el = $(sel);
+    assert.ok(el, "index.html is missing " + sel);
+    assert.ok(matchesSelector(el, "#view-library " + sel),
+              sel + " belongs to the library view");
+  });
+});
+
+test("the kind list comes from the status counts and stays text", () => {
+  const hostile = "<option>pwn</option>";
+  STATE.status.value = Object.assign({}, OK_STATUS,
+    { by_kind: { trivia: 12, [hostile]: 1 } });
+  renderFilters();
+  const options = $("#filter-kind").children;
+  // Busiest kind first: the counts are the ordering, not the alphabet.
+  assert.deepEqual(options.map((o) => o.value), ["", "trivia", hostile]);
+  assert.match(options[1].textContent, /^trivia \(12\)/);
+  assert.equal(options[2].textContent, hostile + " (1)");
+  assert.ok(options.every((o) => o.children.length === 0),
+            "nothing was parsed out of the hostile kind");
+});
+
+test("a kind the counts do not list is still offered, not silently dropped", () => {
+  // A deep link can name a kind that has since gone to zero. Rebuilding the
+  // select without it would leave the control reading "All kinds" while the
+  // listing was still filtered by it.
+  STATE.status.value = Object.assign({}, OK_STATUS, { by_kind: { trivia: 2 } });
+  STATE.library.filters.kind = "webcam";
+  renderFilters();
+  assert.deepEqual($("#filter-kind").children.map((o) => o.value),
+                   ["", "webcam", "trivia"]);
+  assert.equal($("#filter-kind").value, "webcam");
+});
+
+test("changing a filter writes it back to the hash in place", async () => {
+  const calls = stubRoutes();
+  await applyHash("#/library");
+  replaced.length = 0;
+  await setFilter("state", "parked");
+  assert.deepEqual(replaced, ["#/library?state=parked"],
+                   "replace, not assign: a filter change is not a history entry");
+  await setFilter("kind", "trivia");
+  assert.equal(replaced[replaced.length - 1], "#/library?state=parked&kind=trivia");
+  assert.equal(libraryHash(), "#/library?state=parked&kind=trivia");
+  const listings = calls.filter((c) => c.url.startsWith("/api/bumpers?"));
+  assert.ok(listings.length >= 2);
+  assert.match(listings[listings.length - 1].url, /kind=trivia/);
+});
+
+test("the hash a filter change wrote does not re-enter the view", async () => {
+  // location.replace fires a hashchange of its own. Left alone it would tear
+  // the view down and read the page again after every filter change.
+  const calls = stubRoutes();
+  await applyHash("#/library");
+  await setFilter("state", "parked");
+  const before = calls.length;
+  await applyHash(global.location.hash);
+  assert.equal(calls.length, before, "the router recognises the hash it just wrote");
+  assert.equal(STATE.library.filters.state, "parked");
+});
+
+test("a deep link reproduces exactly the filters the toolbar wrote", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  stubRoutes();
+  await applyHash("#/library");
+  await setFilter("state", "parked");
+  await setFilter("type", "card");
+  await setFilter("kind", "trivia");
+  scheduleSearch("harbour");
+  t.mock.timers.tick(SEARCH_DEBOUNCE_MS);
+  await flush();
+  const written = libraryHash();
+  assert.equal(written, "#/library?state=parked&type=card&kind=trivia&q=harbour");
+
+  resetStateForTests();
+  BODY = buildDocument();
+  await applyHash(written);
+  assert.deepEqual(STATE.library.filters,
+                   { q: "harbour", kind: "trivia", type: "card", state: "parked" });
+});
+
+test("totals are reported as matched and loaded, and paginate", async () => {
+  const rows = (n, from) => Array.from({ length: n }, (_, i) => ({
+    id: "r" + (from + i), type: "card", kind: "psa", title: "row " + (from + i),
+    enabled: 1, health: "ok", media_url: "/m/x.mp4", payload: {} }));
+  global.fetch = async (url) => {
+    if (String(url).startsWith("/api/bumpers")) {
+      return jsonReply({ count: 24, total: 30, bumpers: rows(24, 0) });
+    }
+    return jsonReply(OK_STATUS);
+  };
+  await loadGrid(true);
+  assert.deepEqual(libraryCounts(), { loaded: 24, total: 30, hasMore: true });
+  assert.match(textOf($("#library-counts")), /Showing 24 of 30/);
+  assert.equal($("#more").hidden, false);
+
+  global.fetch = async (url) => {
+    if (String(url).startsWith("/api/bumpers")) {
+      return jsonReply({ count: 6, total: 30, bumpers: rows(6, 24) });
+    }
+    return jsonReply(OK_STATUS);
+  };
+  await loadGrid(false);
+  assert.deepEqual(libraryCounts(), { loaded: 30, total: 30, hasMore: false });
+  assert.equal($("#grid").children.length, 30, "load more appends rather than replaces");
+  assert.equal($("#more").hidden, true);
+});
+
+test("a server that reports no total says so instead of guessing one", async () => {
+  global.fetch = async () => jsonReply({ count: 1, bumpers: [
+    { id: "a", type: "card", kind: "psa", title: "x", enabled: 1, payload: {} }] });
+  await loadGrid(true);
+  assert.equal(libraryCounts().total, null);
+  assert.match(textOf($("#library-counts")), /Not available in this version/);
+  assert.doesNotMatch(textOf($("#library-counts")), /of 0/);
+});
+
+test("the page size is bounded by the UI maximum", async () => {
+  const calls = [];
+  global.fetch = async (url) => {
+    calls.push(String(url));
+    return jsonReply({ count: 0, total: 0, bumpers: [] });
+  };
+  assert.deepEqual(PAGE_SIZES, [24, 48, 100]);
+  await setPageSize("48");
+  assert.match(calls[calls.length - 1], /limit=48/);
+  await setPageSize("5000");
+  assert.equal(STATE.library.pageSize, 100, "the UI never asks for more than 100");
+  assert.match(calls[calls.length - 1], /limit=100/);
+  await setPageSize("nonsense");
+  assert.equal(STATE.library.pageSize, PAGE, "an unreadable size falls back to the default");
+});
+
+test("density is the one thing remembered locally, and never a response", () => {
+  assert.deepEqual(LIBRARY_DENSITIES, ["grid", "list"]);
+  setDensity("list");
+  assert.equal(stored.get("bumparr.library.density"), "list");
+  assert.equal(stored.size, 1, "nothing but the density is written");
+  assert.ok($("#grid").classList.contains("grid-list"));
+  setDensity("something else");
+  assert.equal(STATE.library.density, "grid", "an unknown density falls back to grid");
+  assert.ok(!$("#grid").classList.contains("grid-list"));
+});
+
+test("a browser that refuses local storage still renders the library", async () => {
+  storageThrows = true;
+  stubRoutes();
+  await applyHash("#/library");
+  assert.equal(STATE.library.density, "grid");
+  setDensity("list");
+  assert.equal(STATE.library.density, "list", "the session still honours the choice");
+});
+
+test("Clear filters empties every filter and the hash query with them", async () => {
+  stubRoutes();
+  await applyHash("#/library?state=parked&kind=trivia&type=card&q=harbour");
+  replaced.length = 0;
+  await clearFilters();
+  assert.deepEqual(STATE.library.filters, { q: "", kind: null, type: null, state: "all" });
+  assert.equal($("#search").value, "");
+  assert.deepEqual(replaced, ["#/library"]);
+});
+
+// --- media -----------------------------------------------------------------
+
+test("only one preview plays at a time", async () => {
+  STATE.library.items = ["a", "b"].map((id) => ({
+    id, type: "video", kind: "ambient", title: id, duration: 8,
+    media_url: "/media/" + id + ".mp4", enabled: 1, health: "ok" }));
+  app.renderLibrary();
+  const videos = descendants($("#grid")).filter((n) => n.tagName === "VIDEO");
+  assert.equal(videos.length, 2);
+  assert.ok(videos.every((v) => v.preload === "metadata"), "metadata only, never the file");
+  assert.ok(videos.every((v) => v.muted === true), "sound is never started for anyone");
+
+  await videos[0].play();
+  assert.deepEqual(videos.map((v) => v.paused), [false, true]);
+  await videos[1].play();
+  assert.deepEqual(videos.map((v) => v.paused), [true, false],
+                   "starting a second preview stops the first");
+});
+
+test("a live stream is never opened until Play is pressed", async () => {
+  const card = cardEl({ id: "stream:cam", type: "stream", kind: "webcam",
+                        title: "harbour", enabled: 1, health: "ok",
+                        media_url: "/api/stream/stream%3Acam/index.m3u8" });
+  assert.equal(descendants(card).filter((n) => n.tagName === "VIDEO").length, 0,
+               "no element holds the stream URL before the operator asks");
+  assert.match(textOf(card), /LIVE/);
+  const play = descendants(card).find(
+    (n) => n.tagName === "BUTTON" && /play/i.test(n.textContent));
+  assert.ok(play, "a stream card offers Play");
+  assert.match(textOf(card), /real client|advance/i,
+               "opening HLS is a real client, and the card says so before Play");
+  await play.click();
+  const video = descendants(card).find((n) => n.tagName === "VIDEO");
+  assert.ok(video, "Play is what creates the player");
+  assert.equal(video.src, "/api/stream/stream%3Acam/index.m3u8");
+});
+
+test("leaving the library pauses and detaches the media it was showing", async () => {
+  STATE.library.items = [{ id: "a", type: "video", kind: "ambient", title: "a",
+                           media_url: "/media/a.mp4", enabled: 1, health: "ok" }];
+  app.renderLibrary();
+  const video = descendants($("#grid")).find((n) => n.tagName === "VIDEO");
+  await video.play();
+  assert.equal(video.paused, false);
+  VIEWS.library.exit();
+  assert.equal(video.paused, true, "a departed view leaves nothing playing");
+  assert.equal(video.src, "", "and nothing still buffering");
+  assert.ok(video.loads >= 1, "the element is told to let go of the stream");
+});
+
+// --- inspector -------------------------------------------------------------
+
+test("the inspector reads the row with explain only when it opens", async () => {
+  const calls = stubInspector();
+  STATE.library.items = [{ id: "card:psa:abc", type: "card", kind: "psa",
+                           title: "Stay tuned", enabled: 1, health: "ok",
+                           media_url: "/m/x.mp4", payload: {} }];
+  app.renderLibrary();
+  assert.deepEqual(calls, [], "rendering the grid explains nothing");
+  const inspect = descendants($("#grid")).find(
+    (n) => n.tagName === "BUTTON" && n.className.includes("pv-inspect"));
+  await inspect.click();
+  await flush();
+  const detail = calls.filter((c) => isDetailUrl(c.url));
+  assert.equal(detail.length, 1);
+  assert.equal(detail[0].method, "GET");
+  assert.equal(detail[0].url, "/api/bumpers/card%3Apsa%3Aabc?explain=true");
+});
+
+test("the inspector shows the facts the plan lists, as text", async () => {
+  stubInspector();
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  [/card:psa:abc/, /Stay tuned/, /psa/, /generated/, /12s/, /night,calm/,
+   /Back after this\./, /calm/, /minimal_center/, /reveal/, /eligible/,
+   /base/, /score/, /A Photographer/, /Night Room/, /play count/i,
+   /created/, /last played/].forEach((re) => {
+    assert.match(text, re, "the inspector is missing " + re);
+  });
+  // The media URL is a read-only field, not prose: it is there to be copied.
+  const url = descendants($("#inspector-body")).find((n) => n.tagName === "INPUT");
+  assert.equal(url.value, "/media/bumpers/psa/abc.mp4");
+  assert.equal(url.readOnly, true);
+  assert.equal(descendants($("#inspector")).filter((n) => n.tagName === "SCRIPT").length, 0);
+});
+
+test("the inspector keeps hostile detail as text, never as markup", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=50">';
+  stubInspector({ detail: {
+    title: hostile, kind: hostile, source: hostile, tags: hostile,
+    payload: JSON.stringify({ lines: [hostile], answer: hostile,
+                              bg_creator: hostile }),
+    creative: { family: hostile, roles: [hostile], energy: hostile,
+                audio: hostile, text_heavy: false, template: hostile,
+                brand_mode: hostile, render_seed: 1, music_id: null },
+    music_credits: { id: hostile, title: hostile, creator: hostile, license: hostile },
+    selection: { eligible_now: false, reasons: [hostile],
+                 factors: { base: 1, score: 0 } },
+  } });
+  await openInspector("card:psa:abc");
+  const dlg = $("#inspector");
+  assert.ok(textOf(dlg).includes(hostile), "the server's own words are shown, as text");
+  assert.equal(descendants(dlg).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("a detail body without the newer blocks says unavailable, never blank", async () => {
+  stubInspector({ detail: { creative: null, music_credits: null, selection: null } });
+  await openInspector("card:psa:abc");
+  const text = inspectorText();
+  assert.ok(text.split(NOT_AVAILABLE).length - 1 >= 3,
+            "each missing block says so rather than showing nothing: " + text);
+  assert.doesNotMatch(text, /undefined/);
+});
+
+test("the inspector's primary action is the reversible one for the state", async () => {
+  const cases = [
+    [{}, "Disable from rotation"],
+    [{ enabled: 0 }, "Enable"],
+    [{ health: "dead" }, "Run revive (all retired)"],
+    [{ uri: null, media_url: null }, "Render card"],
+  ];
+  for (const [over, label] of cases) {
+    stubInspector({ detail: over });
+    await openInspector("card:psa:abc");
+    assert.ok(inspectorButton(label), "expected the primary action " + label +
+              " for " + JSON.stringify(over));
+    closeInspector();
+  }
+});
+
+test("the dead-item action says it rechecks every retired row, not just this one",
+     async () => {
+  const calls = stubInspector({ detail: { health: "dead", enabled: 0 },
+                                reply: { checked: 4, restored: 1, still_dead: 3,
+                                         skipped_streams: 0 } });
+  await openInspector("card:psa:abc");
+  assert.match(inspectorText(), /every retired item/i);
+  await inspectorButton("Run revive (all retired)").click();
+  await flush();
+  const posts = calls.filter((c) => c.method === "POST");
+  assert.deepEqual(posts.map((c) => c.url), ["/api/pool/revive"]);
+  assert.match(logText(), /1 restored/);
+});
+
+test("Render card starts a job that shows up in Recent jobs", async () => {
+  const calls = stubInspector({ detail: { uri: null, media_url: null },
+                                reply: { status: "done", result: "rendered 1" } });
+  await openInspector("card:psa:abc");
+  await inspectorButton("Render card").click();
+  await flush();
+  const posts = calls.filter((c) => c.method === "POST");
+  assert.deepEqual(posts.map((c) => c.url),
+                   ["/api/render/cards?bumper_id=card%3Apsa%3Aabc"]);
+  assert.equal(STATE.jobs.items.length, 1);
+  assert.equal(STATE.jobs.items[0].status, "done");
+  renderJobs();
+  assert.match(textOf($("#jobs-list")), /render card/i);
+});
+
+test("disable escapes the id and reports the server's warning", async () => {
+  const calls = stubInspector({ reply: { id: "x", enabled: false, changed: true,
+                                         warning: "the rotation enables it again" } });
+  await disableBumper({ id: "card:on_this_day/x y", title: "moon" });
+  const posts = calls.filter((c) => c.method === "POST");
+  assert.deepEqual(posts.map((c) => c.url),
+                   ["/api/pool/disable?bumper_id=card%3Aon_this_day%2Fx%20y"]);
+  assert.match(logText(), /disabled moon — the rotation enables it again/);
+  assert.match($("#live-region").textContent, /the rotation enables it again/);
+});
+
+test("a mutation refreshes the row it changed without resetting filters or paging",
+     async () => {
+  const listing = { count: 2, total: 2, bumpers: [
+    { id: "card:psa:abc", type: "card", kind: "psa", title: "Stay tuned",
+      enabled: 1, health: "ok", media_url: "/m/a.mp4", payload: {} },
+    { id: "other", type: "card", kind: "psa", title: "Other", enabled: 1,
+      health: "ok", media_url: "/m/b.mp4", payload: {} }] };
+  const calls = stubInspector({ bumpers: listing,
+    reply: { id: "card:psa:abc", enabled: false, changed: true } });
+  STATE.library.filters.kind = "psa";
+  await loadGrid(true);
+  const offset = STATE.library.offset;
+  const listings = () => calls.filter((c) => c.url.startsWith("/api/bumpers?")).length;
+  const before = listings();
+
+  await openInspector("card:psa:abc");
+  await inspectorButton("Disable from rotation").click();
+  await flush();
+
+  assert.equal(listings(), before, "the grid is not re-read out from under the operator");
+  assert.equal(STATE.library.offset, offset);
+  assert.equal(STATE.library.filters.kind, "psa");
+  assert.equal(STATE.library.items.length, 2);
+  assert.equal(STATE.library.items[0].enabled, 0, "only the affected row changed");
+  assert.equal(STATE.library.items[1].enabled, 1);
+  assert.match(badgeText($("#grid").children[0]), /parked/);
+  assert.ok(calls.some((c) => c.url.startsWith("/api/status")), "the counts are refreshed");
+});
+
+test("a mutation that redraws the inspector does not drop focus out of it",
+     async () => {
+  // The clicked button is replaced by the redraw and disabled by the job
+  // banner; either one would otherwise leave focus on <body>, outside the modal.
+  stubInspector({ reply: { id: "card:psa:abc", enabled: false, changed: true } });
+  await openInspector("card:psa:abc");
+  const button = inspectorButton("Disable from rotation");
+  button.focus();
+  await button.click();
+  await flush();
+  assert.ok($("#inspector").contains(document.activeElement),
+            "focus stayed inside the dialog");
+  assert.equal(document.activeElement, $("#inspector-title"));
+});
+
+test("openInspector tells its caller about every mutation it makes", async () => {
+  const seen = [];
+  stubInspector({ reply: { id: "card:psa:abc", enabled: false, changed: true } });
+  await openInspector("card:psa:abc", { onMutate: (kind, id) => seen.push([kind, id]) });
+  await inspectorButton("Disable from rotation").click();
+  await flush();
+  assert.deepEqual(seen, [["disable", "card:psa:abc"]]);
+});
+
+test("the inspector focuses its heading and hands focus back to the invoker",
+     async () => {
+  stubInspector();
+  const invoker = new FakeNode("button");
+  await openInspector("card:psa:abc", { invoker });
+  assert.equal($("#inspector").open, true);
+  assert.equal(document.activeElement, $("#inspector-title"));
+  closeInspector();
+  assert.equal($("#inspector").open, false);
+  assert.equal(document.activeElement, invoker, "focus goes back where it came from");
+});
+
+test("Escape closes the inspector", async () => {
+  stubInspector();
+  const invoker = new FakeNode("button");
+  await openInspector("card:psa:abc", { invoker });
+  await $("#inspector").dispatch("keydown", { key: "Escape" });
+  assert.equal($("#inspector").open, false);
+  assert.equal(document.activeElement, invoker);
+});
+
+test("Tab is trapped inside the modal while it is open", async () => {
+  stubInspector();
+  await openInspector("card:psa:abc");
+  const dlg = $("#inspector");
+  const buttons = descendants(dlg).filter((n) => n.tagName === "BUTTON" && !n.disabled);
+  assert.ok(buttons.length >= 2);
+  buttons[buttons.length - 1].focus();
+  await dlg.dispatch("keydown", { key: "Tab" });
+  assert.equal(document.activeElement, buttons[0], "Tab wraps to the first control");
+  await dlg.dispatch("keydown", { key: "Tab", shiftKey: true });
+  assert.equal(document.activeElement, buttons[buttons.length - 1],
+               "and Shift+Tab wraps back");
+});
+
+test("a browser with no <dialog> gets a labelled fallback panel", async () => {
+  delete global.HTMLDialogElement;
+  stubInspector();
+  await openInspector("card:psa:abc");
+  const dlg = $("#inspector");
+  assert.equal(dlg.open, false, "showModal is never called without support");
+  assert.equal(dlg.getAttribute("open"), "", "the panel is shown by attribute instead");
+  assert.equal(dlg.getAttribute("role"), "dialog");
+  assert.equal(dlg.getAttribute("aria-modal"), "true");
+  assert.match(inspectorText(), /Stay tuned/);
+  closeInspector();
+  assert.equal(dlg.getAttribute("open"), null);
+});
+
+test("a failed detail read is an error with Retry, not an empty inspector", async () => {
+  let attempt = 0;
+  global.fetch = async (url) => {
+    if (isDetailUrl(String(url))) {
+      attempt++;
+      if (attempt === 1) throw new TypeError("Failed to fetch");
+      return jsonReply(DETAIL);
+    }
+    return jsonReply(OK_STATUS);
+  };
+  await openInspector("card:psa:abc");
+  assert.equal($("#inspector-state").dataset.state, "error");
+  assert.match(textOf($("#inspector-state")), /could not be reached/);
+  const retry = descendants($("#inspector-state")).find((n) => n.tagName === "BUTTON");
+  await retry.click();
+  await flush();
+  assert.equal($("#inspector-state").dataset.state, "populated");
+  assert.match(inspectorText(), /Stay tuned/);
+});
+
+test("leaving the library closes the inspector it left open", async () => {
+  stubRoutes();
+  await applyHash("#/library");
+  stubInspector();
+  await openInspector("card:psa:abc");
+  assert.equal($("#inspector").open, true);
+  await applyHash("#/overview");
+  assert.equal($("#inspector").open, false, "no modal survives a route change");
+});
+
+// --- danger flows ----------------------------------------------------------
+
+test("the delete confirmation names the item and states the file consequence",
+     async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=51">';
+  const calls = stubInspector({ reply: { deleted: "card:psa:abc", kind: "psa",
+                                         title: "Stay tuned", file_removed: true,
+                                         dir_removed: false, cleanup_failed: false } });
+  const pending = deleteBumper({ id: "card:psa:abc", title: hostile });
+  await flush();
+  assert.ok(topDialog(), "deleting opens a confirmation");
+  assert.ok(dialogText().includes(hostile), "the item is named, as text");
+  assert.equal(dialogControls("IMG").length, 0);
+  assert.match(dialogText(), /media file/i);
+  assert.match(dialogText(), /asset scan/i, "it says why the file goes too");
+  dialogButton("Delete permanently").click();
+  await pending;
+  const destructive = calls.filter((c) => c.method === "DELETE");
+  assert.deepEqual(destructive.map((c) => c.url), ["/api/bumpers/card%3Apsa%3Aabc"]);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("the destructive confirmation puts Cancel first and focuses it", async () => {
+  stubInspector();
+  const pending = deleteBumper({ id: "a", title: "x" });
+  await flush();
+  const buttons = dialogControls("BUTTON").map((b) => b.textContent);
+  assert.deepEqual(buttons, ["Cancel", "Delete permanently"],
+                   "Cancel comes first in reading and tab order");
+  assert.equal(document.activeElement.textContent, "Cancel",
+               "the destructive button is never the default");
+  dialogButton("Cancel").click();
+  await pending;
+});
+
+test("Keep the media file is offered and honoured", async () => {
+  const calls = stubInspector({ reply: { deleted: "a", kind: "psa", title: "x",
+                                         file_removed: false, dir_removed: false,
+                                         cleanup_failed: false } });
+  const pending = deleteBumper({ id: "vid:a b", title: "x" });
+  await flush();
+  const box = dialogControls("INPUT").find((n) => n.type === "checkbox");
+  assert.ok(box, "the server supports keep_file, so the dialog offers it");
+  box.checked = true;
+  await box.dispatch("change");
+  dialogButton("Delete permanently").click();
+  await pending;
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE").map((c) => c.url),
+                   ["/api/bumpers/vid%3Aa%20b?keep_file=true"]);
+});
+
+test("bulk kind deletion will not confirm until the kind is typed exactly", async () => {
+  const calls = stubInspector({ reply: { kind: "trivia", removed: 12,
+                                         dirs_removed: 1, failed: [] } });
+  STATE.status.value = Object.assign({}, OK_STATUS, { by_kind: { trivia: 12 } });
+  STATE.library.filters.kind = "trivia";
+  const pending = dropKind();
+  await flush();
+  const confirmBtn = dialogControls("BUTTON").find((b) => /^Delete/.test(b.textContent));
+  const input = dialogControls("INPUT").find((n) => n.type !== "checkbox");
+  assert.ok(input, "the bulk flow asks for the kind by name");
+  assert.equal(confirmBtn.disabled, true, "the confirm button starts dead");
+
+  input.value = "trivi";
+  await input.dispatch("input");
+  assert.equal(confirmBtn.disabled, true, "a near miss is still a miss");
+  input.value = " trivia ";
+  await input.dispatch("input");
+  assert.equal(confirmBtn.disabled, false, "surrounding space is forgiven");
+  confirmBtn.click();
+  await pending;
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE").map((c) => c.url),
+                   ["/api/pool/kind/trivia"]);
+  assert.match(logText(), /removed 12/);
+});
+
+test("cancelling the bulk flow sends no request", async () => {
+  const calls = stubInspector();
+  STATE.library.filters.kind = "trivia";
+  const pending = dropKind();
+  await flush();
+  dialogButton("Cancel").click();
+  await pending;
+  assert.deepEqual(calls.filter((c) => c.method === "DELETE"), []);
+});
+
+test("Escape does not dismiss a destructive confirmation", async () => {
+  // Cancel is focused and first, so leaving is one keystroke either way; what
+  // must never happen is a stray Escape being taken for an answer.
+  stubInspector();
+  const pending = deleteBumper({ id: "a", title: "x" });
+  await flush();
+  const dlg = topDialog();
+  await dlg.dispatch("keydown", { key: "Escape" });
+  assert.equal(topDialog(), dlg, "the confirmation is still up");
+  dialogButton("Cancel").click();
+  assert.equal(await pending, null);
+});
+
+test("the danger zone is dead until a kind is actually selected", () => {
+  STATE.status.value = Object.assign({}, OK_STATUS, { by_kind: { trivia: 12 } });
+  STATE.library.filters.kind = null;
+  renderFilters();
+  assert.equal($("#drop-kind").disabled, true);
+  assert.match(textOf($("#danger-note")), /choose a kind/i);
+  STATE.library.filters.kind = "trivia";
+  renderFilters();
+  assert.equal($("#drop-kind").disabled, false);
+  assert.match(textOf($("#danger-note")), /12/);
 });

@@ -424,10 +424,12 @@ never becomes a stop on the way back); a plain fragment such as the skip link's
 `#main` is left to the browser. Deep links and back/forward work because the
 hash decides which view is shown and the page's own state decides what it holds,
 so every view can be re-rendered without a reload. Library filters travel in the
-hash query — `#/library?state=parked&kind=trivia&type=card&q=harbour` — and are
-read on entry; `state` and `type` are checked against the values
+hash query — `#/library?state=parked&kind=trivia&type=card&q=harbour` — read on
+entry and written back (with `location.replace`, so filtering costs no history
+entries) on every change; `state` and `type` are checked against the values
 `GET /api/bumpers` accepts and an unknown one is dropped rather than forwarded.
-Leaving a view stops its refresh clock and aborts the reads it left in flight.
+Leaving a view stops its refresh clock, aborts the reads it left in flight,
+closes any modal it had open, and pauses and detaches its media.
 
 - **Overview** (`#/overview`) — triage. Reads `GET /api/status` and
   `GET /api/station`, and nothing else, so opening it never creates or advances
@@ -443,19 +445,56 @@ Leaving a view stops its refresh clock and aborts the reads it left in flight.
   parked, dead, unrendered, kinds and the type bars), the station summary with
   compact now cards per channel, configuration (profile and music-manifest
   source/validity, plus channel memory) and the five most recent jobs.
-- **Library** (`#/library`) — `/api/bumpers` with a text filter, kind filters, a
-  **parked only** chip and the hash-query filters above (`state` composes with
-  kind and text rather than replacing them), shuffle preview, per-item delete,
-  and a per-item **enable** button that appears only on rows the listing reports
-  as parked (`POST /api/pool/enable`, relaying any `warning` to the log). The
-  shuffle preview reads `/api/bumpers/random`, which returns only live rows and
-  no `enabled` key, so no card there carries the button.
+- **Library** (`#/library`) — `/api/bumpers` behind a toolbar of labelled
+  controls: search, type, kind (built from `status.by_kind`, counts included),
+  state, page size (24/48/100 — the UI never asks for more than 100),
+  grid/list layout, and **Clear filters**. Every filter composes on the server
+  and travels in the hash query above, written back with `location.replace` on
+  each change so the address bar is always a deep link to what is on screen.
+  Results report **Showing N of TOTAL** from `total`, and **Load more** appends
+  the next page. Each card shows a preview, kind, title, duration or **LIVE**,
+  its pool state in words (playable / parked / dead / unrendered), the creative
+  line when the server sends one, and an always-visible **Inspect** button —
+  the card's only action control. Video is `preload="metadata"`, muted and
+  controlled; only one preview plays at a time; a live stream is a badge and a
+  **Play live stream** button that builds the player only when pressed, under a
+  note that doing so makes the page a real client of the station. Grid/list
+  layout is the one thing kept in `localStorage`.
+- **Item inspector** — an always-available **Inspect** on every card opens a
+  modal (native `<dialog>`, with a `role="dialog"` fallback panel where
+  `HTMLDialogElement` is undefined) and reads
+  `GET /api/bumpers/{id}?explain=true` once, on open — the listing never
+  carries `selection`, `uri` or the history columns. It shows the media/text
+  preview and card answer, identity (id, title, type, kind, source, duration,
+  tags), state (enabled, health, rendered, base weight, failures), creative
+  (family, roles, energy, audio, text-heavy, template, brand mode), selection
+  (eligible now, the ordered `reasons` with a plain reading of each, and every
+  factor including `base` and `score`), provenance (registered and payload
+  source, background attribution, music credits), history (created, last
+  played, play count) and a copyable media URL. The primary action is the
+  reversible one for the state: **Disable from rotation**
+  (`POST /api/pool/disable`), **Enable** (`POST /api/pool/enable`) for a parked
+  row, **Render card** (`POST /api/render/cards?bumper_id=`, a background job
+  that appears in Recent jobs) for an unrendered card, and — because there is
+  no per-item recheck endpoint — **Run revive (all retired)**
+  (`POST /api/pool/revive`) for a dead one, labelled as the pool-wide sweep it
+  is. A mutation updates only the row it changed and refreshes the counts: it
+  never resets filters, page offset or scroll. Focus goes to the heading on
+  open and back to the Inspect button on close; Escape closes it; Tab is
+  trapped while it is modal.
+- **Deletion** — permanent deletion exists only in the inspector's danger zone
+  and in the Library's own **Danger zone**; no card carries a delete control.
+  Both confirmations name the item, state the file consequence in the
+  endpoint's terms, offer the `keep_file` / `keep_files` the endpoint documents,
+  put **Cancel** first and focus it, and do not treat Escape as an answer. Bulk
+  kind deletion (`DELETE /api/pool/kind/{kind}`) additionally requires typing
+  the kind name exactly before its confirm button works.
 - **Composer** (`#/composer`) — one item
   (`GET /api/bumpers/random?count=1&explain=true`) and 15/30/60/90-second packs
   (`GET /api/bumpers/fill?seconds=N&explain=true`). Cards show creative data,
   provenance, freshness (channel / generated / valid-until / parked), factors,
-  media, and pack relaxations. Enable/delete are reused. It is GET-only: it does
-  not call station `advance()`, write play history, or mutate
+  media, and pack relaxations, and reuse the same inspector. It is GET-only: it
+  does not call station `advance()`, write play history, or mutate
   `play_count`/`last_played`.
 - **Station** (`#/station`) — `/api/station`: now/next per channel, conform
   progress, the handoff URLs, and **Conform now**

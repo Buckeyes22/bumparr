@@ -23,6 +23,7 @@ const MAX_NOTICES = 20;
 const MAX_JOBS = 20;                // jobs this page started, newest first
 const RECENT_JOBS = 5;              // how many of them the overview shows
 const MAX_FILTER_TEXT = 100;        // /api/bumpers caps `q` at 100 characters
+const PAGE_SIZES = [24, 48, 100];   // the page-size control; 100 is the UI cap
 
 // The five views. A hash naming anything else is not a view.
 const ROUTES = ["overview", "library", "composer", "station", "operations"];
@@ -31,10 +32,38 @@ const DEFAULT_ROUTE = "overview";
 // so it is checked against these rather than forwarded on trust.
 const LIBRARY_STATES = ["all", "playable", "parked", "dead", "unrendered"];
 const LIBRARY_TYPES = ["video", "card", "stream", "image"];
+// Grid or list: the one preference kept locally, being a layout choice rather
+// than a response, a job, a URL or a secret.
+const LIBRARY_DENSITIES = ["grid", "list"];
+const DENSITY_KEY = "bumparr.library.density";
 
 // Said, once, wherever this build of the server does not report a field. Never
 // a zero, a dash, or an invented default.
 const NOT_AVAILABLE = "Not available in this version.";
+
+// What the server's own docstrings say the destructive routes do, quoted rather
+// than paraphrased so a confirmation cannot promise what the endpoint will not.
+const DELETE_FILE_NOTE =
+  "The registry row goes and its media file is deleted with it — an orphaned " +
+  "file would be registered again by the next asset scan. A live stream has no " +
+  "local file and only loses its row.";
+const KEEP_FILE_LABEL = "Keep the media file on disk (delete the row only)";
+// Opening HLS in a video element makes this page a real client of the station.
+const LIVE_WARNING =
+  "Playing this opens the live stream as a real client, which can advance playout.";
+
+// The server's eligibility vocabulary plus a plain reading of it. A reason not
+// listed here is shown exactly as the server sent it.
+const REASON_TEXT = {
+  eligible: "eligible — nothing is gating it",
+  disabled: "disabled — the row is parked",
+  unhealthy: "unhealthy — the pool marked its media dead",
+  missing_media: "missing media — there is nothing to play",
+  base_weight: "base weight — its stored weight is zero or less",
+  season: "season — this kind scores zero in the current season",
+  daypart: "daypart — this kind scores zero at this hour",
+  non_finite_score: "non-finite score — the computed score is not a number",
+};
 
 // One explicit state object, divided by concern. The DOM is never the state:
 // every render below can be repeated from this object alone.
@@ -52,6 +81,16 @@ function initialState() {
       filters: { q: "", kind: null, type: null, state: "all" },
       items: [], offset: 0, hasMore: false, loading: false, error: null,
       selectedId: null, generation: 0, updatedAt: null, source: "listing",
+      // `total` is the server's count of rows matching every filter before
+      // limit/offset — null until a build that reports it answers, so
+      // "how many matched" and "none matched" stay different answers.
+      total: null, pageSize: PAGE, density: "grid",
+    },
+    // The one inspected row. `value` is the detail body, never the list row:
+    // only the detail route carries uri, history and `selection`.
+    inspector: {
+      id: null, open: false, value: null, loading: false, error: null,
+      updatedAt: null, busy: "",
     },
     composer: {
       seconds: 30, tolerance: 1.5, maxItems: 8,
@@ -82,6 +121,17 @@ let jobSeq = 0;
 // writing, so it can neither overwrite newer feedback nor poll forever.
 let askGeneration = 0;
 let actionGeneration = 0;
+let inspectorAbort = null;
+let inspectorGeneration = 0;
+// Modals, innermost last: a confirmation opened over the inspector is the one
+// Escape and Tab reach, and a route change tears the whole stack down.
+const DIALOGS = [];
+let dialogSeq = 0;
+// At most one preview is ever playing. This is the element that is.
+let activeMedia = null;
+// Handed to openInspector by the surface that opened it, so another surface can
+// hear about a mutation without this file knowing anything about it.
+let inspectorOnMutate = null;
 
 // ---------------------------------------------------------------------------
 // 2. Safe DOM helpers
@@ -112,7 +162,78 @@ function makeLink(href, text, cls) {
   return a;
 }
 
+// Every button on this page has words in it: an icon alone is unreadable by
+// screen reader and ambiguous on a touch screen.
+function makeButton(label, cls, onClick, ariaLabel) {
+  const button = makeEl("button", cls, label);
+  button.type = "button";
+  if (ariaLabel) button.setAttribute("aria-label", ariaLabel);
+  if (onClick) button.addEventListener("click", onClick);
+  return button;
+}
+
+// Label always visible and bound by id: no placeholder says what a field is.
+function labelledControl(id, labelText, control) {
+  const wrap = makeEl("p", "field");
+  const label = makeEl("label", "", labelText);
+  label.setAttribute("for", id);
+  control.id = id;
+  wrap.append(label, control);
+  return wrap;
+}
+
+// localStorage is a privilege, not a guarantee — a private window or a browser
+// set to block storage makes these throw — and nothing kept in it is
+// load-bearing, so both directions fail quietly.
+function readLocal(key) {
+  try {
+    if (typeof localStorage === "undefined" || !localStorage) return null;
+    return localStorage.getItem(key);
+  } catch (e) { return null; }
+}
+
+function writeLocal(key, value) {
+  try {
+    if (typeof localStorage === "undefined" || !localStorage) return false;
+    localStorage.setItem(key, String(value));
+    return true;
+  } catch (e) { return false; }
+}
+
 const now = () => Date.now();
+
+// --- media: one preview at a time, and nothing left running ------------------
+// Starting one stops whatever was playing: never two soundtracks, never two
+// open streams.
+function claimMedia(el) {
+  if (activeMedia && activeMedia !== el && typeof activeMedia.pause === "function") {
+    activeMedia.pause();
+  }
+  activeMedia = el;
+}
+
+function watchMedia(el) {
+  el.addEventListener("play", () => claimMedia(el));
+  el.addEventListener("pause", () => { if (activeMedia === el) activeMedia = null; });
+  return el;
+}
+
+// Pause AND detach: a paused <video> still holds its buffer and an HLS element
+// still holds the connection, so a card that is going away has to let go of
+// both, or leaving the view keeps the station serving this page.
+function releaseMedia(root) {
+  if (!root || typeof root.querySelectorAll !== "function") return null;
+  ["video", "audio"].forEach((tag) => {
+    Array.from(root.querySelectorAll(tag)).forEach((el) => {
+      if (typeof el.pause === "function") el.pause();
+      if (el.removeAttribute) el.removeAttribute("src");
+      el.src = "";
+      if (typeof el.load === "function") { try { el.load(); } catch (e) { /* detached */ } }
+      if (activeMedia === el) activeMedia = null;
+    });
+  });
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // 3. API, error and abort helpers
@@ -423,6 +544,7 @@ function enterOverview() {
 function exitOverview() { return null; }
 
 function enterLibrary(params) {
+  STATE.library.density = storedDensity();
   applyLibraryQuery(params);
   renderFilters();
   renderLibrary();
@@ -430,8 +552,12 @@ function enterLibrary(params) {
   return Promise.all([ensureStatus(), loadGrid(true)]);
 }
 
+// Everything the library holds beyond the reads exitRoute already cancels: the
+// debounce, any modal that is up, and every media element still buffering.
 function exitLibrary() {
   if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
+  closeAllDialogs();
+  releaseMedia($("#grid"));
   return null;
 }
 
@@ -525,6 +651,20 @@ function formatDuration(seconds) {
 
 const PANEL_STATES = ["loading", "populated", "empty", "error", "stale"];
 
+// The state ladder every read-backed region shares: still reading with nothing
+// to show, a failed refresh over content worth keeping, an outright failure,
+// and populated. Written once so no two panels can disagree about what a
+// half-finished read looks like.
+function readState(source, retry) {
+  if (source.error && source.value) {
+    return { state: "stale", message: source.error, updatedAt: source.updatedAt,
+             onAction: retry };
+  }
+  if (source.error) return { state: "error", message: source.error, onAction: retry };
+  if (!source.value) return { state: "loading" };
+  return { state: "populated" };
+}
+
 // One region, one state. `el` is a panel's status strip; the panel's own
 // content is left alone, so last-known-good rows survive a failed refresh.
 function renderPanelState(el, options) {
@@ -557,6 +697,190 @@ function renderPanelState(el, options) {
     el.append(button);
   }
   return el;
+}
+
+// --- dialogs ----------------------------------------------------------------
+// Native <dialog> where the browser has one, and a fixed panel carrying the
+// same role/aria-modal where it does not. Shared by the inspector and by every
+// confirmation, so focus, Escape and teardown cannot drift apart between them.
+// Without HTMLDialogElement a <dialog> in the markup is only an unknown element
+// with no showModal on it, so the feature test checks both.
+const nativeDialog = (node) => typeof HTMLDialogElement !== "undefined" &&
+  Boolean(node) && typeof node.showModal === "function";
+
+// Tab order inside a modal, in document order, skipping what the browser skips.
+function focusables(root) {
+  const out = [];
+  const walk = (node) => {
+    Array.from((node && node.children) || []).forEach((child) => {
+      const tag = String(child.tagName || "").toLowerCase();
+      const focusable = tag === "button" || tag === "input" || tag === "select" ||
+        tag === "textarea" || (tag === "a" && child.href);
+      if (focusable && !child.disabled && !child.hidden) out.push(child);
+      walk(child);
+    });
+  };
+  walk(root);
+  return out;
+}
+
+// Trapped only while modal, and only by wrapping: nothing outside is disabled,
+// and closing gives focus straight back to the invoker.
+function trapTab(node, event) {
+  const list = focusables(node);
+  if (!list.length) return;
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  const at = list.indexOf(active);
+  const next = event.shiftKey
+    ? (at <= 0 ? list.length - 1 : at - 1)
+    : (at === -1 || at === list.length - 1 ? 0 : at + 1);
+  if (event.preventDefault) event.preventDefault();
+  list[next].focus();
+}
+
+// `opts.escapes` is false for a destructive confirmation: Cancel is first and
+// focused, so leaving is still one keystroke, but a stray Escape must never
+// answer "delete this permanently?".
+function openDialog(node, opts) {
+  if (!node) return null;
+  const options = opts || {};
+  const entry = {
+    node,
+    invoker: options.invoker ||
+      (typeof document !== "undefined" ? document.activeElement : null),
+    escapes: options.escapes !== false,
+    onClose: typeof options.onClose === "function" ? options.onClose : null,
+  };
+  if (DIALOGS.indexOf(entry) === -1) DIALOGS.push(entry);
+  entry.keydown = (event) => {
+    if (DIALOGS[DIALOGS.length - 1] !== entry) return;
+    if (event.key === "Escape") {
+      if (event.preventDefault) event.preventDefault();
+      if (entry.escapes) closeDialog(node);
+      return;
+    }
+    if (event.key === "Tab") trapTab(node, event);
+  };
+  node.addEventListener("keydown", entry.keydown);
+  // A native dialog turns Escape into `cancel`; the guard is the same one.
+  entry.cancel = (event) => {
+    if (event.preventDefault) event.preventDefault();
+    if (entry.escapes) closeDialog(node);
+  };
+  node.addEventListener("cancel", entry.cancel);
+  if (nativeDialog(node)) {
+    node.showModal();
+  } else {
+    node.setAttribute("role", "dialog");
+    node.setAttribute("aria-modal", "true");
+    node.setAttribute("open", "");
+  }
+  if (options.focus && options.focus.focus) options.focus.focus();
+  return entry;
+}
+
+function closeDialog(node) {
+  const at = DIALOGS.findIndex((entry) => entry.node === node);
+  if (at === -1) return null;
+  const entry = DIALOGS[at];
+  DIALOGS.splice(at, 1);
+  node.removeEventListener("keydown", entry.keydown);
+  node.removeEventListener("cancel", entry.cancel);
+  if (nativeDialog(node)) node.close();
+  else node.removeAttribute("open");
+  if (entry.invoker && entry.invoker.focus) entry.invoker.focus();
+  if (entry.onClose) entry.onClose();
+  return entry;
+}
+
+// Innermost first, so each one hands focus back to whatever opened it.
+function closeAllDialogs() {
+  while (DIALOGS.length) closeDialog(DIALOGS[DIALOGS.length - 1].node);
+  return null;
+}
+
+/**
+ * confirmDialog({title, body, confirmLabel, cancelLabel, danger, requireText,
+ *                requireLabel, checkbox}) -> Promise<boolean>
+ *
+ * `body` is a string or an array of paragraphs. `requireText` gates the confirm
+ * button behind typing that exact word. `checkbox` is a mutable `{label,
+ * checked}` the caller reads back afterwards, so the promise stays a yes/no.
+ * A danger dialog puts Cancel first in the DOM (first by tab and by screen
+ * reader) and focuses it; the destructive button is never the default, and
+ * Escape is not an answer to it.
+ */
+function confirmDialog(options) {
+  const opts = options || {};
+  return new Promise((resolve) => {
+    const dialog = document.createElement("dialog");
+    dialog.className = "dlg dlg-confirm" + (opts.danger ? " dlg-danger" : "");
+    const titleId = "dlg-title-" + (++dialogSeq);
+    const heading = makeEl("h2", "dlg-title", opts.title || "Are you sure?");
+    heading.id = titleId;
+    dialog.setAttribute("aria-labelledby", titleId);
+    dialog.append(heading);
+    const lines = Array.isArray(opts.body) ? opts.body : [opts.body];
+    lines.forEach((line) => {
+      if (line) dialog.append(makeEl("p", "dlg-line", String(line)));
+    });
+
+    let typed = null;
+    if (opts.requireText) {
+      const input = document.createElement("input");
+      input.type = "text";
+      input.autocomplete = "off";
+      typed = input;
+      dialog.append(labelledControl("dlg-require-" + dialogSeq,
+        opts.requireLabel || ("Type " + String(opts.requireText) + " to confirm"),
+        input));
+    }
+    let box = null;
+    if (opts.checkbox) {
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = Boolean(opts.checkbox.checked);
+      box = input;
+      const row = labelledControl("dlg-keep-" + dialogSeq,
+        String(opts.checkbox.label || "Keep the file"), input);
+      row.className = "field field-check";
+      dialog.append(row);
+    }
+
+    let settled = false;
+    const finish = (answer) => {
+      if (settled) return;
+      settled = true;
+      if (box && opts.checkbox) opts.checkbox.checked = Boolean(box.checked);
+      closeDialog(dialog);
+      dialog.remove();
+      resolve(answer);
+    };
+
+    const actions = makeEl("div", "dlg-actions");
+    const cancel = makeButton(opts.cancelLabel || "Cancel", "dlg-cancel",
+                              () => finish(false));
+    const accept = makeButton(opts.confirmLabel || "Confirm",
+                              "dlg-confirm" + (opts.danger ? " danger-btn" : ""),
+                              () => finish(true));
+    if (typed) {
+      accept.disabled = true;
+      const gate = () => {
+        accept.disabled = String(typed.value || "").trim() !== String(opts.requireText);
+      };
+      typed.addEventListener("input", gate);
+      typed.addEventListener("change", gate);
+    }
+    actions.append(cancel, accept);
+    dialog.append(actions);
+    document.body.appendChild(dialog);
+    openDialog(dialog, {
+      escapes: !opts.danger,
+      focus: opts.danger ? cancel : accept,
+      onClose: () => finish(false),
+    });
+    return null;
+  });
 }
 
 // One labelled fact. Used by every summary block so a missing value reads the
@@ -643,9 +967,40 @@ function factorsLine(b) {
 
 const rowLabel = (b) => String(b.title || b.kind || b.id || "this bumper").slice(0, 60);
 
+const hasMedia = (b) => typeof b.media_url === "string" && b.media_url !== "";
+
+// The pool state in the vocabulary the state filter and /api/status counts use,
+// from explicit fields only. "unknown" is a real answer, not a fallback:
+// /api/bumpers/random returns none but live rows and no `enabled` key at all,
+// and reading that absence as a state would invent one.
+function poolState(b) {
+  const row = b && typeof b === "object" ? b : {};
+  if (row.health === "dead") return "dead";
+  if (row.enabled === 0 || row.enabled === false) return "parked";
+  if (row.enabled === undefined || row.enabled === null) return "unknown";
+  if (row.type === "card" && !hasMedia(row)) return "unrendered";
+  return "playable";
+}
+
+// Icon + word + colour, and the state's own name as the detail.
+const STATE_BADGES = {
+  playable: ["healthy", "playable"],
+  parked: ["attention", "parked"],
+  dead: ["failed", "dead — the pool could not read its media"],
+  unrendered: ["attention", "unrendered — no media file yet"],
+};
+
+function stateBadge(b) {
+  const spec = STATE_BADGES[poolState(b)];
+  if (!spec) return null;
+  const badge = statusBadge(spec[0], spec[1]);
+  badge.classList.add("pv-state");
+  return badge;
+}
+
 function decorateCard(card, b) {
   const cr = creativeLine(b);
-  if (cr) card.append(makeEl("div", "pv-creative", cr));
+  card.append(makeEl("div", "pv-creative", cr || NOT_AVAILABLE));
   const cred = creditsLine(b);
   if (cred) card.append(makeEl("div", "pv-credits", cred));
   const prov = provenanceLine(b);
@@ -656,59 +1011,104 @@ function decorateCard(card, b) {
   if (fresh) card.append(makeEl("div", "pv-freshness", fresh));
 }
 
-// Destructive, so it is a named button and always visible: a control that only
-// exists on hover is no control at all by keyboard or on a touch screen.
-function addDelete(el, b) {
-  const x = makeEl("button", "pv-del", "✕");
-  x.setAttribute("aria-label", "Delete " + rowLabel(b));
-  x.title = "Delete " + rowLabel(b);
-  x.addEventListener("click", (ev) => { ev.stopPropagation(); deleteBumper(b, el); });
-  el.appendChild(x);
+// Every video this page makes: muted, controlled and metadata-only. Sound is
+// never started for anyone, the controls are what a keyboard or touch screen
+// uses, and `preload` is "none" for a stream — catalog HLS is never fetched
+// before someone asks for it.
+function mediaVideo(src, label, preload) {
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.controls = true;
+  v.preload = preload || "metadata";
+  v.src = String(src);
+  v.setAttribute("aria-label", label);
+  return watchMedia(v);
 }
 
-// Only a row KNOWN to be parked gets the control. /api/bumpers returns `enabled`
-// as 0/1, so falsy is the parked test — but only when the key is actually there.
-// /api/bumpers/random (the shuffle preview) omits it entirely and returns none
-// but live rows, so a missing value must mean "no button", not "parked": an
-// action control appears on evidence of a park, never on the absence of data.
-function addEnable(el, b) {
-  if (b.enabled === undefined || b.enabled === null || b.enabled) return;
-  const x = makeEl("button", "fchip pv-enable", "✓ enable");
-  x.setAttribute("aria-label", "Turn " + rowLabel(b) + " back on");
-  x.title = "Parked — turn this bumper back on";
-  x.addEventListener("click", (ev) => { ev.stopPropagation(); enableBumper(b); });
-  el.appendChild(x);
+function videoPreview(b) {
+  const v = mediaVideo(String(b.media_url || "") + "#t=2", "Preview of " + rowLabel(b));
+  v.loop = true;
+  return v;
 }
 
-function cardEl(b) {
-  const card = makeEl("div", "pv-card");
-  if (b.type === "video") {
-    const v = document.createElement("video");
-    v.muted = true; v.loop = true; v.playsInline = true; v.preload = "metadata";
-    v.src = String(b.media_url || "") + "#t=2";
-    const body = makeEl("div", "pv-body");
-    body.append(makeEl("div", "pv-kind", b.kind || ""),
-                makeEl("div", "pv-title", b.title || ""),
-                makeEl("div", "pv-meta", formatDuration(b.duration) + " · video"));
-    card.append(v, body);
-    card.addEventListener("mouseenter", () => v.play().catch(() => {}));
-    card.addEventListener("mouseleave", () => { v.pause(); });
+// A live stream is never opened on render, on hover, or on page load. The badge
+// says it is live, the note says what Play does to the station, and only the
+// press builds an element that holds the URL.
+function streamPreview(b) {
+  const box = makeEl("div", "pv-stream-box");
+  const badge = makeEl("div", "pv-stream", "◉ LIVE");
+  const note = makeEl("p", "pv-live-note", LIVE_WARNING);
+  const play = makeButton("▶ Play live stream", "pv-play mini", () => {
+    if (!hasMedia(b)) { announce("this stream has no URL to open"); return; }
+    const v = mediaVideo(b.media_url, "Live stream " + rowLabel(b), "none");
+    box.replaceChildren(badge, v, note);
+    claimMedia(v);
+    if (typeof v.play === "function") { const p = v.play(); if (p && p.catch) p.catch(() => {}); }
+  }, "Play the live stream " + rowLabel(b));
+  box.append(badge, play, note);
+  return box;
+}
+
+/**
+ * One row as a card.
+ *
+ * `opts.onMutate(kind, id)` is forwarded to the inspector this card opens, so
+ * a surface that has its own idea of staleness (the composer's pack) hears
+ * about a disable/enable/render/delete without this file knowing about it.
+ */
+function cardEl(b, opts) {
+  const options = opts && typeof opts === "object" ? opts : {};
+  const card = makeEl("article", "pv-card");
+  card.dataset.state = poolState(b);
+  const body = makeEl("div", "pv-body");
+  // A stream has no length: it runs until it stops.
+  const lengthLine = (b.type === "stream" ? "LIVE" : formatDuration(b.duration)) +
+    (b.type == null || b.type === "" ? "" : " · " + String(b.type));
+  if (b.type === "video" || b.type === "image") {
+    if (b.type === "image") card.append(imagePreview(b));
+    else {
+      const v = videoPreview(b);
+      card.append(v);
+      // A pointer may preview on hover; nothing else does, and it claims the
+      // one preview slot exactly as a deliberate press of Play would.
+      card.addEventListener("mouseenter", () => {
+        const started = v.play();
+        if (started && started.catch) started.catch(() => {});
+      });
+      card.addEventListener("mouseleave", () => { v.pause(); });
+    }
   } else if (b.type === "stream") {
-    const body = makeEl("div", "pv-body");
-    body.append(makeEl("div", "pv-kind", b.kind || ""),
-                makeEl("div", "pv-title", b.title || ""),
-                makeEl("div", "pv-meta", "live stream"));
-    card.append(makeEl("div", "pv-stream", "◉ LIVE"), body);
+    card.append(streamPreview(b));
   } else {
     const p = b.payload || {};
     const txt = p.lines ? p.lines.join("\n") : (p.number || p.text || b.title || "");
     card.className = "pv-card pv-textcard";
-    card.append(makeEl("div", "pv-kind", b.kind || ""), makeEl("div", "tc", txt));
+    card.append(makeEl("div", "tc", txt));
   }
+  body.append(makeEl("div", "pv-kind", b.kind == null ? "" : b.kind),
+              makeEl("div", "pv-title", b.title == null ? "" : b.title),
+              makeEl("div", "pv-meta", lengthLine));
+  const badge = stateBadge(b);
+  if (badge) body.append(badge);
+  card.append(body);
   decorateCard(card, b);
-  addDelete(card, b);
-  addEnable(card, b);
+  // Never hidden: everything that changes or removes a row is behind it.
+  if (b.id !== undefined && b.id !== null && String(b.id) !== "") {
+    const actions = makeEl("div", "pv-actions");
+    const inspect = makeButton("Inspect", "pv-inspect mini",
+      () => { openInspector(b.id, { invoker: inspect, onMutate: options.onMutate }); },
+      "Inspect " + rowLabel(b));
+    actions.append(inspect);
+    card.append(actions);
+  }
   return card;
+}
+
+function imagePreview(b) {
+  const img = document.createElement("img");
+  img.src = String(b.media_url || "");
+  img.alt = "Preview of " + rowLabel(b);
+  img.loading = "lazy";
+  return img;
 }
 
 // ---------------------------------------------------------------------------
@@ -1007,24 +1407,11 @@ function renderWarnings() {
 }
 
 function renderOverviewState() {
-  const el = $("#pool-state");
+  // `loading && !value` first, so the 20-second refresh does not blink
+  // "Working" over counts that are already on screen and still correct.
   const s = STATE.status;
-  // Guarded on `!value` so the 20-second refresh does not blink "Working" over
-  // counts that are already on screen and still correct.
-  if (s.loading && !s.value) return renderPanelState(el, { state: "loading" });
-  if (s.error && s.value) {
-    return renderPanelState(el, {
-      state: "stale", message: s.error, updatedAt: s.updatedAt,
-      onAction: () => { loadStatus(); },
-    });
-  }
-  if (s.error) {
-    return renderPanelState(el, {
-      state: "error", message: s.error, onAction: () => { loadStatus(); },
-    });
-  }
-  if (!s.value) return renderPanelState(el, { state: "loading" });
-  return renderPanelState(el, { state: "populated" });
+  return renderPanelState($("#pool-state"), s.loading && !s.value
+    ? { state: "loading" } : readState(s, () => { loadStatus(); }));
 }
 
 function renderOverview() {
@@ -1102,6 +1489,7 @@ function applyLibraryQuery(params) {
   if (JSON.stringify([f.state, f.type, f.kind, f.q]) !== before) {
     lib.items = [];
     lib.hasMore = false;
+    lib.total = null;
     lib.error = null;
     lib.updatedAt = null;
     lib.source = "listing";
@@ -1110,98 +1498,296 @@ function applyLibraryQuery(params) {
   if (search) search.value = f.q;
 }
 
+// The hash query the current filters describe, written back on every change so
+// the address bar is always a deep link to what is on screen.
+function libraryQuery() {
+  const f = STATE.library.filters;
+  const params = new URLSearchParams();
+  if (f.state && f.state !== "all") params.set("state", f.state);
+  if (f.type) params.set("type", f.type);
+  if (f.kind) params.set("kind", f.kind);
+  if (f.q) params.set("q", f.q);
+  return params.toString();
+}
+
+const libraryHash = () => {
+  const query = libraryQuery();
+  return "#/library" + (query ? "?" + query : "");
+};
+
+// replace(), not assign(): a filter change is a correction to where you are,
+// not a stop on the way back. `activeQuery` moves first on purpose — replace()
+// fires a hashchange of its own, and enterRoute treats "same route, same query"
+// as a no-op, which is what stops every filter change re-reading the whole view.
+function syncLibraryHash() {
+  if (activeRoute !== "library") return null;
+  const query = libraryQuery();
+  if (activeQuery === query) return null;
+  activeQuery = query;
+  if (typeof location !== "undefined" && location && location.replace) {
+    location.replace(libraryHash());
+  }
+  return query;
+}
+
+// One door for every filter control. A <select>'s value is checked against what
+// /api/bumpers accepts exactly as a hash value is.
+function setFilter(name, raw) {
+  const f = STATE.library.filters;
+  const value = String(raw === undefined || raw === null ? "" : raw);
+  if (name === "state") {
+    f.state = LIBRARY_STATES.indexOf(value) === -1 ? "all" : value;
+  } else if (name === "type") {
+    f.type = LIBRARY_TYPES.indexOf(value) === -1 ? null : value;
+  } else if (name === "kind") {
+    f.kind = value ? value.slice(0, MAX_FILTER_TEXT) : null;
+  } else {
+    return null;
+  }
+  renderFilters();
+  syncLibraryHash();
+  return loadGrid(true);
+}
+
+// The server accepts up to 1000; this page never asks for more than 100.
+function setPageSize(raw) {
+  const n = Number(raw);
+  STATE.library.pageSize = PAGE_SIZES.indexOf(n) === -1
+    ? (isFinite(n) && n > PAGE_SIZES[PAGE_SIZES.length - 1]
+        ? PAGE_SIZES[PAGE_SIZES.length - 1] : PAGE)
+    : n;
+  renderFilters();
+  return loadGrid(true);
+}
+
+const storedDensity = () => {
+  const saved = readLocal(DENSITY_KEY);
+  return LIBRARY_DENSITIES.indexOf(String(saved)) === -1 ? "grid" : String(saved);
+};
+
+// Layout only: it changes no row, so it neither re-reads nor enters the hash.
+function setDensity(raw) {
+  const value = String(raw === undefined || raw === null ? "" : raw);
+  STATE.library.density = LIBRARY_DENSITIES.indexOf(value) === -1 ? "grid" : value;
+  writeLocal(DENSITY_KEY, STATE.library.density);
+  renderFilters();
+  applyDensity();
+  return STATE.library.density;
+}
+
+function applyDensity() {
+  const grid = $("#grid");
+  if (grid) grid.className = "grid" + (STATE.library.density === "list" ? " grid-list" : "");
+}
+
 function clearFilters() {
   STATE.library.filters.kind = null;
   STATE.library.filters.q = "";
   STATE.library.filters.type = null;
   STATE.library.filters.state = "all";
+  if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
   const search = $("#search");
   if (search) search.value = "";
   renderFilters();
-  loadGrid(true);
+  syncLibraryHash();
+  return loadGrid(true);
 }
 
+// The toolbar's controls are static in index.html; this puts the current
+// filters into them and rebuilds the one list that is data-driven. It never
+// writes #search — the operator may be mid-word, and applyLibraryQuery and
+// clearFilters own that field.
 function renderFilters() {
-  const filters = $("#filters");
-  if (!filters) return;
-  const kinds = Object.entries(poolKinds()).sort((a, b) => b[1] - a[1]);
-  const total = Object.values(poolKinds()).reduce((a, b) => a + b, 0);
-  filters.replaceChildren();
-  const chip = (k, label, n) => {
-    const b = makeEl("button", "fchip" + (STATE.library.filters.kind === k ? " on" : ""), label);
-    b.dataset.kind = k === null ? "" : k;
-    if (STATE.library.filters.kind === k) b.setAttribute("aria-pressed", "true");
-    else b.setAttribute("aria-pressed", "false");
-    b.appendChild(makeEl("b", "", n));
-    filters.appendChild(b);
-  };
-  chip(null, "all", total);
-  kinds.forEach(([k, n]) => chip(k, k, n));
-  // The other half of ?enabled=false. A parked row is the one thing you cannot
-  // find by scrolling — the pool lists newest first, not parked first — and the
-  // enable control only shows up once you have found one. Filters compose on
-  // the server, so this narrows the current kind/search rather than replacing it.
-  const parkedOn = STATE.library.filters.state === "parked";
-  const parked = makeEl("button", "fchip parked" + (parkedOn ? " on" : ""), "⏸ parked only");
-  parked.id = "parked-only";
-  parked.setAttribute("aria-pressed", parkedOn ? "true" : "false");
-  filters.appendChild(parked);
-  parked.addEventListener("click", () => {
-    STATE.library.filters.state = parkedOn ? "all" : "parked";
-    renderFilters();
-    loadGrid(true);
-  });
-  // Dropping a whole category is the usual fix when a search returned junk, so
-  // it is offered only while that category is actually selected — never next to
-  // "all", where a mis-click would be catastrophic.
-  if (STATE.library.filters.kind) {
-    const danger = makeEl("button", "fchip danger",
-      '✕ delete all "' + STATE.library.filters.kind + '"');
-    danger.id = "drop-kind";
-    danger.addEventListener("click", dropKind);
-    filters.appendChild(danger);
+  const f = STATE.library.filters;
+  const kindSel = $("#filter-kind");
+  if (kindSel) {
+    const counts = poolKinds();
+    const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+    const option = (value, label) => {
+      const node = makeEl("option", "", label);
+      node.value = value;
+      return node;
+    };
+    const nodes = [option("", "All kinds")];
+    // A deep link can name a kind the counts no longer list (or a build that
+    // reports no counts at all). Dropping it here would leave the control
+    // reading "All kinds" while the listing was still filtered by it.
+    if (f.kind && names.indexOf(f.kind) === -1) nodes.push(option(f.kind, f.kind));
+    names.forEach((name) => nodes.push(option(name, name + " (" + counts[name] + ")")));
+    kindSel.replaceChildren(...nodes);
+    kindSel.value = f.kind || "";
   }
-  // Only the kind chips — the ones `chip()` stamped with data-kind. A bare
-  // ".fchip" sweep would also catch the delete-category chip, the parked toggle
-  // and every .pv-enable button in the grid, handing each of them a kind reset
-  // it never asked for (and a fresh duplicate listener on every re-render).
-  filters.querySelectorAll(".fchip[data-kind]").forEach((b) => b.addEventListener("click", () => {
-    STATE.library.filters.kind = b.dataset.kind || null;
-    renderFilters();
-    loadGrid(true);
-  }));
+  const set = (sel, value) => { const el = $(sel); if (el) el.value = value; };
+  set("#filter-type", f.type || "");
+  set("#filter-state", f.state);
+  set("#page-size", String(STATE.library.pageSize));
+  set("#density", STATE.library.density);
+  renderDangerZone();
+}
+
+// How many rows this build says the kind holds, or null where it says nothing.
+function kindCount(kind) {
+  const counts = poolKinds();
+  return Object.prototype.hasOwnProperty.call(counts, kind) ? counts[kind] : null;
+}
+
+// Offered only while a kind is selected — never beside "all kinds", where one
+// mis-click would empty the pool.
+function renderDangerZone() {
+  const kind = STATE.library.filters.kind;
+  const button = $("#drop-kind");
+  const note = $("#danger-note");
+  const known = kindCount(kind);
+  if (button) {
+    button.disabled = !kind;
+    button.textContent = kind
+      ? "Delete every item in “" + kind + "”"
+      : "Delete every item in this kind";
+  }
+  if (!note) return;
+  if (!kind) {
+    note.textContent = "Choose a kind above to delete the whole category. " +
+      "Nothing here is reversible.";
+    return;
+  }
+  note.textContent = "Deletes " + (known === null ? "every item" : known + " item(s)") +
+    " of kind “" + kind + "”. " + DELETE_FILE_NOTE;
+}
+
+// "Showing N of TOTAL". `total` is what the server matched before paging; a
+// build that reports none says so rather than letting the loaded count stand
+// in for the matched count.
+function libraryCounts() {
+  const lib = STATE.library;
+  const loaded = lib.items.length;
+  const total = typeof lib.total === "number" && isFinite(lib.total) ? lib.total : null;
+  return { loaded, total, hasMore: total === null ? lib.hasMore : loaded < total };
+}
+
+function renderLibraryCounts() {
+  const el = $("#library-counts");
+  if (!el) return null;
+  const counts = libraryCounts();
+  // A shuffle draw is not a filtered listing, so it does not claim to be one.
+  const scope = STATE.library.source === "shuffle" ? " drawn at random"
+    : (filtersActive() ? " matching the current filters" : " in the pool");
+  el.textContent = counts.total === null
+    ? "Showing " + counts.loaded + " loaded · matched total: " + NOT_AVAILABLE
+    : "Showing " + counts.loaded + " of " + counts.total + scope + ".";
+  return el;
+}
+
+// --- reversible curation -----------------------------------------------------
+// Every mutation below updates exactly the row it changed and refreshes the
+// counts. None re-reads the listing: the operator's filters, page offset and
+// scroll position are theirs, not something an action may reset.
+function patchLibraryRow(id, patch) {
+  const lib = STATE.library;
+  const at = lib.items.findIndex((row) => row && row.id === id);
+  if (at === -1) return null;
+  lib.items[at] = Object.assign({}, lib.items[at], patch || {});
+  const grid = $("#grid");
+  const card = grid && grid.children ? grid.children[at] : null;
+  if (card) {
+    releaseMedia(card);
+    grid.replaceChild(cardEl(lib.items[at]), card);
+  }
+  return lib.items[at];
+}
+
+// What every successful mutation does afterwards, in one place: the row, the
+// open inspector, the pool counts, and whoever asked to be told.
+function afterMutation(kind, id, patch) {
+  patchLibraryRow(id, patch);
+  const inspected = STATE.inspector.value;
+  if (inspected && inspected.id === id && patch) {
+    STATE.inspector.value = Object.assign({}, inspected, patch);
+    renderInspector();
+  }
+  loadStatus();
+  if (inspectorOnMutate) inspectorOnMutate(kind, id);
+  return null;
 }
 
 async function dropKind() {
-  const k = STATE.library.filters.kind;
-  const n = poolKinds()[k] || 0;
-  if (!confirm('Delete the entire "' + k + '" category?\n\n' + n +
-               " bumper(s) and their files are removed permanently.")) return;
-  try {
-    const j = await api("/api/pool/kind/" + encodeURIComponent(k), { method: "DELETE" });
-    announce("dropped category " + k + ": removed " + j.removed +
-             (j.dirs_removed ? ", " + j.dirs_removed + " dir(s)" : ""));
-    STATE.library.filters.kind = null;
-    await loadStatus();
-    loadGrid(true);
-  } catch (err) { announce("category delete failed: " + err.message); }
-}
-
-async function deleteBumper(b, el) {
-  const what = rowLabel(b);
-  if (!confirm("Delete \"" + what + "\"?\n\nThe file is removed too, so it cannot come back on the next scan.")) return;
+  const kind = STATE.library.filters.kind;
+  if (!kind) return null;
+  const known = kindCount(kind);
+  const how = known === null ? "every item" : known + " item(s)";
+  const keep = { label: "Keep the media files on disk (delete the rows only)",
+                 checked: false };
+  const ok = await confirmDialog({
+    title: "Delete every item in “" + kind + "”?",
+    body: ["Removes " + how + " of kind “" + kind + "” from the registry.",
+           "Their files are deleted with them and the now-empty category " +
+             "directory is removed, because the next asset scan would " +
+             "otherwise register anything left inside it.",
+           "This cannot be undone."],
+    confirmLabel: "Delete " + how,
+    danger: true,
+    requireText: kind,
+    requireLabel: "Type “" + kind + "” to enable the delete button",
+    checkbox: keep,
+  });
+  if (!ok) { announce("category delete cancelled"); return null; }
+  const url = "/api/pool/kind/" + encodeURIComponent(kind) +
+    (keep.checked ? "?keep_files=true" : "");
   let j;
   try {
-    j = await api("/api/bumpers/" + encodeURIComponent(b.id), { method: "DELETE" });
-  } catch (err) { announce("delete failed: " + err.message); return; }
+    j = await api(url, { method: "DELETE" });
+  } catch (err) { announce("category delete failed: " + err.message); return null; }
+  const failed = Array.isArray(j.failed) ? j.failed.length : 0;
+  announce("dropped category " + kind + ": removed " + j.removed +
+           (j.dirs_removed ? ", " + j.dirs_removed + " dir(s)" : "") +
+           (failed ? ", " + failed + " needing manual cleanup" : ""));
+  // The kind this page was filtered by no longer exists, so its filter goes
+  // with it and the listing is read again for the question that is left.
+  STATE.library.filters.kind = null;
+  closeInspector();
+  renderFilters();
+  syncLibraryHash();
+  await loadStatus();
+  return loadGrid(true);
+}
+
+/**
+ * Permanent deletion. The confirmation names the item, states the file
+ * consequence in the server's own terms, offers the `keep_file` the endpoint
+ * documents, puts Cancel first and focused, and does not treat Escape as an
+ * answer.
+ */
+async function deleteBumper(b) {
+  const keep = { label: KEEP_FILE_LABEL, checked: false };
+  const ok = await confirmDialog({
+    title: "Delete “" + rowLabel(b) + "” permanently?",
+    body: [DELETE_FILE_NOTE,
+           "Disabling it instead takes it out of rotation and can be undone.",
+           "Item id: " + String(b.id)],
+    confirmLabel: "Delete permanently",
+    danger: true,
+    checkbox: keep,
+  });
+  if (!ok) { announce("delete cancelled"); return null; }
+  const url = "/api/bumpers/" + encodeURIComponent(b.id) +
+    (keep.checked ? "?keep_file=true" : "");
+  let j;
+  try {
+    j = await api(url, { method: "DELETE" });
+  } catch (err) { announce("delete failed: " + err.message); return null; }
   STATE.library.items = STATE.library.items.filter((row) => row.id !== b.id);
-  if (el) {
-    el.classList.add("gone");
-    setTimeout(() => el.remove(), 220);
+  if (typeof STATE.library.total === "number") {
+    STATE.library.total = Math.max(0, STATE.library.total - 1);
   }
+  renderLibrary();
   announce("deleted " + j.kind + " · " + (j.title || b.id) +
-           (j.file_removed ? " (file removed)" : ""));
+           (j.file_removed ? " (file removed)" : " (file kept)") +
+           (j.cleanup_failed
+             ? " — the row is gone but a hidden quarantine file remains for manual cleanup"
+             : ""));
+  if (STATE.inspector.id === b.id) closeInspector();
   loadStatus();
+  if (inspectorOnMutate) inspectorOnMutate("delete", b.id);
+  return j;
 }
 
 // Bringing a parked row back on. The pool keeps rows the system switched off —
@@ -1214,12 +1800,27 @@ async function enableBumper(b) {
   let j;
   try {
     j = await api("/api/pool/enable?bumper_id=" + encodeURIComponent(b.id), { method: "POST" });
-  } catch (err) { announce("enable failed: " + err.message); return; }
+  } catch (err) { announce("enable failed: " + err.message); return null; }
   announce("enabled " + rowLabel(b) +
            (j.changed ? "" : " (already on)") +
            (j.warning ? " — " + j.warning : ""));
-  await loadStatus();
-  loadGrid(true);
+  afterMutation("enable", b.id, { enabled: 1 });
+  return j;
+}
+
+// The reversible half of the editorial controls, and the primary one: it takes
+// a row out of rotation without touching its health, its file, or its history,
+// so it is always undoable by the button above.
+async function disableBumper(b) {
+  let j;
+  try {
+    j = await api("/api/pool/disable?bumper_id=" + encodeURIComponent(b.id), { method: "POST" });
+  } catch (err) { announce("disable failed: " + err.message); return null; }
+  announce("disabled " + rowLabel(b) +
+           (j.changed ? "" : " (already off)") +
+           (j.warning ? " — " + j.warning : ""));
+  afterMutation("disable", b.id, { enabled: 0 });
+  return j;
 }
 
 function renderLibraryState() {
@@ -1229,16 +1830,11 @@ function renderLibraryState() {
   // operator asked for, so saying "loading" cannot flicker on a background
   // refresh — and a Retry that showed only the old stale line would look dead.
   if (lib.loading) return renderPanelState(el, { state: "loading" });
-  if (lib.error && lib.items.length) {
-    return renderPanelState(el, {
-      state: "stale", message: lib.error, updatedAt: lib.updatedAt,
-      onAction: () => { loadGrid(true); },
-    });
-  }
   if (lib.error) {
-    return renderPanelState(el, {
-      state: "error", message: lib.error, onAction: () => { loadGrid(true); },
-    });
+    return renderPanelState(el, readState(
+      { value: lib.items.length ? lib.items : null, error: lib.error,
+        updatedAt: lib.updatedAt },
+      () => { loadGrid(true); }));
   }
   if (!lib.items.length) {
     if (filtersActive()) {
@@ -1259,13 +1855,20 @@ function renderLibraryState() {
 
 function renderLibrary() {
   const grid = $("#grid");
-  if (grid) grid.replaceChildren(...STATE.library.items.map(cardEl));
+  if (grid) {
+    // The cards going away may hold an open connection; let go before dropping.
+    releaseMedia(grid);
+    grid.replaceChildren(...STATE.library.items.map((row) => cardEl(row)));
+  }
+  applyDensity();
+  renderLibraryCounts();
   const more = $("#more");
-  if (more) more.hidden = !STATE.library.hasMore;
+  if (more) more.hidden = !libraryCounts().hasMore;
 }
 
 function libraryParams(offset) {
-  const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
+  const params = new URLSearchParams({
+    limit: String(STATE.library.pageSize), offset: String(offset) });
   const f = STATE.library.filters;
   if (f.kind) params.set("kind", f.kind);
   if (f.type) params.set("type", f.type);
@@ -1306,7 +1909,11 @@ async function loadGrid(reset) {
   const count = typeof (d && d.count) === "number" ? d.count : rows.length;
   lib.items = reset ? rows : lib.items.concat(rows);
   lib.offset = offset + count;
-  lib.hasMore = count >= PAGE;
+  // `total` is what the server matched before paging. Where a build reports it,
+  // it is the authority on whether there is another page; where it does not,
+  // a full page is the only evidence there is that more might exist.
+  lib.total = typeof (d && d.total) === "number" && isFinite(d.total) ? d.total : null;
+  lib.hasMore = lib.total === null ? count >= lib.pageSize : lib.items.length < lib.total;
   lib.loading = false;
   lib.error = null;
   lib.source = "listing";
@@ -1316,10 +1923,18 @@ async function loadGrid(reset) {
   return d;
 }
 
+// The hash is written when the debounce fires, not per keystroke: an address
+// bar rewritten on every letter is noise, and location.replace()'s hashchange
+// is not free either.
 function scheduleSearch(value) {
-  STATE.library.filters.q = value;
+  STATE.library.filters.q = String(value === undefined || value === null ? "" : value)
+    .slice(0, MAX_FILTER_TEXT);
   if (searchTimer !== null) clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => { searchTimer = null; loadGrid(true); }, SEARCH_DEBOUNCE_MS);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    syncLibraryHash();
+    loadGrid(true);
+  }, SEARCH_DEBOUNCE_MS);
 }
 
 async function shufflePreview() {
@@ -1347,13 +1962,466 @@ async function shufflePreview() {
   lib.items = Array.isArray(d && d.bumpers) ? d.bumpers : [];
   lib.offset = lib.items.length;
   lib.hasMore = false;
+  // A draw is not a filtered listing, so there is no matched total to report.
+  lib.total = lib.items.length;
   lib.loading = false;
   lib.error = null;
   lib.source = "shuffle";
   lib.updatedAt = now();
+  syncLibraryHash();
   renderLibrary();
   renderLibraryState();
   return d;
+}
+
+// ---------------------------------------------------------------------------
+// 7b. Item inspector
+// ---------------------------------------------------------------------------
+// One modal over one row. The listing carries neither `selection` nor `uri` nor
+// the history columns, so the detail route is read when the inspector opens and
+// not before — which is why nothing here can be built from a grid card.
+
+const parsePayload = (value) => {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string" || !value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) { return {}; }
+};
+
+// A value the server actually sent, or the one sentence that says it did not.
+// `absent` is for a field whose emptiness means something (no tags is not a
+// missing tags column).
+function fieldText(value, absent) {
+  if (value === undefined || value === null || value === "") {
+    return absent === undefined ? NOT_AVAILABLE : absent;
+  }
+  return String(value);
+}
+
+function formatStamp(seconds, zero) {
+  const n = typeof seconds === "number" ? seconds : Number(seconds);
+  if (!isFinite(n) || n <= 0) return zero === undefined ? NOT_AVAILABLE : zero;
+  return new Date(n * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC" +
+    " · " + formatAge(n * 1000);
+}
+
+function inspectorBlock(title, rows) {
+  const block = makeEl("section", "insp-block");
+  block.append(makeEl("h3", "insp-h", title));
+  rows.forEach((row) => { if (row) block.append(row); });
+  return block;
+}
+
+// `[label, value]` pairs to labelled facts: a block is a list of what it shows.
+const facts = (pairs) => pairs.map(([label, value]) => summaryRow(label, value));
+
+// A boolean the server actually sent, said in words; NOT_AVAILABLE otherwise.
+const yesNo = (value, yes, no) => typeof value === "boolean" || value === 0 || value === 1
+  ? (value ? (yes || "yes") : (no || "no")) : NOT_AVAILABLE;
+
+const num = (value) => value === undefined || value === null || value === ""
+  ? NOT_AVAILABLE : String(value);
+
+// The media/text preview, and the answer where the card has one.
+function inspectorPreview(row) {
+  const rows = [];
+  const payload = parsePayload(row.payload);
+  if (row.type === "stream") {
+    rows.push(streamPreview(row));
+  } else if (row.type === "image" && hasMedia(row)) {
+    rows.push(imagePreview(row));
+  } else if (hasMedia(row)) {
+    // A rendered card is a media file like any other, so it gets a player too.
+    rows.push(mediaVideo(row.media_url, "Preview of " + rowLabel(row)));
+  }
+  const lines = Array.isArray(payload.lines) ? payload.lines.join("\n")
+    : fieldText(payload.text || payload.number || payload.meaning, "");
+  if (lines) rows.push(makeEl("pre", "insp-card-text", lines));
+  if (payload.answer) rows.push(summaryRow("answer", String(payload.answer)));
+  if (!rows.length) rows.push(makeEl("p", "insp-none", "Nothing to preview."));
+  return inspectorBlock("Preview", rows);
+}
+
+function inspectorIdentity(row) {
+  return inspectorBlock("Item", facts([
+    ["id", fieldText(row.id)],
+    ["title", fieldText(row.title, "untitled")],
+    ["type", fieldText(row.type)],
+    ["kind", fieldText(row.kind)],
+    ["source", fieldText(row.source)],
+    ["duration", row.type === "stream" ? "LIVE" : formatDuration(row.duration)],
+    ["tags", fieldText(row.tags, "none")],
+  ]));
+}
+
+function inspectorStateBlock(row) {
+  const spec = STATE_BADGES[poolState(row)];
+  const head = makeEl("div", "summary-row");
+  head.append(makeEl("span", "lbl", "pool state"),
+    spec ? statusBadge(spec[0], spec[1]) : makeEl("span", "val", NOT_AVAILABLE));
+  return inspectorBlock("State", [head].concat(facts([
+    ["enabled", yesNo(row.enabled, "yes", "no — parked")],
+    ["health", fieldText(row.health)],
+    ["rendered", row.type === "card"
+      ? (hasMedia(row) ? "yes" : "no — there is no media file yet") : "not a card"],
+    ["base weight", num(row.weight)],
+    ["failures", num(row.fail_count)],
+  ])));
+}
+
+function inspectorCreative(row) {
+  const c = row.creative;
+  if (!c || typeof c !== "object") {
+    return inspectorBlock("Creative", [makeEl("p", "insp-none", NOT_AVAILABLE)]);
+  }
+  return inspectorBlock("Creative", facts([
+    ["family", fieldText(c.family)],
+    ["roles", Array.isArray(c.roles) && c.roles.length
+      ? c.roles.map(String).join(", ") : fieldText(c.roles, "none")],
+    ["energy", fieldText(c.energy)],
+    ["audio", fieldText(c.audio)],
+    ["text-heavy", yesNo(c.text_heavy)],
+    ["template", fieldText(c.template)],
+    ["brand mode", fieldText(c.brand_mode)],
+  ]));
+}
+
+function inspectorSelection(row) {
+  const sel = row.selection;
+  if (!sel || typeof sel !== "object") {
+    return inspectorBlock("Selection", [makeEl("p", "insp-none", NOT_AVAILABLE)]);
+  }
+  const rows = [];
+  rows.push(summaryRow("eligible now", sel.eligible_now === undefined
+    ? NOT_AVAILABLE : (sel.eligible_now ? "yes" : "no")));
+  const reasons = Array.isArray(sel.reasons) ? sel.reasons : [];
+  if (reasons.length) {
+    const list = makeEl("ul", "insp-reasons");
+    // Contract order, as the server returned it: the first is the first gate
+    // that applied, not an alphabetised set.
+    reasons.forEach((reason) => {
+      list.append(makeEl("li", "", REASON_TEXT[reason] || String(reason)));
+    });
+    rows.push(list);
+  } else {
+    rows.push(summaryRow("reasons", NOT_AVAILABLE));
+  }
+  const f = sel.factors;
+  if (f && typeof f === "object") {
+    ["base", "season", "daypart", "recency", "affinity", "fatigue", "score"]
+      .forEach((key) => {
+        if (f[key] !== undefined) rows.push(summaryRow(key, String(f[key])));
+      });
+  } else {
+    rows.push(summaryRow("factors", NOT_AVAILABLE));
+  }
+  return inspectorBlock("Selection", rows);
+}
+
+// Whatever the snapshot actually carries: a missing creator is not "unknown".
+const joined = (values) => values
+  .filter((v) => v !== undefined && v !== null && v !== "")
+  .map(String).join(" · ") || NOT_AVAILABLE;
+
+function inspectorProvenance(row) {
+  const payload = parsePayload(row.payload);
+  const credits = row.music_credits;
+  return inspectorBlock("Provenance", facts([
+    ["registered source", fieldText(row.source)],
+    ["payload source", fieldText(payload.source)],
+    ["background", joined([payload.bg_creator, payload.bg_title, payload.bg_license])],
+    ["music", credits && typeof credits === "object"
+      ? joined([credits.title, credits.creator, credits.license, credits.id])
+      : NOT_AVAILABLE],
+  ]));
+}
+
+function inspectorHistory(row) {
+  return inspectorBlock("History", facts([
+    ["created", formatStamp(row.created_at)],
+    ["last played", formatStamp(row.last_played, "never played")],
+    ["play count", num(row.play_count)],
+  ]));
+}
+
+// A read-only field rather than a link: following it would open the media, and
+// what is wanted here is the string itself.
+function inspectorMediaUrl(row) {
+  if (!hasMedia(row)) {
+    return inspectorBlock("Media URL", [
+      makeEl("p", "insp-none", row.type === "card"
+        ? "No media file yet — render the card to give it one." : NOT_AVAILABLE)]);
+  }
+  const input = document.createElement("input");
+  input.type = "text";
+  input.readOnly = true;
+  input.className = "url";
+  input.value = String(row.media_url);
+  input.addEventListener("focus", () => input.select && input.select());
+  const copy = makeButton("Copy", "mini", () => {
+    if (input.select) input.select();
+    const clip = typeof navigator !== "undefined" && navigator && navigator.clipboard;
+    if (clip && clip.writeText) {
+      clip.writeText(input.value).then(() => announce("media URL copied"),
+        () => announce("could not copy — the URL is selected, copy it yourself"));
+    } else announce("the URL is selected, copy it with your keyboard");
+  }, "Copy the media URL");
+  return inspectorBlock("Media URL",
+    [labelledControl("inspector-media-url", "Media URL", input), copy]);
+}
+
+// The one reversible action this state deserves, plus any second control that
+// still makes sense. Disable is the primary rejection wherever it applies: it
+// is undoable, it touches nothing but `enabled`, and it is never delete.
+function inspectorActions(row) {
+  const state = poolState(row);
+  const rows = [];
+  const buttons = makeEl("div", "insp-actions");
+  const primary = (label, onClick) =>
+    buttons.append(makeButton(label, "insp-primary", onClick));
+  const secondary = (label, onClick) =>
+    buttons.append(makeButton(label, "insp-secondary mini", onClick));
+
+  if (state === "dead") {
+    // There is no per-item recheck endpoint, and a button that quietly ran a
+    // pool-wide sweep under a per-item name would be lying about what it does.
+    rows.push(makeEl("p", "insp-note",
+      "There is no per-item recheck. Revive re-examines every retired item in " +
+      "the pool and un-parks only the ones ffprobe can still read; " +
+      "on_this_day cards and live streams are left alone."));
+    primary("Run revive (all retired)", () => {
+      inspectorJob({ url: MAINT.revive.url, label: "recheck retired",
+                     kind: "enable", id: row.id, say: MAINT.revive.say });
+    });
+  } else if (state === "parked") {
+    rows.push(makeEl("p", "insp-note",
+      "Enabling is operator intent. A cam no longer in live_cams.yaml is " +
+      "parked again on the next restart, and the rotation can take back a " +
+      "dated card — the server says so in its answer when it applies."));
+    primary("Enable", () => { enableBumper(row); });
+  } else if (state === "unrendered") {
+    rows.push(makeEl("p", "insp-note",
+      "No media file, so only a browser can play it. Rendering runs offline."));
+    primary("Render card", () => {
+      inspectorJob({
+        url: "/api/render/cards?bumper_id=" + encodeURIComponent(row.id),
+        label: "render card " + rowLabel(row), kind: "render", id: row.id });
+    });
+    secondary("Disable from rotation", () => { disableBumper(row); });
+  } else if (state === "playable") {
+    rows.push(makeEl("p", "insp-note",
+      "Takes this out of rotation and nothing else: not its health, not its " +
+      "file, not its history. Enable brings it straight back."));
+    primary("Disable from rotation", () => { disableBumper(row); });
+  } else {
+    rows.push(makeEl("p", "insp-none",
+      "This response does not say whether the row is enabled, so no action is offered."));
+  }
+  rows.push(buttons);
+  return inspectorBlock("Action", rows);
+}
+
+// Apart, last, never the default: deletion is not how you reject an item.
+function inspectorDanger(row) {
+  const block = inspectorBlock("Danger zone", [
+    makeEl("p", "insp-note", DELETE_FILE_NOTE),
+  ]);
+  block.classList.add("danger-zone");
+  block.append(makeButton("Delete permanently", "danger-btn",
+    () => { deleteBumper(row); }, "Delete " + rowLabel(row) + " permanently"));
+  return block;
+}
+
+// Replacing or disabling the focused control drops focus to <body>, outside
+// the modal. Everything that does either hands it back.
+function heldFocus() {
+  const body = $("#inspector-body");
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  return Boolean(body && active && body.contains && body.contains(active));
+}
+
+function giveBackFocus(held) {
+  const title = held && $("#inspector-title");
+  if (title && title.focus) title.focus();
+}
+
+function renderInspector() {
+  const title = $("#inspector-title");
+  const body = $("#inspector-body");
+  const row = STATE.inspector.value;
+  const held = heldFocus();
+  if (title) title.textContent = row ? rowLabel(row) : "Item";
+  if (!body) return null;
+  if (!row) { body.replaceChildren(); giveBackFocus(held); return body; }
+  releaseMedia(body);
+  body.replaceChildren(
+    inspectorPreview(row), inspectorIdentity(row), inspectorStateBlock(row),
+    inspectorCreative(row), inspectorSelection(row), inspectorProvenance(row),
+    inspectorHistory(row), inspectorMediaUrl(row), inspectorActions(row),
+    inspectorDanger(row));
+  giveBackFocus(held);
+  return body;
+}
+
+function renderInspectorState() {
+  const el = $("#inspector-state");
+  const insp = STATE.inspector;
+  // A running job owns the region while it runs; otherwise the read decides.
+  if (insp.busy) return renderJobState(el, "working", insp.busy, []);
+  return renderPanelState(el, readState(insp, () => { loadInspector(insp.id); }));
+}
+
+function setInspectorBusy(message) {
+  STATE.inspector.busy = message || "";
+  const body = $("#inspector-body");
+  const held = heldFocus();
+  if (body) focusables(body).forEach((el) => { el.disabled = Boolean(message); });
+  if (message) giveBackFocus(held);
+  renderInspectorState();
+}
+
+// One read per open. `explain=true` turns the row into an answer to "why is
+// this airing, or not", and is asked for exactly here: a listing of 24 rows
+// must never carry 24 explanations.
+async function loadInspector(id) {
+  const insp = STATE.inspector;
+  const generation = ++inspectorGeneration;
+  if (inspectorAbort) inspectorAbort.abort();
+  inspectorAbort = new AbortController();
+  insp.id = id;
+  insp.loading = true;
+  renderInspectorState();
+  let d;
+  try {
+    d = await api("/api/bumpers/" + encodeURIComponent(id) + "?explain=true",
+                  { signal: inspectorAbort.signal });
+  } catch (err) {
+    if (generation !== inspectorGeneration) return null;
+    insp.loading = false;
+    if (isApiAbort(err)) return null;
+    insp.error = err.message;
+    renderInspectorState();
+    return null;
+  }
+  if (generation !== inspectorGeneration) return null;
+  insp.loading = false;
+  insp.error = null;
+  insp.value = d && typeof d === "object" ? d : null;
+  insp.updatedAt = now();
+  renderInspector();
+  renderInspectorState();
+  return d;
+}
+
+/**
+ * openInspector(id, opts) -> Promise
+ *
+ *   opts.invoker   element focus returns to on close; defaults to the active one.
+ *   opts.onMutate  (kind, id) => void after every mutation the inspector
+ *                  completes; kind is "disable" | "enable" | "render" |
+ *                  "delete". A surface with its own idea of staleness (the
+ *                  composer's pack) marks itself from this rather than polling.
+ *
+ * The dialog opens before the read lands, with its own loading state: a click
+ * has to produce something at once on a slow link.
+ */
+function openInspector(id, opts) {
+  const options = opts && typeof opts === "object" ? opts : {};
+  const dialog = $("#inspector");
+  if (id === undefined || id === null || String(id) === "") return null;
+  inspectorOnMutate = typeof options.onMutate === "function" ? options.onMutate : null;
+  const insp = STATE.inspector;
+  insp.id = String(id);
+  insp.value = null;
+  insp.error = null;
+  insp.busy = "";
+  insp.loading = true;
+  renderInspector();
+  renderInspectorState();
+  if (dialog && !insp.open) {
+    insp.open = true;
+    openDialog(dialog, {
+      invoker: options.invoker,
+      focus: $("#inspector-title"),
+      onClose: () => {
+        insp.open = false;
+        insp.id = null;
+        insp.value = null;
+        insp.busy = "";
+        inspectorOnMutate = null;
+        if (inspectorAbort) { inspectorAbort.abort(); inspectorAbort = null; }
+        inspectorGeneration++;
+        releaseMedia($("#inspector-body"));
+        const body = $("#inspector-body");
+        if (body) body.replaceChildren();
+      },
+    });
+  }
+  return loadInspector(String(id));
+}
+
+function closeInspector() {
+  const dialog = $("#inspector");
+  if (dialog) closeDialog(dialog);
+  return null;
+}
+
+// A job started from the inspector: through the page's own registry so it shows
+// up in Recent jobs, and through the shared poller so a silent server can always
+// be escaped. `say` turns the endpoint's result object into a sentence; without
+// one the raw body is reported, which is honest but not readable.
+async function inspectorJob(options) {
+  const { url, label, kind, id, say } = options;
+  const record = recordJob(label);
+  // The inspector's own counter: inspecting a second row supersedes this wait,
+  // and a render here must not abandon an Operations action's poll.
+  const mine = ++inspectorGeneration;
+  const current = () => mine === inspectorGeneration;
+  setInspectorBusy(label + "…");
+  let r;
+  try {
+    r = await api(url, { method: "POST", timeout: 0 });
+  } catch (err) {
+    finishJob(record, "error", err.message);
+    announce("✗ " + label + " failed: " + err.message);
+    setInspectorBusy("");
+    return null;
+  }
+  if (r && r.job_id) {
+    record.id = String(r.job_id);
+    r = await watchJob(r, {
+      superseded: () => !current(),
+      release: () => setInspectorBusy(""),
+      working: (seconds) => {
+        if (current()) setInspectorBusy(label + "… (" + seconds + "s)");
+      },
+      unknown: (message, actions) => {
+        if (current()) renderJobState($("#inspector-state"), "attention", message, actions);
+      },
+    });
+  }
+  const payload = r && r.result !== undefined ? r.result : r;
+  let message;
+  try {
+    message = say ? String(say(payload))
+      : (typeof payload === "string" ? payload : JSON.stringify(payload));
+  } catch (e) {
+    // A build that answers a shape the formatter did not expect still gets a
+    // truthful line rather than a thrown click.
+    message = typeof payload === "string" ? payload : JSON.stringify(payload);
+  }
+  finishJob(record, r && r.status ? jobOutcome(r.status) : "done", message);
+  announce(label + ": " + humanMessage(message, "done"));
+  setInspectorBusy("");
+  if (inspectorOnMutate) inspectorOnMutate(kind, id);
+  loadStatus();
+  // The row's columns may have moved (a rendered card gains a uri, a revived
+  // one loses its park), so it is read again rather than guessed at — and the
+  // listing is left exactly where it was.
+  if (STATE.inspector.id === id) await loadInspector(id);
+  return r;
 }
 
 // ---------------------------------------------------------------------------
@@ -1386,26 +2454,21 @@ function renderPackPreview(d) {
   const grid = $("#preview-grid");
   if (summary) summary.replaceChildren(packSummaryEl(d));
   if (!grid) return;
-  grid.replaceChildren(...((d && d.bumpers) || []).map(cardEl));
+  grid.replaceChildren(...((d && d.bumpers) || []).map((row) => cardEl(row)));
 }
 
 function renderComposerState() {
   const el = $("#preview-state");
   const c = STATE.composer;
+  // Every composer read is one the operator asked for, so "loading" cannot
+  // flicker on a background refresh; and never previewed is empty, not loading.
   if (c.loading) return renderPanelState(el, { state: "loading", message: c.loadingLabel });
-  if (c.error && c.result) {
-    return renderPanelState(el, {
-      state: "stale", message: c.error, updatedAt: c.updatedAt,
-      onAction: c.retry || undefined,
-    });
+  if (!c.error && !c.result) {
+    return renderPanelState(el, { state: "empty", message: "Nothing previewed yet." });
   }
-  if (c.error) {
-    return renderPanelState(el, {
-      state: "error", message: c.error, onAction: c.retry || undefined,
-    });
-  }
-  if (!c.result) return renderPanelState(el, { state: "empty", message: "Nothing previewed yet." });
-  return renderPanelState(el, { state: "populated" });
+  return renderPanelState(el, readState(
+    { value: c.result, error: c.error, updatedAt: c.updatedAt },
+    c.retry || undefined));
 }
 
 // The preview is GET-only. It never calls station advance(), writes play
@@ -1454,7 +2517,7 @@ function previewOne() {
           d && d.count ? "one item" : "nothing to preview"));
       }
       if (grid) {
-        grid.replaceChildren(...((d && d.bumpers) || []).map(cardEl));
+        grid.replaceChildren(...((d && d.bumpers) || []).map((row) => cardEl(row)));
         if (!(d && d.count)) grid.appendChild(makeEl("div", "empty", "nothing here yet"));
       }
     });
@@ -1544,15 +2607,8 @@ const STATION_STATE_REGIONS = ["#station-state", "#ov-station-state"];
 
 function renderStationState() {
   const st = STATE.station;
-  let opts;
-  if (st.loading && !st.value) opts = { state: "loading" };
-  else if (st.error && st.value) {
-    opts = { state: "stale", message: st.error, updatedAt: st.updatedAt,
-             onAction: () => { loadStation(); } };
-  } else if (st.error) {
-    opts = { state: "error", message: st.error, onAction: () => { loadStation(); } };
-  } else if (!st.value) opts = { state: "loading" };
-  else opts = { state: "populated" };
+  const opts = st.loading && !st.value
+    ? { state: "loading" } : readState(st, () => { loadStation(); });
   let rendered = null;
   STATION_STATE_REGIONS.forEach((sel) => {
     rendered = renderPanelState($(sel), opts) || rendered;
@@ -1894,6 +2950,16 @@ function boot() {
   $("#shuffle").addEventListener("click", shufflePreview);
   $("#more").addEventListener("click", () => loadGrid(false));
   $("#search").addEventListener("input", (e) => scheduleSearch(e.target.value));
+  // Every filter is a labelled control that owns one filter and nothing else.
+  const on = (sel, type, fn) => { const el = $(sel); if (el) el.addEventListener(type, fn); };
+  on("#filter-type", "change", (e) => { setFilter("type", e.target.value); });
+  on("#filter-kind", "change", (e) => { setFilter("kind", e.target.value); });
+  on("#filter-state", "change", (e) => { setFilter("state", e.target.value); });
+  on("#page-size", "change", (e) => { setPageSize(e.target.value); });
+  on("#density", "change", (e) => { setDensity(e.target.value); });
+  on("#clear-filters", "click", () => { clearFilters(); });
+  on("#drop-kind", "click", () => { dropKind(); });
+  on("#inspector-close", "click", () => { closeInspector(); });
   const previewOneBtn = $("#preview-one");
   if (previewOneBtn) previewOneBtn.addEventListener("click", previewOne);
   $$("[data-pack]").forEach((b) =>
@@ -1918,35 +2984,48 @@ if (typeof document !== "undefined" && !COMMONJS) boot();
 if (COMMONJS) {
   module.exports = {
     // constants
-    PAGE, API_TIMEOUT_MS, SEARCH_DEBOUNCE_MS, REFRESH_MS, JOB_POLL_MS, STATE,
-    ROUTES, DEFAULT_ROUTE, LIBRARY_STATES, LIBRARY_TYPES, NOT_AVAILABLE,
+    PAGE, PAGE_SIZES, API_TIMEOUT_MS, SEARCH_DEBOUNCE_MS, REFRESH_MS,
+    JOB_POLL_MS, STATE, ROUTES, DEFAULT_ROUTE, LIBRARY_STATES, LIBRARY_TYPES,
+    LIBRARY_DENSITIES, NOT_AVAILABLE,
     // helpers
     makeEl, makeLink, api, isApiAbort, humanMessage, formatAge, formatDuration,
     // routing and shell
     parseHash, applyHash, enterRoute, exitRoute, VIEWS, renderChrome, renderNav,
     // components
     statusBadge, renderPanelState, cardEl, packSummaryEl, renderPackPreview,
-    freshnessLine, stationEl, stationState, stationNow, summaryRow,
+    freshnessLine, stationEl, stationState, stationNow, summaryRow, poolState,
+    confirmDialog, closeAllDialogs,
     // overview
     overviewWarnings, poolCounts, configLines, renderOverview,
     // jobs started from this page
     recordJob, finishJob, recentJobs, renderJobs,
+    // library
+    loadGrid, scheduleSearch, shufflePreview, clearFilters, renderFilters,
+    renderLibrary, applyLibraryQuery, libraryCounts, libraryHash, setFilter,
+    setPageSize, setDensity, dropKind,
+    // inspector and reversible curation
+    openInspector, closeInspector, enableBumper, disableBumper, deleteBumper,
     // behaviour
-    loadStatus, loadGrid, loadStation, scheduleSearch, shufflePreview,
-    clearFilters, renderFilters, applyLibraryQuery, previewPack, previewOne,
-    pollJob, doAction, enableBumper, deleteBumper, announce, refreshTick,
+    loadStatus, loadStation, previewPack, previewOne,
+    pollJob, doAction, announce, refreshTick,
     handleVisibilityChange, submitAsk,
     resetStateForTests() {
       if (searchTimer !== null) { clearTimeout(searchTimer); searchTimer = null; }
       stopRefresh();
+      closeAllDialogs();
       libraryAbort = null;
       statusAbort = null;
       stationAbort = null;
+      inspectorAbort = null;
+      inspectorOnMutate = null;
+      activeMedia = null;
       activeRoute = null;
       activeQuery = "";
       jobSeq = 0;
+      dialogSeq = 0;
       askGeneration = 0;
       actionGeneration = 0;
+      inspectorGeneration = 0;
       Object.assign(STATE, initialState());
     },
   };

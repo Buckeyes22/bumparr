@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+**Operator dashboard: a library inspector and reversible curation**
+- The Library toolbar is now labelled controls instead of chips: search, type,
+  kind (from `status.by_kind`, with counts), state, page size (24/48/100 — the
+  UI never asks for more than the documented maximum), a grid/list layout
+  switch and **Clear filters**. Every filter change is written back to the hash
+  query with `location.replace`, so the address bar is always a deep link to
+  what is on screen and filtering costs no history entries. Results say
+  **Showing N of TOTAL** using the `total` the API now reports (a build that
+  does not report one says so rather than letting the loaded count stand in for
+  the matched count), and **Load more** appends the next page.
+- Cards no longer hide a delete behind a hover icon, and no longer grow a
+  second enable button on some rows. Each card states its pool state in words —
+  playable, parked, dead, unrendered — and carries one always-visible
+  **Inspect** button. Video previews are muted, `preload="metadata"` and
+  controlled; only one preview plays at a time; a live stream is a badge and a
+  **Play live stream** button that builds the player only when pressed, under a
+  note saying that doing so makes the page a real client of the station.
+  Leaving the view pauses and detaches every media element it was showing.
+- **Inspect** opens an item inspector — a native `<dialog>` with a fallback
+  panel where the browser has no `HTMLDialogElement` — which reads
+  `GET /api/bumpers/{id}?explain=true` once on open (a listing of 24 rows never
+  carries 24 explanations). It shows the preview and card answer, identity,
+  state, creative, the eligibility verdict with its ordered reasons and every
+  selection factor, provenance and music credits, creation/play history, and a
+  copyable media URL. Anything this build of the server does not send reads
+  "Not available in this version." rather than as a blank or a zero.
+- The inspector's primary action is the reversible one for the row's state:
+  **Disable from rotation**, **Enable** for a parked row (relaying the server's
+  `warning`), **Render card** for an unrendered card (a background job that
+  appears in Recent jobs), and **Run revive (all retired)** for a dead one —
+  named for the pool-wide sweep it actually is, because there is no per-item
+  recheck endpoint. A mutation updates only the row it changed and refreshes
+  the counts; it never resets the filters, the page offset or the scroll
+  position.
+- Permanent deletion now exists only in the inspector's danger zone and the
+  Library's own **Danger zone**. Both confirmations name the item, state the
+  file consequence in the endpoint's own terms, offer the `keep_file` /
+  `keep_files` the API documents, put **Cancel** first and focus it, and do not
+  treat Escape as an answer. Deleting a whole kind additionally requires typing
+  the kind name exactly before the confirm button will work.
+- Dialogs focus their heading on open, trap Tab only while modal, return focus
+  to whatever opened them, and are closed by a route change. Grid/list layout
+  is the one thing the page keeps in `localStorage`, and a browser that refuses
+  storage still works.
+
 **API: status counts, library state filter, reversible disable, single-card render**
 - `GET /api/status` adds `parked`, `dead`, and `unrendered` counts, computed
   with the exact same SQL definitions `GET /api/bumpers?state=` uses, so the

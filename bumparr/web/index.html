@@ -86,22 +86,77 @@
         </div>
       </section>
 
-      <!-- Curate: filter the pool, act on single rows. -->
+      <!-- Curate: filter the pool, inspect a row, act on it reversibly. Every
+           filter is a labelled control and every action has a name; permanent
+           deletion lives only in the inspector or the danger zone below. -->
       <section class="view" id="view-library" aria-labelledby="h-library" hidden>
         <div class="viewhead">
           <h2 id="h-library">Library</h2>
           <div class="viewtools">
-            <label class="search-label" for="search">Filter by title</label>
-            <input id="search" class="search" placeholder="e.g. harbour" />
             <button id="shuffle" class="mini">⟳ shuffle preview</button>
           </div>
         </div>
         <div class="panel wide">
-          <div id="filters" class="filters"></div>
+          <div class="libbar" role="group" aria-label="Filter the pool">
+            <p class="field">
+              <label for="search">Search titles and kinds</label>
+              <input id="search" class="search" placeholder="e.g. harbour" autocomplete="off" />
+            </p>
+            <p class="field">
+              <label for="filter-type">Type</label>
+              <select id="filter-type">
+                <option value="">All types</option>
+                <option value="video">Video</option>
+                <option value="card">Card</option>
+                <option value="image">Image</option>
+                <option value="stream">Stream</option>
+              </select>
+            </p>
+            <p class="field">
+              <label for="filter-kind">Kind</label>
+              <select id="filter-kind"><option value="">All kinds</option></select>
+            </p>
+            <p class="field">
+              <label for="filter-state">State</label>
+              <select id="filter-state">
+                <option value="all">All states</option>
+                <option value="playable">Playable</option>
+                <option value="parked">Parked</option>
+                <option value="dead">Dead</option>
+                <option value="unrendered">Unrendered</option>
+              </select>
+            </p>
+            <p class="field">
+              <label for="page-size">Per page</label>
+              <select id="page-size">
+                <option value="24">24</option>
+                <option value="48">48</option>
+                <option value="100">100</option>
+              </select>
+            </p>
+            <p class="field">
+              <label for="density">Layout</label>
+              <select id="density">
+                <option value="grid">Grid</option>
+                <option value="list">List</option>
+              </select>
+            </p>
+            <button id="clear-filters" class="mini">Clear filters</button>
+          </div>
+          <p id="library-counts" class="libcounts"></p>
           <div id="browse-state" class="panel-state"></div>
           <div id="grid" class="grid"></div>
-          <div id="more-row"><button id="more" class="mini" hidden>load more</button></div>
+          <div id="more-row"><button id="more" class="mini" hidden>Load more</button></div>
         </div>
+
+        <!-- Bulk deletion takes the files with it, so it sits apart from the
+             browsing controls and asks for the kind by name first. -->
+        <section class="panel wide danger-zone" id="library-danger"
+                 aria-labelledby="h-lib-danger">
+          <h3 id="h-lib-danger">Danger zone</h3>
+          <p id="danger-note" class="note"></p>
+          <button id="drop-kind" class="danger-btn" disabled>Delete every item in this kind</button>
+        </section>
       </section>
 
       <!-- Review sequences: read-only preview of one item or a duration pack. -->
@@ -204,6 +259,18 @@
       <a href="https://github.com/mikemcg94/bumparr" target="_blank" rel="noopener">github.com/mikemcg94/bumparr</a>
       · <a href="/docs">API documentation</a></p>
   </footer>
+
+  <!-- One inspector for the whole page, empty until something is inspected.
+       Native <dialog> where the browser has one; app.js falls back to a fixed
+       panel with role/aria-modal when HTMLDialogElement is undefined. -->
+  <dialog id="inspector" class="dlg dlg-inspector" aria-labelledby="inspector-title">
+    <div class="dlg-head">
+      <h2 id="inspector-title" tabindex="-1">Item</h2>
+      <button id="inspector-close" class="mini">Close</button>
+    </div>
+    <div id="inspector-state" class="panel-state"></div>
+    <div id="inspector-body" class="dlg-body"></div>
+  </dialog>
 
   <script src="/web/app.js"></script>
 </body>

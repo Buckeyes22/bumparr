@@ -72,25 +72,25 @@ class Timeline(Base):
 
     def test_zero_score_candidates_never_air(self):
         ch = self.channel()
-        with mock.patch.object(playout.seasons, "factors_now", return_value={
+        with mock.patch("bumparr.seasons.factors_now", return_value={
                 "ambient": 0.0, "station_id": 1.0, "trivia": 0.0}), \
-                mock.patch.object(playout.dayparts, "factors_now", return_value={}):
+                mock.patch("bumparr.dayparts.factors_now", return_value={}):
             self.assertEqual(ch._pick(1000.0, None)["id"], "b")
 
     def test_positive_previous_item_repeats_when_alternatives_are_gated(self):
         ch = self.channel()
-        with mock.patch.object(playout.seasons, "factors_now", return_value={
+        with mock.patch("bumparr.seasons.factors_now", return_value={
                 "ambient": 1.0, "station_id": 0.0, "trivia": 0.0}), \
-                mock.patch.object(playout.dayparts, "factors_now", return_value={}):
+                mock.patch("bumparr.dayparts.factors_now", return_value={}):
             self.assertEqual(ch._pick(1000.0, "a")["id"], "a")
 
     def test_slate_airs_when_every_candidate_is_gated(self):
         index = {**INDEX, "slate": idx("slate", "slate", [4.0])}
         ch = self.channel()
         with mock.patch.object(conform, "load_index", return_value=index), \
-                mock.patch.object(playout.seasons, "factors_now", return_value={
+                mock.patch("bumparr.seasons.factors_now", return_value={
                     "ambient": 0.0, "station_id": 0.0, "trivia": 0.0}), \
-                mock.patch.object(playout.dayparts, "factors_now", return_value={}):
+                mock.patch("bumparr.dayparts.factors_now", return_value={}):
             self.assertEqual(ch._pick(1000.0, None)["id"], "slate")
 
 

@@ -102,8 +102,8 @@ conformed.
 Playout is a virtual clock, not a continuously running encoder. A channel's
 timeline is extended when a playlist is requested, using a lookahead of
 `STATION_WINDOW_SEGMENTS × STATION_SEGMENT_SECONDS` (6 × 4 = 24 seconds by
-default). It chooses from conformed eligible items using seasons, dayparts,
-and the normal rotation weights. A zero or negative score is a hard exclusion,
+default). It chooses from conformed eligible items using `selection.scored_candidates`
+(the same helper as `/random` and `/fill`). A zero or negative score is a hard exclusion,
 including a seasonal `off_weight: 0`. The same item is not selected twice in a
 row when another positive-score item exists; if it is the only eligible item,
 repeating it is preferable to airing gated content. The slate is used when no

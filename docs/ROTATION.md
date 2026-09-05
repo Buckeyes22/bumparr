@@ -7,13 +7,15 @@ score = base × season × daypart × recency × affinity × fatigue
 ```
 
 Every Bumparr path that probabilistically ranks candidates —
-`/api/bumpers/random` and a co-deployed player — uses
-`rotation.weights_for`. `/api/bumpers/fill` currently sequences by duration
-only (an ordered bumper set, not a programme schedule). `/playlist.m3u` lists
-the unsequenced playable set for a downstream scheduler. The live station
-sequences its own bumper-only timeline using these scores. This page is the
-user-facing version of the module docstring; the code is the authority and
-the two should be read together.
+`/api/bumpers/random`, `/api/bumpers/fill`, and station playout — calls
+`rotation.weights_for` once through `selection.scored_candidates`, which
+keeps only finite scores strictly greater than zero. `/api/bumpers/fill`
+then sequences a duration-bounded bumper set (not a programme schedule).
+`/playlist.m3u` lists the unsequenced playable set for a downstream
+scheduler. The live station sequences its own bumper-only timeline using
+these scores. `python -m bumparr.simulate` reports a seeded, read-only run
+of the same helper. This page is the user-facing version of the module
+docstring; the code is the authority and the two should be read together.
 
 ## Declared vs computed
 
@@ -37,7 +39,9 @@ in-place version — see the module docstring.)
 
 `base <= 0` means *deliberately off air*. A season factor can independently
 gate a category off for the current date, which is different from merely
-unlikely.
+unlikely. `weight <= 0` or any computed `score <= 0` is a hard gate on every
+selection path. No epsilon or floor may revive it. `rotation.explain()`
+reports the same score semantics, including zero when base is `<= 0`.
 
 ## The curves
 
@@ -101,11 +105,13 @@ specific score — the tool for "why did that play?".
 
 ## What this model does not do
 
-- It does not schedule a programme. It returns a ranking. `/api/bumpers/fill`
-  then sequences a duration-bounded bumper set; the live station sequences a
+- It does not schedule a programme. It returns a ranking. `selection.py` is
+  the shared eligibility filter on that ranking. `/api/bumpers/fill` then
+  sequences a duration-bounded bumper set; the live station sequences a
   bumper-only showcase/failover timeline; `/playlist.m3u` leaves order to a
   downstream scheduler. This scoring model does not choose that sequence, and
-  Bumparr does not schedule episodes or films.
+  Bumparr does not schedule episodes or films. Simulation inspects mix
+  without writing history.
 - It does not enforce type quotas. There are no per-type shares; the mix comes
   from each type's own weights and availability. (Type composition is an
   editorial decision made at the weight column, not by the model.)

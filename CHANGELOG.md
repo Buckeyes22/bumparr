@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+**Runtime selection truth + read-only simulation**
+- `/api/bumpers/random`, `/api/bumpers/fill`, and station playout share
+  `selection.scored_candidates`: only finite computed scores strictly greater
+  than zero are eligible. The previous `/random` epsilon floor that revived
+  gated rows is gone; `/fill` applies the same season/daypart/recency/
+  affinity/fatigue scoring before its duration search.
+- `GET /api/bumpers/random?explain=true` and `GET /api/bumpers/{id}?explain=true`
+  add factor data. Inspected rows use the statically eligible pool for
+  median/affinity. Preview/explain never writes history.
+- `python -m bumparr.simulate` reports a seeded mix (item/kind shares,
+  repeats, zero-score picks, seasonal/daypart distribution, inferred audio)
+  against in-memory copies only. It does not write the database.
+- This is not sequence grammar or creative metadata (those remain later
+  phases).
+
 **Design contract** (not completed runtime alignment).
 - Lands the product/creative contract: [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md),
   [docs/CREATIVE_REFERENCE.md](docs/CREATIVE_REFERENCE.md),

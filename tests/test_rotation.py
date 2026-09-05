@@ -62,6 +62,19 @@ class ExplainConsistency(unittest.TestCase):
                                   "affinity", "fatigue", "score"})
         self.assertAlmostEqual(ex["score"], round(rotation.score(item, ctx, now), 4))
 
+    def test_explain_score_is_zero_when_base_is_zero(self):
+        item = {"base": 0.0, "kind": "ambient", "last_played": 0, "play_count": 0}
+        ctx = {"kind_last": {}, "median_plays": 1, "season": {"ambient": 2.0},
+               "daypart": {"ambient": 2.0}}
+        self.assertEqual(rotation.score(item, ctx, 1000.0), 0.0)
+        self.assertEqual(rotation.explain(item, ctx, 1000.0)["score"], 0.0)
+
+    def test_explain_score_is_zero_when_base_is_negative(self):
+        item = {"weight": -2.0, "kind": "ambient", "last_played": 0, "play_count": 0}
+        ctx = {"kind_last": {}, "median_plays": 1, "season": {}, "daypart": {}}
+        self.assertEqual(rotation.score(item, ctx, 1000.0), 0.0)
+        self.assertEqual(rotation.explain(item, ctx, 1000.0)["score"], 0.0)
+
 
 class DaypartFactor(unittest.TestCase):
     def test_daypart_multiplies_and_defaults_to_one(self):

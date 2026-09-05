@@ -28,7 +28,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from bumparr import config, db, seed, live_cams, stream_proxy, ingest, paths
+from bumparr import config, db, seed, live_cams, stream_proxy, ingest, paths, rotation, selection
 from bumparr.urls import absolutize as _absolutize
 from bumparr.station import routes as station_routes
 
@@ -210,7 +210,8 @@ def _media_url(row, request=None):
 def random_bumpers(request: Request,
                    count: int = Query(5, ge=1, le=100),
                    max_duration: float = Query(None, gt=0, le=86400),
-                   types: str = Query(None, description="comma list, e.g. video,card")):
+                   types: str = Query(None, description="comma list, e.g. video,card"),
+                   explain: bool = False):
     """The output contract for channel generators: hand me N bumpers (optionally
     capped by duration / restricted to types) and I return playable items."""
     type_filter = {t.strip() for t in types.split(",")} if types else None
@@ -225,28 +226,20 @@ def random_bumpers(request: Request,
             continue
         if not _media_url(r, request):
             continue
-        # Zero weight means seasonally gated off the air, not merely unlikely.
-        if (r["weight"] or 0) <= 0:
-            continue
         if max_duration and (r["duration"] or 0) > max_duration:
             continue
         pool.append(r)
     if not pool:
         return {"count": 0, "bumpers": []}
-    # Same rotation model the player uses, so a channel generator pulling from
-    # here gets the same variety rather than a naive weighted shuffle.
-    from bumparr import dayparts, rotation, seasons
-    try:
-        season = seasons.factors_now()
-    except Exception:
-        season = {}
-    try:
-        daypart = dayparts.factors_now()
-    except Exception:
-        daypart = {}
-    weights, _ = rotation.weights_for(pool, season, None, daypart)
-    weights = [max(0.0001, w) for w in weights]
-    picks = random.choices(pool, weights=weights, k=min(count, len(pool) * 3))
+    # Same computed-eligibility helper the station and /fill use, so a gated
+    # row cannot come back through an epsilon floor on one path only.
+    season, daypart = selection.live_factors()
+    scored, ctx = selection.scored_candidates(
+        pool, season_factors=season, daypart_factors=daypart)
+    if not scored:
+        return {"count": 0, "bumpers": []}
+    rows, weights = zip(*scored)
+    picks = random.choices(rows, weights=weights, k=min(count, len(rows) * 3))
     seen, out = set(), []
     for r in picks:
         if r["id"] in seen:
@@ -256,9 +249,12 @@ def random_bumpers(request: Request,
             payload = json.loads(r["payload"] or "{}")
         except Exception:
             payload = {}
-        out.append({"id": r["id"], "type": r["type"], "kind": r["kind"],
-                    "title": r["title"], "duration": r["duration"],
-                    "media_url": _media_url(r, request), "payload": payload})
+        item = {"id": r["id"], "type": r["type"], "kind": r["kind"],
+                "title": r["title"], "duration": r["duration"],
+                "media_url": _media_url(r, request), "payload": payload}
+        if explain:
+            item["selection"] = {"factors": selection.factor_view(r, ctx)}
+        out.append(item)
         if len(out) >= count:
             break
     return {"count": len(out), "bumpers": out}
@@ -293,12 +289,16 @@ def fill(request: Request,
             "SELECT * FROM playables WHERE enabled=1 AND health='ok' "
             "AND uri IS NOT NULL AND uri!=''").fetchall()]
 
-    pool = []
+    pool_rows = []
     for r in rows:
         if type_filter and r["type"] not in type_filter:
             continue
-        if (r["weight"] or 0) <= 0:
-            continue          # seasonally gated off the air
+        pool_rows.append(r)
+    season, daypart = selection.live_factors()
+    scored, _ = selection.scored_candidates(
+        pool_rows, season_factors=season, daypart_factors=daypart)
+    pool = []
+    for r, _score in scored:
         d = float(r["duration"] or 0)
         if 0 < d <= seconds + tolerance:
             pool.append((d, r))
@@ -351,14 +351,25 @@ def fill(request: Request,
 
 
 @app.get("/api/bumpers/{bumper_id:path}")
-def get_bumper(bumper_id: str, request: Request = None):
+def get_bumper(bumper_id: str, request: Request = None, explain: bool = False):
     """One bumper as JSON: every registry column plus a resolved media_url."""
     with db.conn() as c:
         r = c.execute("SELECT * FROM playables WHERE id=?", (bumper_id,)).fetchone()
-    if not r:
-        return JSONResponse({"error": "not found"}, status_code=404)
+        if not r:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        pool = []
+        if explain:
+            pool = [dict(x) for x in c.execute(
+                "SELECT * FROM playables WHERE enabled=1 AND health='ok'").fetchall()]
     d = dict(r)
     d["media_url"] = _media_url(r, request)
+    if explain:
+        # Context comes from the statically eligible pool so median and
+        # affinity match what /random and the station would have used.
+        season, daypart = selection.live_factors()
+        ctx = rotation.build_context(pool, season, None, daypart)
+        d["selection"] = selection.explain_row(
+            d, ctx, has_media=d["media_url"] is not None)
     return d
 
 

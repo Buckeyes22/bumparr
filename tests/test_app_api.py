@@ -27,8 +27,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _CHILD = r"""
 import json, sys
+from unittest import mock
 from bumparr import db
-from bumparr.app import fill, random_bumpers, delete_bumper, list_bumpers, status
+from bumparr.app import fill, random_bumpers, delete_bumper, list_bumpers, status, get_bumper
 from fastapi.responses import JSONResponse
 
 db.init_db()
@@ -36,12 +37,26 @@ spec = json.loads(sys.argv[1])
 with db.conn() as c:
     for row in spec.get("seed", []):
         db.upsert_playable(c, row)
+        fields, vals = [], []
+        for col in ("enabled", "health", "weight", "uri", "payload"):
+            if col in row:
+                fields.append("%s=?" % col)
+                vals.append(row[col])
+        if fields:
+            vals.append(row["id"])
+            c.execute("UPDATE playables SET %s WHERE id=?" % ", ".join(fields), vals)
     c.commit()
+if spec.get("season") is not None:
+    mock.patch("bumparr.seasons.factors_now", return_value=spec["season"]).start()
+if spec.get("daypart") is not None:
+    mock.patch("bumparr.dayparts.factors_now", return_value=spec["daypart"]).start()
 action, kw = spec["action"], spec.get("kwargs", {})
 if action == "fill":
     out = fill(None, **kw)
 elif action == "random":
     out = random_bumpers(None, **kw)
+elif action == "get":
+    out = get_bumper(**kw)
 elif action == "delete":
     out = delete_bumper(**kw)
     if isinstance(out, JSONResponse):
@@ -68,16 +83,19 @@ def _row(i, duration, type="video", kind="ambient"):
 class AppApi(unittest.TestCase):
     """Endpoint-level contracts, each on an isolated temp database."""
 
-    def _run_child(self, action, seed=(), **kwargs):
+    def _run_child(self, action, seed=(), season=None, daypart=None, **kwargs):
         """Run one view function in a subprocess on a temp DB; return its JSON."""
         with tempfile.TemporaryDirectory(prefix="bumparr-api-test-") as tmp:
             env = dict(os.environ)
             env["DB_PATH"] = os.path.join(tmp, "t.db")
             env["ASSET_ROOT"] = os.path.join(tmp, "assets")
             env["DATA_DIR"] = os.path.join(tmp, "data")
-            spec = json.dumps({"action": action, "seed": list(seed),
-                               "kwargs": kwargs})
-            p = subprocess.run([sys.executable, "-c", _CHILD, spec],
+            spec = {"action": action, "seed": list(seed), "kwargs": kwargs}
+            if season is not None:
+                spec["season"] = season
+            if daypart is not None:
+                spec["daypart"] = daypart
+            p = subprocess.run([sys.executable, "-c", _CHILD, json.dumps(spec)],
                                capture_output=True, text=True, timeout=180,
                                env=env, cwd=REPO_ROOT)
             self.assertEqual(p.returncode, 0,
@@ -124,6 +142,84 @@ class AppApi(unittest.TestCase):
         out = self._run_child("random", [row], count=5, max_duration=None,
                               types=None)
         self.assertEqual(out, {"count": 0, "bumpers": []})
+
+    def test_random_does_not_revive_season_gated_rows(self):
+        """A season factor of 0 is a hard gate; no epsilon may put it back."""
+        only_gated = [_row(1, 4.0, kind="christmas")]
+        out = self._run_child("random", only_gated, count=5, max_duration=None,
+                              types=None, season={"christmas": 0.0})
+        self.assertEqual(out, {"count": 0, "bumpers": []})
+        mixed = [_row(1, 4.0, kind="christmas"), _row(2, 4.0, kind="ambient")]
+        out = self._run_child("random", mixed, count=10, max_duration=None,
+                              types=None, season={"christmas": 0.0})
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-2"})
+        self.assertNotIn("selection", out["bumpers"][0])
+
+    def test_random_explain_adds_factors_without_changing_default_shape(self):
+        seed = [_row(1, 4.0), _row(2, 4.0)]
+        plain = self._run_child("random", seed, count=2, max_duration=None,
+                                types=None)
+        self.assertTrue(all("selection" not in b for b in plain["bumpers"]))
+        explained = self._run_child("random", seed, count=2, max_duration=None,
+                                    types=None, explain=True)
+        self.assertGreaterEqual(explained["count"], 1)
+        for bumper in explained["bumpers"]:
+            for key in ("id", "type", "kind", "title", "duration",
+                        "media_url", "payload"):
+                self.assertIn(key, bumper)
+            self.assertEqual(set(bumper["selection"]), {"factors"})
+            self.assertEqual(set(bumper["selection"]["factors"]),
+                             {"base", "season", "daypart", "recency",
+                              "affinity", "fatigue", "score"})
+            self.assertGreater(bumper["selection"]["factors"]["score"], 0)
+
+    def test_fill_excludes_season_and_daypart_gates(self):
+        seed = [_row(1, 22.0, kind="christmas"),
+                _row(2, 18.0, kind="ambient"),
+                _row(3, 7.0, kind="ambient")]
+        out = self._run_child("fill", seed, seconds=47.0, tolerance=1.5,
+                              max_items=8, types=None,
+                              season={"christmas": 0.0})
+        ids = {b["id"] for b in out["bumpers"]}
+        self.assertNotIn("t:item-1", ids)
+        self.assertFalse(out["exact"])
+        only_gated = [_row(1, 22.0, kind="christmas"),
+                      _row(2, 40.0, kind="ambient")]
+        gated = self._run_child("fill", only_gated, seconds=22.0, tolerance=0.05,
+                                max_items=8, types=None,
+                                season={"christmas": 0.0})
+        self.assertEqual(gated["count"], 0)
+        daypart_gated = self._run_child(
+            "fill", only_gated, seconds=22.0, tolerance=0.05,
+            max_items=8, types=None, daypart={"christmas": 0.0})
+        self.assertEqual(daypart_gated["count"], 0)
+
+    def test_get_explain_reports_disabled_unhealthy_and_missing_media(self):
+        row = _row(1, 4.0, type="card")
+        row["uri"] = None
+        row["enabled"] = 0
+        row["health"] = "dead"
+        row["weight"] = 0.0
+        out = self._run_child("get", [row], bumper_id="t:item-1", explain=True)
+        sel = out["selection"]
+        self.assertFalse(sel["eligible_now"])
+        self.assertEqual(sel["reasons"],
+                         ["disabled", "unhealthy", "missing_media", "base_weight"])
+        self.assertEqual(sel["factors"]["score"], 0.0)
+        self.assertEqual(sel["factors"]["base"], 0.0)
+
+    def test_get_explain_uses_eligible_pool_for_affinity_context(self):
+        seed = [_row(1, 4.0, kind="ambient"), _row(2, 4.0, kind="ambient")]
+        seed[0]["enabled"] = 0
+        out = self._run_child("get", seed, bumper_id="t:item-1", explain=True)
+        self.assertEqual(out["selection"]["reasons"], ["disabled"])
+        self.assertFalse(out["selection"]["eligible_now"])
+        healthy = self._run_child("get", [_row(1, 4.0)], bumper_id="t:item-1",
+                                  explain=True)
+        self.assertEqual(healthy["selection"]["reasons"], ["eligible"])
+        self.assertTrue(healthy["selection"]["eligible_now"])
+        self.assertNotIn("selection", self._run_child(
+            "get", [_row(1, 4.0)], bumper_id="t:item-1"))
 
     def test_delete_unknown_id_404(self):
         """Deleting a missing id is a 404 with a stable body."""
@@ -282,6 +378,8 @@ class HttpValidation(unittest.TestCase):
             ("/api/bumpers?offset=-1", "GET"),
             ("/api/bumpers/random?count=0", "GET"),
             ("/api/bumpers/random?max_duration=0", "GET"),
+            ("/api/bumpers/random?explain=maybe", "GET"),
+            ("/api/bumpers/nope?explain=maybe", "GET"),
             ("/api/bumpers/fill?seconds=0", "GET"),
             ("/api/bumpers/fill?seconds=5&tolerance=3601", "GET"),
             ("/api/starter?limit=0", "POST"),

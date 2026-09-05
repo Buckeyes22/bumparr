@@ -137,14 +137,19 @@ content covers every kind with no model at all (CI asserts this).
   `score = base × season × daypart × recency × affinity × fatigue`. Declared vs
   computed, idempotent, nothing written back. Details and tuning in
   [ROTATION.md](ROTATION.md).
+- **`selection.py`** — shared computed-eligibility helper. Calls
+  `rotation.weights_for` once and keeps only finite scores `> 0`. Physical
+  file/conform availability stays with the caller.
+- **`simulate.py`** — seeded, read-only mix report over in-memory copies.
+  Never writes history or calls station `advance()`.
 - **`seasons.py`** — calendar factors per category (holiday material ramps in
   and out rather than switching), computed at selection time, never stored.
-- `/random` and any co-deployed player call the same `weights_for`, so
-  probabilistic ranking means the same thing everywhere. `/fill` currently
-  optimizes for duration only (no creative sequence grammar yet) and returns
-  an ordered bumper set, not a programme schedule. `/playlist.m3u` is an
-  unsequenced pool listing for a downstream scheduler. The live station
-  sequences its own bumper-only timeline.
+- `/random`, `/fill`, and station playout share `scored_candidates`, so a
+  gated row cannot air on one path and not another. `/fill` still returns an
+  ordered duration-bounded bumper set, not a programme schedule (no creative
+  sequence grammar yet). `/playlist.m3u` is an unsequenced pool listing for a
+  downstream scheduler. The live station sequences its own bumper-only
+  timeline.
 
 ### 5. Service
 
@@ -181,7 +186,9 @@ preview reads never extend a timeline or write history.
   mistakes a finished bumper for raw material, and produce never quarries its
   own output or the ephemeral live-capture dir.
 - **One scoring model.** If you find yourself ranking material a second way,
-  it should go through `rotation.weights_for`.
+  it should go through `selection.scored_candidates` (which calls
+  `rotation.weights_for`). `weight <= 0` or computed `score <= 0` is a hard
+  gate; no epsilon may revive it.
 - **Declared weight is never mutated by the system.** Seasonal adjustment is a
   factor applied at selection time; the historical in-place mutation has been
   healed and `base_weight` shadow values restored (see `seasons.restore_base_weights`).
@@ -211,6 +218,8 @@ preview reads never extend a timeline or write history.
 | `bumparr/card_validation.py` | generation-time validation + fact re-check |
 | `bumparr/content_filter.py` | shared tone (grim) policy |
 | `bumparr/rotation.py` | the scoring model |
+| `bumparr/selection.py` | shared computed-eligibility filter used by random, fill, and station |
+| `bumparr/simulate.py` | read-only seeded selection mix report |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |
 | `bumparr/jobs.py` | background loops (capture, queue, volatile, dated) |

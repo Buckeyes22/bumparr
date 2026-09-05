@@ -73,6 +73,27 @@ rows at the files. Offline and idempotent. Details in [RENDERING.md](RENDERING.m
 
 The API's `POST /api/generate/{kind}` routes to these same modules.
 
+## Inspection
+
+### `bumparr.simulate` — read-only selection mix
+
+Snapshots enabled/healthy rows, mutates only in-memory copies of play counts
+and timestamps, and reports what a seeded run of `scored_candidates` would
+have picked. It never calls station `advance()`, never writes the database,
+and does not download, render, conform, or probe.
+
+| Flag | Meaning |
+|---|---|
+| `--seed N` | integer RNG seed (default 1) |
+| `--picks N` | positive integer number of picks (default 200) |
+| `--start UNIX` | unix-seconds float for the first pick (default: now) |
+| `--json` | print the report as JSON |
+
+The report includes item/kind shares, exact repeats, same-kind runs,
+zero-score picks, seasonal/daypart distribution, and inferred audio balance
+(`native` / `music` / `silence` / `unknown` from existing payload). Family,
+role, and sequence relaxations are Phase 2 and are not reported here.
+
 ## Maintenance
 
 ### `bumparr.prune` — remove off-shape material

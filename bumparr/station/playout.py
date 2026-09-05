@@ -4,9 +4,9 @@ There is no encoder loop and no thread. Each channel keeps a timeline of
 (start time, conformed item) that is extended whenever someone asks for the
 playlist, anchored to the wall clock, so serving the channel is arithmetic
 over a list plus a static file per segment. The choice of what comes next
-goes through the same rotation model as /api/bumpers/random, with the one
-rule that model does not carry: avoid the same item twice in a row when another
-positive-score item is available.
+goes through the same scored_candidates helper as /api/bumpers/random, with
+the one rule that helper does not carry: avoid the same item twice in a row
+when another positive-score item is available.
 
 This is also the first thing in Bumparr that reports plays. When an entry's
 start time passes, it is written to play_history and the row's last_played
@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from bumparr import config, dayparts, db, rotation, seasons
+from bumparr import config, db, selection
 from bumparr.station import conform
 
 SLATE_ID = "slate"
@@ -80,20 +80,13 @@ class Channel:
     def _pick(self, now, prev_id):
         index = conform.load_index()
         pool = self._pool(index)
-        try:
-            season = seasons.factors_now()
-        except Exception:
-            season = {}
-        try:
-            daypart = dayparts.factors_now()
-        except Exception:
-            daypart = {}
+        season, daypart = selection.live_factors()
 
         def choose(candidates):
             if not candidates:
                 return None
-            weights, _ = rotation.weights_for(candidates, season, now, daypart)
-            positive = [(row, weight) for row, weight in zip(candidates, weights) if weight > 0]
+            positive, _ = selection.scored_candidates(
+                candidates, season_factors=season, daypart_factors=daypart, now=now)
             if not positive:
                 return None
             rows, eligible_weights = zip(*positive)

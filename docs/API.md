@@ -56,10 +56,36 @@ card content (lines/answer/number/meaning/…), null-ish for plain media.
 
 One bumper as JSON: every registry column plus `media_url`. 404 if unknown.
 
+| Param | Default | Meaning |
+|---|---|---|
+| `explain` | `false` | if true, add a `selection` object with `eligible_now`, `reasons`, and `factors` |
+
+`explain` is a boolean query flag (FastAPI's normal boolean parsing). Preview/explain never writes history or counters. Context for median and affinity is the current statically eligible pool (`enabled=1 AND health='ok'`), so the factors match selection. Allowed `reasons` are `disabled`, `unhealthy`, `missing_media`, `base_weight`, `season`, `daypart`, `non_finite_score`, and `eligible`. All applicable hard reasons are returned in that order; `eligible` is used only when none apply.
+
+```json
+{
+  "selection": {
+    "eligible_now": false,
+    "reasons": ["disabled"],
+    "factors": {
+      "base": 1.0,
+      "season": 0.0,
+      "daypart": 1.0,
+      "recency": 1.0,
+      "affinity": 1.0,
+      "fatigue": 1.0,
+      "score": 0.0
+    }
+  }
+}
+```
+
 ## The output contract
 
 These are the endpoints a channel generator or player pulls from. `/random`
-uses the rotation model ([ROTATION.md](ROTATION.md)); `/fill` composes a
+and `/fill` share `selection.scored_candidates` with station playout
+([ROTATION.md](ROTATION.md)): a stored `weight <= 0` or computed `score <= 0`
+is a hard gate, and no epsilon/floor may revive it. `/fill` still composes a
 duration-bounded bumper set (not a programme schedule); `/playlist.m3u` is an
 unsequenced pool listing for a downstream scheduler.
 
@@ -70,17 +96,23 @@ unsequenced pool listing for a downstream scheduler.
 | `count` | 5 | how many (1–100) |
 | `max_duration` | none | cap, 0–86,400 seconds (non-video items only) |
 | `types` | all | comma list, e.g. `video,card` |
+| `explain` | `false` | if true, add per-item `selection.factors` |
 
 Response: `{"count": N, "bumpers": [{id, type, kind, title, duration,
-media_url, payload}]}`. Only enabled + healthy + positively-weighted items are
-candidates; seasonally gated (weight 0) items never come back.
+media_url, payload}]}`. Only enabled + healthy items with a finite computed
+score strictly greater than zero are candidates. Gated rows are never
+returned. Default fields stay the same when `explain` is omitted; with
+`explain=true` each bumper also has `selection.factors` (reasons may be
+omitted because returned rows are eligible). `explain` is a boolean query
+flag.
 
 ### `GET /api/bumpers/fill`
 
 The break-composer contract: return an ordered bumper set that fits N seconds.
 This is not a programme schedule and does not know what a downstream channel
-will air next. Solved as a randomized subset-sum, not a greedy pass — see the
-`fill` docstring in `bumparr/app.py` for why.
+will air next. Shared scoring runs first (the same season/daypart resolution
+as `/random` and the station); then a randomized subset-sum searches duration
+— see the `fill` docstring in `bumparr/app.py` for why.
 
 | Param | Default | Meaning |
 |---|---|---|
@@ -92,7 +124,7 @@ will air next. Solved as a randomized subset-sum, not a greedy pass — see the
 Response: `{"requested": 47, "total": 46.9, "gap": 0.1, "exact": true,
 "count": 6, "bumpers": [...]}`. A pool without short denominations will report
 a wider `gap` rather than return a bad fit — check `exact`/`gap`, not just
-`count`.
+`count`. Score `<= 0` items are excluded before the duration search.
 
 ## Station
 

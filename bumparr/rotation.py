@@ -131,7 +131,7 @@ def explain(item, ctx, now=None):
     return {"base": round(base, 3), "season": round(s, 3), "daypart": round(d, 3),
             "recency": round(r, 3),
             "affinity": round(a, 3), "fatigue": round(f, 3),
-            "score": round(base * s * d * r * a * f, 4)}
+            "score": round(score(item, ctx, now), 4)}
 
 
 def build_context(rows, season_factors=None, now=None, daypart_factors=None):

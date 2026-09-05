@@ -48,6 +48,10 @@ PROSE_SHAPE = {
     "corrections": (1, 3, 120),
     "achievements": (1, 3, 120),
     "coming_up": (1, 3, 120),
+    "channel_statistics": (1, 3, 120),
+    "previously_on": (1, 3, 120),
+    "viewer_achievement": (1, 3, 120),
+    "operator_message": (1, 3, 120),
 }
 
 _PUNCT = re.compile(r"[^\w\s]+", flags=re.UNICODE)

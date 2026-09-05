@@ -85,7 +85,8 @@ async def lifespan(app: FastAPI):
     tasks = [asyncio.create_task(_volatile_refresh_loop()),
              asyncio.create_task(jobs.window_refresh_loop()),
              asyncio.create_task(jobs.dated_card_loop()),
-             asyncio.create_task(jobs.station_conform_loop())]
+             asyncio.create_task(jobs.station_conform_loop()),
+             asyncio.create_task(jobs.channel_memory_loop())]
     try:
         yield
     finally:
@@ -132,10 +133,12 @@ def status():
         by_kind[r["kind"]] = by_kind.get(r["kind"], 0) + r["n"]
         total += r["n"]
         live += r["live"]
+    from bumparr.generators import channel_memory
     return {"brand": config.BRAND, "total": total, "playable_now": live,
             "by_type": by_type, "by_kind": by_kind,
             "profile": channel_profile.profile_status(),
-            "music": music.manifest_status()}
+            "music": music.manifest_status(),
+            "memory": channel_memory.memory_status()}
 
 
 @app.get("/api/bumpers")

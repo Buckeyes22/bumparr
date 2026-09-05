@@ -47,6 +47,10 @@ class FamilyInference(unittest.TestCase):
             ("achievements", "card", "generated", "", "text"),
             ("coming_up", "card", "generated", "", "text"),
             ("tiny_games", "card", "generated", "", "text"),
+            ("channel_statistics", "card", "channel-memory", "", "data"),
+            ("previously_on", "card", "channel-memory", "", "data"),
+            ("viewer_achievement", "card", "channel-memory", "", "data"),
+            ("operator_message", "card", "channel-memory", "", "authored"),
             ("webcam", "stream", "live-cam", "live,window", "window"),
             ("window", "video", "youtube-live", "", "window"),
         ]

@@ -434,16 +434,16 @@ internal:
     notes: "minimalist clock/date card as broadcast breathing room"
   - name: Channel Statistics
     type: card
-    state: proposed
+    state: shipped
     mechanism: generate
-    gap: "No channel-statistics generator. Phase 5 will add channel memory from real play_history / pool telemetry."
-    notes: "real-but-useless telemetry: uptime, bumpers served, time since a category last aired"
+    implementation: "generators/channel_memory.py statistics_payload; jobs.channel_memory_loop; play_history for station:live only; tests/test_channel_memory.py"
+    notes: "hourly snapshot of reported starts, live pool size, time since last ident. Says this channel has aired, never you watched."
   - name: Previously On This Channel
     type: card
-    state: proposed
+    state: shipped
     mechanism: generate
-    gap: "No previously-on generator. Phase 5 will recap Bumparr's own recent bumper-pool history, not a downstream episode schedule."
-    notes: "deadpan recap of recent bumpers and mundane live-cam events (uses play_history)"
+    implementation: "generators/channel_memory.py previously_on_payload; play_history joined to current titles/kinds; tests/test_channel_memory.py"
+    notes: "deadpan recap of this station's recent bumper-pool history, not a downstream episode schedule. No history means no card."
   - name: Coming Up Eventually
     type: card
     state: proposed
@@ -452,7 +452,13 @@ internal:
     notes: "Must not imply episode/film awareness. Fake teasers exist as a different, non-schedule concept."
   - name: Viewer Achievements
     type: card
-    state: proposed
+    state: partial
     mechanism: generate
-    gap: "No viewer-history achievements. Phase 5. Generic `achievements` cards exist (generators/cards.py, card_seeds.json) but are not backed by play_history or viewer input."
-    notes: "joke achievements e.g. survived a Window where nothing happened. Viewer input, if any, is operator-curated and local."
+    implementation: "generators/channel_memory.py achievement_payloads (25/100 reported starts); tests/test_channel_memory.py. Generic comedy `achievements` cards remain a separate kind."
+    notes: "Deterministic thresholds over station:live history. Never claims a unique viewer. Operator-curated viewer input is local YAML, not this kind."
+  - name: Operator Messages
+    type: card
+    state: shipped
+    mechanism: generate
+    implementation: "generators/channel_memory.py operator messages; config_files/operator_messages.yaml; OPERATOR_MESSAGES; tests/test_channel_memory.py"
+    notes: "Local YAML, opt-in, validated, reversible. Config enabled plus starts_at/ends_at own eligibility; removed/disabled/expired rows are parked, not deleted. No public form, upload, or write API."

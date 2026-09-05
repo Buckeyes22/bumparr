@@ -1,0 +1,8 @@
+version: 1
+messages:
+  - id: example-note
+    lines: ["A locally authored message."]
+    enabled: false
+    starts_at: null
+    ends_at: null
+    roles: [any]

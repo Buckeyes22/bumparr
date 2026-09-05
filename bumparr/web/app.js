@@ -25,6 +25,22 @@ async function loadStatus() {
   });
   const max = Math.max(1, ...Object.values(s.by_type));
   const typeColor = { video: "#5db3a0", stream: "#c9a15d", card: "#7b83cc", image: "#9a7bcc" };
+  const memEl = $("#memory-status");
+  if (memEl) {
+    memEl.replaceChildren();
+    const mem = s.memory;
+    if (mem && typeof mem === "object") {
+      const kinds = Array.isArray(mem.enabled_kinds) ? mem.enabled_kinds : [];
+      const msgs = mem.messages && typeof mem.messages === "object" ? mem.messages : {};
+      const refresh = mem.refresh_seconds === 0 ? "refresh off"
+        : ("refresh " + String(mem.refresh_seconds) + "s");
+      const kindText = kinds.length ? kinds.join(", ") : "no kinds";
+      const msgState = msgs.valid === false ? "messages invalid" : "messages ok";
+      const disabled = kinds.length ? "" : " · disabled";
+      memEl.appendChild(makeEl("div", "",
+        "memory · " + refresh + " · " + kindText + " · " + msgState + disabled));
+    }
+  }
   const typeBox = $("#by-type"); typeBox.replaceChildren();
   Object.entries(s.by_type).sort((a, b) => b[1] - a[1]).forEach(([t, n]) => {
     const bar = makeEl("div", "bar"), track = makeEl("span", "track"), fill = makeEl("span", "fill");
@@ -164,6 +180,23 @@ function provenanceLine(b) {
   return bits.join(" · ");
 }
 
+function freshnessLine(b) {
+  const p = b.payload || {};
+  if (!p || typeof p !== "object") return "";
+  const bits = [];
+  if (p.channel != null && String(p.channel)) bits.push(String(p.channel));
+  if (p.generated_at != null && p.generated_at !== "") {
+    bits.push("generated " + String(p.generated_at));
+  }
+  if (p.valid_until != null && p.valid_until !== "") {
+    bits.push("valid until " + String(p.valid_until));
+  } else if (p.generated_at != null && p.generated_at !== "") {
+    bits.push("no expiry");
+  }
+  if (b.enabled === 0 || b.enabled === false) bits.push("parked");
+  return bits.join(" · ");
+}
+
 function creditsLine(b) {
   const c = b.music_credits || (b.payload && b.payload.music_credits) || {};
   if (!c || typeof c !== "object") return "";
@@ -203,6 +236,8 @@ function decorateCard(card, b) {
   if (prov) card.append(makeEl("div", "pv-meta", prov));
   const fac = factorsLine(b);
   if (fac) card.append(makeEl("div", "pv-factors", fac));
+  const fresh = freshnessLine(b);
+  if (fresh) card.append(makeEl("div", "pv-freshness", fresh));
 }
 
 function cardEl(b) {
@@ -519,5 +554,5 @@ const COMMONJS = typeof module !== "undefined" && module.exports;
 if (typeof document !== "undefined" && !COMMONJS) boot();
 if (COMMONJS) {
   module.exports = { makeEl, cardEl, stationEl, pollJob, enableBumper,
-    previewPack, previewOne, packSummaryEl, renderPackPreview };
+    previewPack, previewOne, packSummaryEl, renderPackPreview, freshnessLine };
 }

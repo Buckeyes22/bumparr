@@ -832,6 +832,11 @@ def register_all_baselines():
         total += register_number_baseline(12)
     except Exception as e:
         print("[bumparr] grounded numbers unavailable:", e)
+    try:
+        from bumparr.generators import channel_memory
+        channel_memory.refresh(render=False)
+    except Exception as e:
+        print("[bumparr] channel memory unavailable:", e)
     return total
 
 

@@ -5586,6 +5586,80 @@ test("hostile creative, payload and stage strings stay text everywhere", async (
   assert.equal(globalThis.pwned, undefined);
 });
 
+test("every route entered in turn leaves no clock and no medium running",
+     async (t) => {
+  // The whole cleanup contract in one pass: enter all five views, start the
+  // things each of them can start, and prove that leaving the last one — which
+  // is one of the two with a 20-second clock — leaves nothing ticking.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const ROW = { id: "vid:a", type: "video", kind: "ambient", title: "harbour",
+                media_url: "/media/a.mp4", duration: 6, enabled: 1, health: "ok" };
+  stubRoutes({ bumpers: { count: 1, total: 1, bumpers: [ROW] } });
+  for (const route of ROUTES) {
+    await applyHash("#/" + route);
+    await flush();
+  }
+
+  // A composed break, playing.
+  await applyHash("#/composer");
+  await flush();
+  stubFill(breakBody([BREAK_ITEM(), CARD_ITEM({ duration: 4 })]));
+  await composeBreak();
+  playComposerSequence();
+  assert.equal(STATE.composer.playback.index, 0, "something really is running");
+
+  // A search mid-debounce and a card preview, on the library.
+  stubRoutes({ bumpers: { count: 1, total: 1, bumpers: [ROW] } });
+  await applyHash("#/library");
+  await flush();
+  await flush();
+  scheduleSearch("harbour");
+  const card = $("#grid").children[0];
+  const video = descendants(card).find((n) => n.tagName === "VIDEO");
+  await card.dispatch("mouseenter");
+  assert.equal(video.paused, false, "and something really is playing");
+
+  // End on a view that has a clock, so a surviving one would be visible.
+  await applyHash("#/station");
+  await flush();
+  const after = stubRoutes({ bumpers: { count: 1, total: 1, bumpers: [ROW] } });
+  t.mock.timers.tick(REFRESH_MS);
+  await flush();
+  assert.ok(after.length > 0, "the station's clock is live while the view is");
+
+  app.exitRoute("station");
+  const settled = after.length;
+  t.mock.timers.tick(120000);
+  await flush();
+  await flush();
+  assert.equal(after.length, settled,
+               "no clock survived the exit: " +
+               after.slice(settled).map((c) => c.url).join(", "));
+  assert.deepEqual(
+    descendants(BODY).filter((n) => (n.tagName === "VIDEO" || n.tagName === "AUDIO") &&
+                                    !n.paused).map((n) => n.src),
+    [], "and no medium is still playing");
+  assert.equal(STATE.composer.playback.index, -1, "the sequence was stopped");
+  assert.equal($("#composer-stage").children.length, 0, "and its stage emptied");
+});
+
+test("the shell keeps one h1, ordered headings and a named current view",
+     async () => {
+  stubRoutes();
+  for (const route of ROUTES) {
+    await applyHash("#/" + route);
+    await flush();
+    const current = BODY.querySelectorAll("[data-view]")
+      .filter((a) => a.getAttribute("aria-current") === "page");
+    assert.equal(current.length, 1, route + " marks exactly one view current");
+    assert.equal(current[0].dataset.view, route);
+    const view = $("#view-" + route);
+    assert.equal(view.hidden, false);
+    assert.equal(ROUTES.filter((r) => r !== route)
+      .every((r) => $("#view-" + r).hidden), true, "and hides the other four");
+  }
+});
+
 // The last test in this file leaves whatever route it entered behind, and its
 // 20-second refresh interval would keep the runner alive past the suite. This
 // is the teardown beforeEach already does for every other test.

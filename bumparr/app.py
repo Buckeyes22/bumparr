@@ -100,14 +100,57 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*tasks, *action_tasks, return_exceptions=True)
 
 
+# Paths that serve bytes a container has already compressed, or relays that
+# exist to hand a player exactly what the origin sent. Gzipping an MP4 or an
+# MPEG-TS segment spends CPU to make it BIGGER, and a player asking for one is
+# usually asking for part of it.
+NEVER_GZIP = ("/media", "/station/seg", "/api/stream")
+
+
+class SelectiveGZip:
+    """GZip for the dashboard and the API; never for media, never for a range.
+
+    Starlette's own `GZipMiddleware` (0.41.3) decides on `Accept-Encoding`,
+    `minimum_size` and an existing `Content-Encoding` alone. It has no
+    content-type rule and no idea what a `Range` request means, so on its own it
+    would do two wrong things to this service:
+
+    * a plain GET of an MP4 under `/media` comes back `content-encoding: gzip`
+      and *larger* than the file, having spent compresslevel 9 to get there;
+    * a `Range: bytes=0-1023` gets a 206 whose `Content-Range` still describes
+      the decoded bytes while the body is a gzip stream of some other length.
+      A client cannot seek with that, which is exactly what a player does with
+      `/media/...`, `/station/seg/...` and the proxied segments.
+
+    So the two cases are handed straight to the app and everything else --
+    `/`, `/web/*`, `/api/*`, the playlists and the guide -- goes through gzip.
+    """
+
+    def __init__(self, app, minimum_size=1000):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=minimum_size)
+
+    def _plain(self, scope):
+        """True when this request must reach the app uncompressed."""
+        path = scope.get("path", "")
+        if any(path == p or path.startswith(p + "/") for p in NEVER_GZIP):
+            return True
+        # Headers are (bytes, bytes) pairs and header names arrive lowercased.
+        return any(name == b"range" for name, _ in scope.get("headers", ()))
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or self._plain(scope):
+            return await self.app(scope, receive, send)
+        return await self.gzip(scope, receive, send)
+
+
 app = FastAPI(title="Bumparr", lifespan=lifespan)
 # The dashboard is one HTML file, one stylesheet and one script, with no build
 # step to minify them -- so the bytes that cross the wire are compressed here
-# instead. app.js gzips to roughly a quarter of its size; JSON listings benefit
-# the same way. `minimum_size` leaves small answers alone, where the header
-# costs more than the compression saves, and already-compressed media (MP4,
-# MPEG-TS segments) is skipped by the middleware's own content negotiation.
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# instead. app.js gzips to roughly a quarter of its size, and the JSON listings
+# benefit the same way. `minimum_size` leaves small answers alone, where the
+# header costs more than the compression saves.
+app.add_middleware(SelectiveGZip, minimum_size=1000)
 app.include_router(stream_proxy.router)
 app.include_router(station_routes.router)
 

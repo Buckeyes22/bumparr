@@ -546,9 +546,11 @@ permanence for `on_this_day` or config-owned cams. Test API before UI wiring.
   so it stops drifting. What actually crosses the wire is gzipped by
   `GZipMiddleware(minimum_size=1000)` in `bumparr/app.py`: `app.js` is roughly
   a quarter of its on-disk size compressed, which is the number a browser and a
-  reverse proxy care about. `tests/test_app_api.py` asserts both the
-  `Content-Encoding: gzip` on `/web/app.js` and that small answers are left
-  alone.
+  reverse proxy care about. Media is excluded on purpose — `/media`,
+  `/station/seg` and `/api/stream` serve bytes that are already compressed, and
+  a request carrying a `Range` header is passed through on any path, because a
+  compressed `206` cannot be seeked. `tests/test_app_api.py` asserts all of it
+  over a real HTTP server.
 - Server pagination: 24 default, UI maximum 100.
 - Fetch detail/explain only when inspector opens unless already returned.
 - At most one active media preview.

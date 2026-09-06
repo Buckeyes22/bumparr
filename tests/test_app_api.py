@@ -5,8 +5,10 @@ the real view functions in a subprocess with DB_PATH/ASSET_ROOT pointed at a
 temp dir (config paths bind at import time), while the pure helper and the
 route-ordering invariant are asserted in-process.
 """
+import gzip
 import json
 import os
+import random
 import socket
 import subprocess
 import sys
@@ -492,6 +494,15 @@ class HttpValidation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix="bumparr-http-test-")
+        # Two files the static mounts will serve, so the compression rules can
+        # be probed against real bytes. Random content, because the point of
+        # the first assertion is that gzip would make an already-compressed
+        # file BIGGER, and random bytes are the honest stand-in for one.
+        assets = Path(cls.tmp.name) / "assets"
+        (assets / ".cache" / "station").mkdir(parents=True, exist_ok=True)
+        cls.media_bytes = random.Random(7).randbytes(50000)
+        (assets / "probe.bin").write_bytes(cls.media_bytes)
+        (assets / ".cache" / "station" / "probe.ts").write_bytes(cls.media_bytes)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
@@ -606,6 +617,8 @@ class HttpValidation(unittest.TestCase):
         self.assertEqual(result["count"], len(result["jobs"]))
         self.assertLessEqual(len(result["jobs"]), 20)
 
+    GZIP = {"Accept-Encoding": "gzip"}
+
     def _headers(self, path, headers=None):
         req = urllib.request.Request(
             "http://127.0.0.1:%d%s" % (self.port, path), headers=headers or {})
@@ -615,12 +628,11 @@ class HttpValidation(unittest.TestCase):
     def test_dashboard_assets_are_gzipped_when_the_client_asks(self):
         """The dashboard ships uncompressed sources; the wire carries them small.
 
-        There is no build step, so app.js is a readable 190 KB file on disk.
-        GZipMiddleware is what keeps that off the network, and this asserts the
-        header rather than trusting the middleware is still installed.
+        There is no build step, so app.js is a readable ~195 KB file on disk.
+        The gzip middleware is what keeps that off the network, and this asserts
+        the header rather than trusting the middleware is still installed.
         """
-        status, headers, body = self._headers(
-            "/web/app.js", {"Accept-Encoding": "gzip"})
+        status, headers, body = self._headers("/web/app.js", self.GZIP)
         self.assertEqual(status, 200)
         self.assertEqual(headers.get("content-encoding"), "gzip")
         # urllib does not decode for us, so this is the compressed length.
@@ -637,9 +649,71 @@ class HttpValidation(unittest.TestCase):
 
     def test_small_answers_are_left_uncompressed(self):
         """minimum_size=1000: below that the header costs more than it saves."""
-        _, headers, body = self._headers("/healthz", {"Accept-Encoding": "gzip"})
+        _, headers, body = self._headers("/healthz", self.GZIP)
         self.assertLess(len(body), 1000)
         self.assertIsNone(headers.get("content-encoding"))
+
+    def test_media_is_never_gzipped(self):
+        """An MP4 is already compressed: gzipping it spends CPU to grow it.
+
+        Starlette's GZipMiddleware has no content-type rule, so left to itself
+        it does exactly that to every file under /media.
+        """
+        status, headers, body = self._headers("/media/probe.bin", self.GZIP)
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("content-encoding"),
+                          "media is handed to the client as it is on disk")
+        self.assertEqual(len(body), len(self.media_bytes))
+        self.assertEqual(body, self.media_bytes, "byte for byte")
+        self.assertEqual(headers.get("content-length"),
+                         str(len(self.media_bytes)))
+
+    def test_station_segments_are_never_gzipped(self):
+        """The same rule for the conformed segments a player pulls in sequence."""
+        status, headers, body = self._headers("/station/seg/probe.ts", self.GZIP)
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("content-encoding"))
+        self.assertEqual(body, self.media_bytes)
+
+    def test_a_range_request_to_media_can_still_seek(self):
+        """Content-Range describes decoded bytes, so a gzipped 206 cannot seek.
+
+        The middleware would have rewritten the body and the Content-Length
+        while leaving Content-Range describing the range the client asked for --
+        which is how a player loses the ability to jump around a file.
+        """
+        headers = dict(self.GZIP, Range="bytes=0-1023")
+        status, got, body = self._headers("/media/probe.bin", headers)
+        self.assertEqual(status, 206)
+        self.assertIsNone(got.get("content-encoding"))
+        self.assertEqual(got.get("content-length"), "1024")
+        self.assertEqual(got.get("content-range"),
+                         "bytes 0-1023/%d" % len(self.media_bytes))
+        self.assertEqual(len(body), 1024)
+        self.assertEqual(body, self.media_bytes[:1024])
+
+    def test_a_range_request_anywhere_is_left_alone(self):
+        """The rule is the range, not only the path: /web is compressible too."""
+        headers = dict(self.GZIP, Range="bytes=0-1023")
+        status, got, body = self._headers("/web/app.js", headers)
+        self.assertEqual(status, 206)
+        self.assertIsNone(got.get("content-encoding"))
+        self.assertEqual(got.get("content-length"), "1024")
+        self.assertEqual(len(body), 1024)
+
+    def test_api_answers_still_compress_and_still_parse(self):
+        """The dashboard's own reads keep the benefit, and stay readable."""
+        _, headers, body = self._headers("/openapi.json", self.GZIP)
+        self.assertEqual(headers.get("content-encoding"), "gzip",
+                         "a routed JSON answer over the threshold is compressed")
+        self.assertIn("openapi", json.loads(gzip.decompress(body)))
+        # /api/status is small on an empty pool, so this asserts it round-trips
+        # whichever side of minimum_size it lands on rather than asserting a
+        # header the pool size decides.
+        _, status_headers, status_body = self._headers("/api/status", self.GZIP)
+        if status_headers.get("content-encoding") == "gzip":
+            status_body = gzip.decompress(status_body)
+        self.assertIn("total", json.loads(status_body))
 
 
 if __name__ == "__main__":

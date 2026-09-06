@@ -4625,6 +4625,10 @@ async function submitAsk() {
   }
   if (!job.job_id) return finish(job.status === "error" ? "failed" : "healthy", job.result || "done");
   record.id = String(job.job_id);
+  // This surface takes the job over from the background watch, exactly as
+  // doAction does: two polls would double the load on the registry and race
+  // each other to write the answer.
+  stopJobWatch(record.id);
   inp.value = "";
   // The same poller the Actions panel uses: never a false success, never a
   // failure invented from a lost read, and never a form left disabled.

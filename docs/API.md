@@ -453,9 +453,21 @@ here when the cam isn't CORS-direct.
 | `/` | the dashboard itself |
 
 Responses over 1000 bytes are gzipped when the client sends
-`Accept-Encoding: gzip` (`GZipMiddleware`), which covers the dashboard's script
-and stylesheet and the larger JSON listings. Smaller answers, and media the
-container format has already compressed, are served as they are.
+`Accept-Encoding: gzip`, which covers `/`, `/web/…`, `/api/…`, the playlists and
+the guide. Three things are never compressed, whatever the client asks for:
+
+- anything under `/media/…`, `/station/seg/…` or `/api/stream/…`, because an
+  MP4 or an MPEG-TS segment is already compressed — gzipping one spends CPU to
+  make it *larger* (50,000 B of media becomes 50,038 B at level 9);
+- **any request carrying a `Range` header**, on any path. A compressed `206`
+  answers with a `Content-Range` describing the decoded bytes and a body of a
+  different length, which is not something a client can seek with;
+- anything under 1000 bytes, where the header costs more than it saves.
+
+Starlette's own `GZipMiddleware` decides on `Accept-Encoding`, `minimum_size`
+and an existing `Content-Encoding` alone, so the first two rules are applied by
+a wrapper (`SelectiveGZip` in `bumparr/app.py`) that hands those requests
+straight to the app.
 
 ## Dashboard
 

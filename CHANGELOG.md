@@ -54,9 +54,15 @@
   properties and `URLSearchParams`; there is no `innerHTML` anywhere in the
   script. A hostile title renders as text in the card, the inspector, the
   confirmation and every accessible name.
-- Static assets over 1000 bytes are now gzipped (`GZipMiddleware`), which is
-  what the browser downloads; the sources stay readable on disk because there is
-  no build step to make them otherwise.
+- Answers over 1000 bytes are now gzipped when the client asks — `/`, `/web/…`,
+  `/api/…`, the playlists and the guide — which is what the browser actually
+  downloads; the sources stay readable on disk because there is no build step to
+  make them otherwise. Media is deliberately excluded: `/media/…`,
+  `/station/seg/…` and `/api/stream/…` are already-compressed bytes that gzip
+  makes *larger*, and any request carrying a `Range` header is passed through
+  untouched on every path, because a compressed `206` describes one length in
+  `Content-Range` and carries another — which is a player that can no longer
+  seek.
 
 **Operator dashboard: why an item was picked, and who it belongs to**
 - The inspector's **Selection** block now draws the score as the product it is

@@ -63,14 +63,32 @@ every kind. Point Bumparr at any OpenAI-compatible endpoint (`LLM_BASE`) to
 generate far more invented text cards — that path is not MiniMax H3 and does
 not download model weights.
 
-**Paid video generation is also optional and off by default.** Set
+**Paid video generation is optional, off by default, and review-gated.** Set
 `GENERATION_ENABLED=1`, allow-list a model in `generation_models.yaml`, and
 provide `MINIMAX_API_KEY` and/or `OPENROUTER_API_KEY` to create review-gated
 bumper videos through the dashboard `#/generation` view. Keys alone never
-spend. This uses MiniMax's hosted H3 API and/or OpenRouter's video API; it
-does not fetch or serve local H3-Base weights. See
+spend: candidates start disabled and score zero, so they are excluded from
+playback outputs until an operator approves them (they remain visible to
+management/review surfaces). This uses MiniMax's hosted H3 API and/or
+OpenRouter's video API; it does not fetch or serve local H3-Base weights or
+provide local H3 hosting. See
 [docs/GENERATION_PLAN.md](docs/GENERATION_PLAN.md) and
 [docs/GENERATION_IMPLEMENTATION_STATUS.md](docs/GENERATION_IMPLEMENTATION_STATUS.md).
+
+## Make it your channel
+
+- Own the voice, visual families, brand reveals, energy, and break roles through
+  the [channel profile and configuration](docs/CONFIG.md).
+- Use the music manifest for compatible beds, credits, loudness policy, or
+  intentional silence; preview complete sequences in Composer.
+- Let channel-memory cards report actual station history and scheduled local
+  operator messages without pretending to know who watched.
+- Inspect selection explanations and run offline simulation/release review
+  before putting material on air. See [release review](docs/RELEASE_REVIEW.md).
+
+The creative reference is Adult Swim's use of interstitials as a channel voice,
+not a request to copy its branding or media. See the
+[product vision](docs/PRODUCT_VISION.md) and [creative reference](docs/CREATIVE_REFERENCE.md).
 
 ## Render cards to video first
 
@@ -111,6 +129,24 @@ Plus `GET /api/status`, `GET /api/bumpers`, `POST /api/render/cards`, and
 `POST /api/generate/<kind>` / `POST /api/sources/<action>` to drive it from the
 dashboard or scripts.
 
+`/` is the operator console over that API: six hash-routed views — **Overview**
+(triage: what needs attention, then the pool, station and job detail),
+**Library** (filter the pool, inspect a row, disable or delete it),
+**Composer** (ask the server for a break and play it back locally),
+**Station** (each channel's condition in words, the handoff URLs, conform),
+**Operations** (everything that starts a job, grouped by what it costs), and
+**Generation** (review-gated provider jobs and candidates). It is a
+thin client — anything it can do, `curl` can do — with no build step, no
+framework and no remote fonts or scripts: one HTML file, one stylesheet and one
+script, served same-origin and gzipped. Every read is a read: opening a view
+never advances a station timeline or writes play history, and the one control
+that makes the page a real playlist client says so before it is pressed. The
+established console surfaces work by keyboard, at 320px, at 200% zoom and with
+reduced motion; Generation remains subject to the documented browser and
+paid-provider evidence limits. Every region says which of loading / populated /
+empty / failed / stale it is showing rather than going blank. See
+[docs/API.md](docs/API.md#dashboard).
+
 > [!CAUTION]
 > Bumparr ships with no auth — the dashboard and every POST/DELETE endpoint are
 > open to whoever can reach the port, so keep it off the open internet.
@@ -137,6 +173,7 @@ schedule episodes or films.
 | [docs/CREATIVE_REFERENCE.md](docs/CREATIVE_REFERENCE.md) | the Adult Swim bumper reference and what to preserve without copying |
 | [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md) | self-contained execution specification for closing the product and creative gaps |
 | [docs/GENERATION_PLAN.md](docs/GENERATION_PLAN.md) | first-class generative content plan for direct MiniMax H3, OpenRouter, media review, and provenance |
+| [docs/PR_SUMMARY.md](docs/PR_SUMMARY.md) | combined-change narrative and current integration evidence |
 | [docs/FRONTEND_PLAN.md](docs/FRONTEND_PLAN.md) | operator-console frontend enhancement plan |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | wiring Bumparr into ErsatzTV, Tunarr, Dispatcharr |
 | [docs/CARDS.md](docs/CARDS.md) | making the cards yours: shapes per kind, model prompts, new kinds |

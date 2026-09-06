@@ -53,6 +53,388 @@
   concatenate or re-encode. Human review is
   [docs/RELEASE_REVIEW.md](docs/RELEASE_REVIEW.md). No Adult Swim
   similarity score.
+**The dashboard is now an operator console**
+- `/` is six hash-routed views over the existing API — **Overview**, **Library**,
+  **Composer**, **Station**, **Operations**, and **Generation** — replacing the single scrolling
+  page. Deep links work (`#/library?state=parked&kind=trivia`), back and forward
+  work, and every view re-renders from state rather than from what the DOM still
+  holds. Still one HTML file, one stylesheet and one script: no framework, no
+  build step, no package manager, no remote fonts or scripts, same-origin only.
+  The combined checkout also exposes the separate review-gated **Generation**
+  view; it remains hidden/off unless generation is explicitly enabled.
+- An operator can now answer, without reading logs: is the service healthy;
+  what material is in the pool and should it stay on air; what will a real break
+  feel like; is the station live or on standby and why; what background work is
+  running or failed; and which creative, profile and provenance rules produced a
+  given result.
+- **Every read is a read.** Opening a view never creates or advances a station
+  timeline and never writes play history. The one control that makes the page a
+  real playlist client — the Station's **Open preview** — says so before it is
+  pressed. No preview autoplays, video is muted with `preload="metadata"`, and
+  catalog HLS is never fetched unasked.
+- **Nothing goes blank.** Every region renders exactly one explicit state:
+  loading, populated, useful empty (with the filters that made it empty and a way
+  to clear them), failed with a Retry that says it is retrying, or last-known
+  content marked stale with its age. A failed read never clears known-good data,
+  and a field this build of the server does not send reads "Not available in this
+  version." rather than as a zero.
+- **Honest jobs.** Operations follows working jobs to a terminal state, whoever
+  started them; Overview refreshes its registry snapshot every 20 seconds.
+  A lost read keeps the row `status unknown` and backs off rather
+  than inventing a failure; a `404` ends the poll as expired and is never
+  reported as success; no five-minute cap is imposed. Starting an action disables
+  only the duplicate of that action. No poll outlives the view that started it —
+  the work carries on server-side and is picked up again when the operator
+  returns to the view that can show it.
+- Late ingest/action responses hand their job IDs to the active Operations
+  watcher without clearing newer input or replacing an existing watcher.
+  Background completion updates the ingest result line as well as the job list;
+  the header counts unique working jobs from the merged registry, and an older
+  working snapshot cannot undo a known terminal result. **Stop checking** stays
+  stopped through same-view registry refreshes; **Check now** explicitly resumes,
+  and leaving/re-entering Operations starts a fresh check. Seven additional
+  regression tests cover these transitions and preserve the existing body-read
+  timeout and cancellation protections.
+- **Accessible by construction.** One `<h1>` and ordered headings, a skip link,
+  a visible label on every control, native controls throughout, a visible
+  `:focus-visible` ring, 44x44 primary and destructive targets, correct dialog
+  focus and return, `aria-current` / `aria-live` / `aria-busy`, status shown as
+  icon **and** word **and** colour, WCAG AA text contrast on every surface, and
+  no horizontal page scrolling at 320px or 200% zoom. Hover previews are
+  suppressed under `prefers-reduced-motion`, since on a touch screen that hover
+  is a tap. The inspector's Tab cycle reaches its media preview, so the item
+  under review can be played by keyboard.
+- **Deletion is apart, named and reversible-first.** No card carries a delete
+  control. Permanent deletion lives in the inspector's danger zone and the
+  Library's own, both quoting the endpoint's file consequence, offering the
+  `keep_file` it documents, putting Cancel first and focused, and treating any
+  dismissal as a refusal. Bulk kind deletion additionally requires typing the
+  kind name. The reversible action — disable — is always the primary one.
+- Configuration stays file-owned: the dashboard reports what the server loaded
+  from the channel profile, the music manifest and channel memory, with source,
+  version and validity, and holds no control in any state that could write one.
+- API content reaches the DOM only through `textContent`, safe element
+  properties and `URLSearchParams`; there is no `innerHTML` anywhere in the
+  script. A hostile title renders as text in the card, the inspector, the
+  confirmation and every accessible name.
+- Answers over 1000 bytes are now gzipped when the client asks — `/`, `/web/…`,
+  `/api/…`, the playlists and the guide — which is what the browser actually
+  downloads; the sources stay readable on disk because there is no build step to
+  make them otherwise. Media is deliberately excluded: `/media/…`,
+  `/station/seg/…` and `/api/stream/…` are already-compressed bytes that gzip
+  makes *larger*, and any request carrying a `Range` header is passed through
+  untouched on every path, because a compressed `206` describes one length in
+  `Content-Range` and carries another — which is a player that can no longer
+  seek.
+
+**Views and navigation**
+- An unknown or empty hash is replaced — not pushed — with `#/overview`; the
+  skip link's `#main` is still an ordinary in-page jump; deep links, back and
+  forward all work because the hash alone picks the view and page state alone
+  decides what it shows.
+- Below 760px the sidebar becomes a horizontally scrolling tab row; below
+  480px controls go to one column and ids and URLs wrap. Nothing hides behind
+  a hover.
+- Library filters travel in the hash query
+  (`#/library?state=parked&kind=trivia&type=card&q=harbour`) and are read when
+  the view is entered, so an overview warning can link straight to the rows it
+  counted. Every filter change is written back with `location.replace`, so the
+  address bar is always a deep link to what is on screen and filtering costs
+  no history entries. `state` and `type` are checked against what
+  `GET /api/bumpers` accepts and an unknown value is dropped rather than
+  forwarded; the listing uses the server's own `state` filter — the same SQL
+  `/api/status` counts with — instead of `enabled=false`.
+
+**Overview**
+- A triage view: actionable warnings before healthy detail, each derived from
+  an explicit API field — no playable items, unrendered cards, a conform
+  backlog, missing ffmpeg, an invalid or fallen-back channel profile or music
+  manifest, and a failed job — each linking to the view that can fix it. Below
+  them: service, pool counts (total, playable, parked, dead, unrendered,
+  kinds), the station summary with compact now cards, configuration
+  (profile/music source and validity, channel memory) and the five most recent
+  jobs. A count this build of the server does not report shows "Not available
+  in this version." rather than a zero.
+- Overview reads `GET /api/status`, `GET /api/station` and `GET /api/jobs`;
+  opening it cannot itself create or advance a station timeline. Its jobs list
+  is the same shared registry Operations reads rather than only what this tab
+  started, so a job that failed elsewhere — another tab, or the schedule —
+  raises the same warning here, pointing at Operations.
+- The header carries the service pill, profile validity, the number of working
+  jobs in the merged page/server registry, and the age of the last read; the footer
+  carries the version (or "version not reported"), the *unprotected operator
+  API* notice and a link to `/docs`.
+- The 20-second refresh belongs to the two views that show live figures —
+  Overview and Station — and each reads only what it shows. Leaving a view
+  stops its clock and aborts the reads it left in flight; the refresh does
+  nothing while the tab is hidden and fires at once when it becomes visible
+  again.
+
+**Library and the item inspector**
+- The toolbar is labelled controls: search, type, kind (from
+  `status.by_kind`, with counts), state, page size (24/48/100 — the UI never
+  asks for more than the documented maximum), a grid/list layout switch and
+  **Clear filters**. Results say **Showing N of TOTAL** using the `total` the
+  API reports (a build that does not report one says so rather than letting
+  the loaded count stand in for the matched count), and **Load more** appends
+  the next page.
+- Every card states its pool state in words — playable, parked, dead,
+  unrendered — and carries one always-visible **Inspect** button; no card
+  carries a delete or enable control of its own. Video previews are muted,
+  `preload="metadata"` and controlled; only one preview plays at a time; a
+  live stream is a badge and a **Play live stream** button that builds the
+  player only when pressed, under a note that doing so makes the page a real
+  client of the station. Leaving the view pauses and detaches every media
+  element it was showing.
+- Cards carry compact **family** and **audio** chips instead of a run-on
+  creative line; a row the server resolved neither for still says so.
+- **Inspect** opens an item inspector — a native `<dialog>` with a fallback
+  panel where the browser has no `HTMLDialogElement` — which reads
+  `GET /api/bumpers/{id}?explain=true` once on open (a listing of 24 rows
+  never carries 24 explanations). It shows the preview and card answer,
+  identity, state, creative, the eligibility verdict with its ordered reasons
+  and every selection factor, provenance and music credits, creation/play
+  history, and a media URL with a **Copy** control that uses the Clipboard API
+  where the browser grants it and falls back to selecting the field where it
+  does not, saying which happened either way. Anything this build of the
+  server does not send reads "Not available in this version." rather than a
+  blank or a zero.
+- The **Selection** block draws the score as the product it is —
+  `base × season × daypart × recency × affinity × fatigue = score` — with
+  every term in monospace. A term the server sent as `0` (or `null`, its way
+  of saying "not finite") is marked and named as the **zero gate** under an
+  Attention badge, with the matching `reasons` token read out in words; where
+  a factor has no token of its own the block says so rather than inventing
+  one.
+- **Provenance & rights** shows registered and payload source, background
+  attribution and its licence links, and every field of the music-bed credits
+  snapshot — title, creator, licence, attribution, source page, licence URL
+  and bed id — so a licence that requires attribution shows the attribution it
+  requires. A field the snapshot carries but left empty reads "not recorded".
+  A row that records no source, no background and no credits says **"No
+  provenance recorded"** under an Attention badge and says out loud that this
+  is a note, not a block: every curation control stays enabled.
+- The inspector's primary action is the reversible one for the row's state:
+  **Disable from rotation**, **Enable** for a parked row (relaying the
+  server's `warning`), **Render card** for an unrendered card (a background
+  job that appears in Recent jobs), and **Run revive (all retired)** for a
+  dead one — named for the pool-wide sweep it actually is, because there is no
+  per-item recheck endpoint. A mutation updates only the row it changed and
+  refreshes the counts; it never resets the filters, the page offset or the
+  scroll position. Whatever the server answers back — the rotation that will
+  undo an enable, a file a delete could not finish removing — is rendered
+  inside the dialog as well as announced, because the live region sits outside
+  the modal and is inert under it.
+- Permanent deletion lives only in the inspector's danger zone and the
+  Library's own **Danger zone**. Both confirmations name the item, state the
+  file consequence in the endpoint's own terms, offer the `keep_file` /
+  `keep_files` the API documents, and put **Cancel** first and focus it;
+  dismissing the dialog any way at all — Cancel or Escape — is a refusal that
+  sends nothing. Deleting a whole kind additionally requires typing the kind
+  name exactly first.
+- Dialogs focus their heading on open, trap Tab only while modal, and return
+  focus to whatever opened them. Because the inspector opens from any surface
+  that draws a card, a route change closes it, aborts its read and releases
+  its media at the route level rather than in one view's exit — so leaving the
+  Composer tears down as thoroughly as leaving the Library. Grid/list layout
+  is the one thing the page keeps in `localStorage`, and a browser that
+  refuses storage still works.
+
+**Composer: a break you can review and play**
+- The Composer is a break composer rather than a pack preview. Labelled
+  controls — 15/30/60/90-second presets, a custom duration, tolerance, maximum
+  items, placement, and optional type checkboxes (tick none for every type) —
+  build one `GET /api/bumpers/fill` request. A control outside the range the
+  endpoint documents disables **Compose break** and says what is wrong in
+  words, so an invalid request is never sent, and composition is never
+  reproduced in the browser.
+- The answer is rendered in the server's order and never re-sorted: a
+  horizontal timeline on desktop, an ordered stack below 760px, each item
+  carrying its order number, title, kind, family, duration, audio, role, brand
+  mode and an **Inspect** button. One summary line reads
+  `Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance`, with the
+  sign always written out and "within tolerance" taken from the server's
+  `exact` rather than a comparison with zero. Rules the profile had to relax
+  to fill the gap are spelled out as sentences in an Attention panel instead
+  of hiding in a tooltip.
+- **Play sequence / Previous / Next / Stop** preview the break locally: one
+  medium at a time, advancing on the medium's own `ended` and on the declared
+  duration for a payload-only card, showing which item is on screen and how
+  much of it is left. A live stream in a break keeps its own Play button, so
+  the sequence never opens one by itself. Playback stops and resets on a new
+  composition and on leaving the view, taking its timers and its media with
+  it.
+- Disabling, enabling, rendering or deleting an item through the inspector
+  marks the break **Stale — recompose to reflect changes** and disables Play.
+  Nothing is substituted client-side: the sequence on screen stays exactly
+  what the server composed until it is composed again.
+
+**Station**
+- Says which of four things is wrong, in the operator's own words and from
+  explicit fields rather than a parsed sentence: *"Idle — no playlist client
+  has requested this channel recently."*, *"Unavailable — conform at least
+  one eligible item."*, *"Using slate — all playable candidates are currently
+  gated."*, and *"Cannot conform — ffmpeg is unavailable in the service."* A
+  station that could not be read says *"Station status unavailable; last
+  successful update was …"* and keeps the last good body on screen rather
+  than blanking it. Each channel shows now and next with their times and
+  remaining duration, plus the last playlist request and the lookahead the
+  channel reports — reading them never sets them, and a build that does not
+  send them says so instead of showing a zero.
+- All four handoff URLs — channel M3U, XMLTV guide, and the live and standby
+  HLS playlists — are read-only fields with a **Copy** control that uses the
+  Clipboard API where the browser grants it, falls back to selecting the
+  field where it does not, and says which happened either way, inline and out
+  loud. Focusing a URL still selects it.
+- A channel can be opened in a video element only where the browser reports
+  native HLS (`canPlayType("application/vnd.apple.mpegurl")`), and then only
+  behind an explicit **Open preview**, under a note saying that opening it
+  makes this page a real playlist client that may advance and report playout.
+  Chromium and Firefox, which generally cannot play HLS natively, are offered
+  the URL and *Open in external player (VLC, mpv, IINA)* instead. The preview
+  is built by the press, muted with `preload="none"`, never autoplays,
+  survives the 20-second refresh without reopening the stream, and is
+  detached when it is closed or the view is left.
+- A **Conform** panel shows conformed/eligible, pending, ffmpeg and the last
+  sweep with its counts and age, says out loud that conforming can be slow,
+  and carries **Conform now** — which disables only itself.
+- Gains a read-only **Configuration** block: the channel profile, the
+  music-bed manifest and channel memory, each with its source, version,
+  validity and own counts, under one status badge apiece — an invalid file or
+  a `fallback-after-error` source is an Attention, never a silent default. It
+  states that configuration is file-owned and edited on the server, and holds
+  no control that can write it — the only control it ever offers is the
+  panel's own **Retry** when the status read failed.
+
+**Operations: grouped actions, the action lock, and the jobs list**
+- Opens with the unauthenticated-API warning and groups every action by what
+  it costs — add material, generate cards, refresh sources, prepare output,
+  maintenance — with each group stating what it needs (grounded, the local
+  model, network, ffmpeg) before it is run. Every supported card kind is
+  offered, both housekeeping passes lead with the endpoint's own dry run, and
+  destructive work is linked rather than duplicated: bulk kind deletion stays
+  in the Library's danger zone, and `bumparr.prune --apply` and
+  `--drop-category` are named as the CLI-only operations they are. Only the
+  starter *run* stops to confirm.
+- Starting a job no longer freezes the whole panel: only the duplicate of the
+  running action is disabled — the Station's **Conform now** and the
+  Operations **Conform station** lock together, and nothing else does — so
+  unrelated controls stay usable within the server's own concurrency. A `429`
+  is reported as the server declining to start rather than as the work
+  failing, and never costs the operator the text they had typed.
+- **Recent jobs** is one list from two registries: the server's
+  `GET /api/jobs` merged by job id with the jobs this page started (which
+  knows a label before the POST answers and covers the synchronous actions
+  the registry never sees). The Overview shows the five newest as triage
+  lines; Operations shows them all, each with its created and updated age,
+  the bounded raw result or error in an expandable block, and **Retry** only
+  where running it a second time is safe — never for the starter, an ingest
+  of arbitrary text, or anything that deletes. Before `GET /api/jobs` first
+  answers, the empty state names only what this page started and says the
+  server's list has not been read yet; once it has answered, an empty list
+  reads as the server's own answer rather than a page that has looked idle.
+- Operations follows every working job in the list at `GET /api/request/{id}`
+  every three seconds, whether this page started it or picked it up from the
+  shared registry. A job started from any view — Station, Operations, the
+  inspector, the ask bar — is watched from wherever it started until that
+  view is left. A job this page did not start is folded into that same
+  three-second watch only while Operations itself is open; elsewhere — the
+  Overview, say — such a job is not polled at three seconds, and its status is
+  only as fresh as that view's own periodic read (the Overview's own
+  20-second `GET /api/jobs`). Either way, a lost read keeps the row
+  `status unknown` and backs off to ten seconds rather than inventing a
+  failure; a `404` ends the poll as expired and is never reported as success;
+  no five-minute cap is imposed. Reaching a terminal state always refreshes
+  the pool counts and the station, and refreshes the library listing too when
+  the library is the view on screen. No poll outlives the view that started
+  it — every watch is registered by job id and the shared route teardown ends
+  all of them — and a surface that starts a job takes over its watch rather
+  than polling it twice.
+- Retry is no longer a way around the action lock: a job that is still
+  running is offered none at all, and the button that is offered answers to
+  the same lock as the panel button for that action. The lock counts holders
+  rather than being a flag, so with two runs of one action in flight — the
+  server allows two — the first to finish no longer hands back a control the
+  second is still holding. Where a status *poll* has been lost, the row
+  offers **Check now**, which asks the server again instead of starting a
+  second copy of the work.
+- A jobs list that could not be refreshed after a good read is marked stale
+  with its age and a Retry, like every other read-backed region, instead of
+  showing rows that look current with the read failure nowhere on screen.
+- Which panel reports a running action is decided by the view it was started
+  from, not by the action — a conform retried from Operations reports into
+  the Operations panel even though the conform's own primary control lives on
+  the Station.
+
+**API additions**
+- `GET /api/jobs?limit=20` (1–50) is a pure, read-only view of the same
+  in-memory job registry `/api/request/{job_id}` polls: `{jobs: [{id,
+  request, status, created_at, updated_at, result}], count}`, newest first.
+  `request` is clipped to 120 characters (trailing `…` when cut); `result` is
+  clipped to 2000 characters as a string, or has its string values (including
+  one level of nesting) clipped the same way as a dict, or is stringified and
+  clipped for any other type — `null` stays `null` for a job still `working`.
+  Clipping happens only in the response; the registry keeps full values, and
+  internal fields such as `worker_active` never appear.
+- `GET /api/station` adds, per channel, explicit `state` (`active` \| `idle`
+  \| `unavailable`) and `reason` (`playing`, `slate`, `no_recent_client`, or
+  `nothing_conformed`), plus read-only `last_playlist_request` and
+  `lookahead_seconds`; and, at the top level, `last_conform` — null until a
+  conform sweep has completed once in this process, then that sweep's `{at,
+  conformed, failed, pruned, skipped, ffmpeg}`. All additions are additive;
+  `/api/station` remains pure and never extends a timeline or writes play
+  history.
+- `GET /api/status` adds `parked`, `dead`, and `unrendered` counts, computed
+  with the exact same SQL definitions `GET /api/bumpers?state=` uses, so the
+  two can never disagree.
+- `GET /api/bumpers` adds `total` (rows matching every filter before
+  `limit`/`offset`; `count` stays the page size) and an optional `state`
+  filter (`all` \| `playable` \| `parked` \| `dead` \| `unrendered`) that
+  composes with the existing `type`/`kind`/`enabled`/`q` filters. An invalid
+  `state` is a FastAPI 422.
+- `POST /api/pool/disable?bumper_id=` is the reversible counterpart to
+  `enable`: sets `enabled=0` only, never touching `health`, `uri`, or files.
+  Returns `{id, enabled, changed}`, plus a `warning` when the dated-card
+  rotation will re-enable an `on_this_day` card that belongs to today on its
+  next pass — the one case in the code that actually undoes a disable.
+- `POST /api/render/cards` accepts an optional `bumper_id` to render exactly
+  one card (404 unknown, 400 non-card, before any job starts) instead of a
+  batch pass; `bumparr.render_cards`'s CLI gained a matching `--id` flag.
+
+**Foundations: truthful state, performance and accessibility**
+- One `api()` wrapper normalizes every request: it checks the response,
+  parses JSON safely, extracts the server's `error`, and throws a bounded
+  single-line message with a status. Ordinary reads time out after 15 s — the
+  deadline and the caller's own cancel cover reading the body as well as
+  reaching the server, so a reply whose body stops arriving fails in 15 s
+  instead of leaving a panel loading for ever; job POSTs opt out, because the
+  job id returns immediately and polling owns the long wait.
+- A lost status read is never reported as a failed job: polling keeps
+  `status unknown`, backs off to 10 s and keeps asking; only a 404 ends it,
+  and no five-minute success is invented. The ask bar and the Actions panel
+  share one poller, and both hand their controls back as soon as a read
+  cannot reach the server, offering **Check now** and **Stop checking** while
+  checking continues in the background. A superseded job stops being polled
+  and cannot overwrite newer feedback. The ask bar's controls are held in
+  state rather than in the elements, so leaving Operations mid-ingest hands
+  them back: returning shows a usable form, and the result line reports what
+  the jobs registry now says about the ingest — which is still running — in
+  place of an ending nobody watched.
+- Library search is debounced 250 ms, superseded reads are aborted, and
+  answers older than the current filter generation are discarded.
+- Client state is one explicit object divided by concern; rendering is safe
+  to repeat and containers are cleared with `replaceChildren()`. Styling uses
+  the documented token set (`--bg`/`--surface-*`/`--accent`/`--focus`/spacing)
+  with system sans and monospace faces and no remote assets.
+- The 256 KiB (262,144 B) uncompressed budget for `index.html` + `style.css`
+  + `app.js` is a revision of an original 150 KiB, which measurement showed
+  unreachable without destroying the comments and structure this plan asks to
+  keep: 226,286 B at the audit base, 169,722 B with every comment stripped,
+  and still 156,526 B with all indentation and blank lines gone too.
+  `node --test bumparr/web/app.test.js` asserts the three-file total against
+  the revised cap. Gzip (above) is what actually crosses the wire.
+- `docs/FRONTEND_PLAN.md` is linked from the docs index, the alignment plan,
+  and the API dashboard section.
 
 **Truthful channel memory and local operator messages**
 - `bumparr/generators/channel_memory.py` builds `channel_statistics`,

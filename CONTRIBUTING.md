@@ -63,7 +63,9 @@ OpenAI-compatible endpoint.
   endpoints → `docs/API.md`, settings → `docs/CONFIG.md` + `.env.example`,
   CLI flags → `docs/CLI.md`, schema → `docs/SCHEMA.md`, the scoring model →
   `docs/ROTATION.md`, card rendering → `docs/RENDERING.md`, station behaviour →
-  `docs/STATION.md`.
+  `docs/STATION.md`. Generation changes also update
+  `docs/GENERATION_PLAN.md` or `docs/GENERATION_IMPLEMENTATION_STATUS.md` and
+  preserve the preflight/review gate and disabled-until-approved contract.
 
 - **CI has no ffmpeg/ffprobe.** Any test that reaches a subprocess must mock
   it; the station tests show the pattern in `tests/test_station_conform.py`'s

@@ -26,6 +26,12 @@ that has no idea where the playlist came from.
 PUBLIC_URL=https://bumpers.example.com
 ```
 
+Generated video candidates are not automatically integrations outputs: they
+remain disabled and excluded from playlists/station playback until an operator
+reviews and approves them in the dashboard. The generation worker and provider
+adapters are opt-in; ordinary library, composer, and station integrations do
+not call a provider.
+
 ## The three ways out
 
 | Endpoint | Gives you | Use it when |

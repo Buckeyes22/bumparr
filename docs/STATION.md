@@ -158,7 +158,7 @@ test cards, and live windows.` Times use the process's local-zone offset.
 | `GET /station/seg/{key}/{n}.ts` | Static conformed segment from `ASSET_ROOT/.cache/station`, served as `video/mp2t`. |
 | `GET /station/channel.m3u` | M3U with live and standby `#EXTINF` lines, `tvg-id` values `bumparr.live` and `bumparr.standby`, `tvg-name`, `group-title="Bumparr"`, and absolute URLs. |
 | `GET /station/guide.xml` | XMLTV guide described above. |
-| `GET /api/station` | Per-channel `now` and `next` objects (`id`, `title`, `kind`, `started_at`, `ends_at`), plus `conformed`, `eligible`, `pending`, and the three station URLs. |
+| `GET /api/station` | Per-channel `now` and `next` objects (`id`, `title`, `kind`, `started_at`, `ends_at`), plus `conformed`, `eligible`, `pending`, `last_conform`, and the three station URLs. |
 | `POST /api/station/conform` | Starts a conform pass as a background job and returns its job id. |
 
 The `now`/`next` object is null when there is no corresponding entry. Reading
@@ -166,6 +166,15 @@ station status does not create or advance a channel timeline. HLS
 playlists use absolute segment URLs based on `PUBLIC_URL` or the request; the
 segment mount uses `check_dir=False`, so the app can start before the cache
 exists.
+
+Each channel in `GET /api/station` also carries diagnostics: `state`
+(`active` \| `idle` \| `unavailable`), `reason` (`playing`, `slate`,
+`no_recent_client`, or `nothing_conformed`), `last_playlist_request` (epoch
+seconds or null), and `lookahead_seconds` — all read-only, taken from the
+channel under its lock without extending the timeline. Top-level
+`last_conform` is null until a conform sweep has completed once in this
+process, then holds that sweep's `{at, conformed, failed, pruned, skipped,
+ffmpeg}`.
 
 ## Settings
 

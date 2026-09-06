@@ -70,7 +70,10 @@ with none of these set; the model only diversifies the model-generated kinds.
 
 This is the durable MiniMax H3 / OpenRouter video system. It is **not** the
 legacy `LLM_BASE` invented-card path and it does **not** download local H3
-weights. Status and remaining work: [GENERATION_IMPLEMENTATION_STATUS.md](GENERATION_IMPLEMENTATION_STATUS.md).
+weights or provide local H3 hosting. Paid create is bound to a fresh server
+preflight fingerprint; current caps, model capabilities, pricing, UTC budget
+day, and credentials are rechecked before enqueue. Status and remaining work:
+[GENERATION_IMPLEMENTATION_STATUS.md](GENERATION_IMPLEMENTATION_STATUS.md).
 A key with `GENERATION_ENABLED` anything other than exact `1` never spends.
 
 | Variable | Default | Effect |

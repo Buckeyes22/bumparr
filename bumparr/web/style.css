@@ -1,151 +1,621 @@
-:root { --bg:#14171c; --panel:#1c2027; --edge:#2a2f38; --fg:#dfe3e8; --dim:#8993a0;
-  --accent:#5db3a0; --accent2:#c9a15d; }
-* { box-sizing:border-box; margin:0; padding:0; }
-body { background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-
-header { display:flex; align-items:center; gap:1rem; padding:1rem 1.5rem;
-  background:var(--panel); border-bottom:2px solid var(--accent); }
-.nav { display:flex; gap:.4rem; }
-.nav a { color:var(--dim); text-decoration:none; border:1px solid var(--edge);
-  border-radius:999px; padding:.2rem .7rem; font-size:.8rem; }
-.nav a[aria-current="page"] { color:var(--accent); border-color:var(--accent); }
-.generation-view { display:grid; grid-template-columns:1fr 1fr; gap:1rem;
-  padding:1.5rem; max-width:1200px; margin:0 auto; }
-.generation-view[hidden] { display:none; }
-#overview-view[hidden] { display:none; }
-.gen-job, .gen-card { overflow-wrap:anywhere; margin-bottom:1rem; }
-.gen-card video { max-width:100%; }
-.generation-view select, .generation-view textarea { max-width:100%; }
-@media (max-width:700px) {
-  header { flex-wrap:wrap; }
-  .generation-view { grid-template-columns:minmax(0, 1fr); }
-  .generation-view .wide { grid-column:1 / -1; }
+/* Bumparr operator dashboard.
+   A quiet broadcast control surface: utilitarian, legible, subordinate to the
+   media it reviews. Tokens only — no scattered colour literals. */
+:root {
+  --bg: #0e1116;
+  --surface-1: #161b22;
+  --surface-2: #1d242d;
+  --surface-3: #27313d;
+  --border: #34404d;
+  --text: #edf2f7;
+  --muted: #9aa8b7;
+  --accent: #72d6bd;
+  --accent-strong: #45bfa3;
+  --warning: #e8ba63;
+  --danger: #ef7d7d;
+  --info: #83aef1;
+  --focus: #b8e8ff;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* derived from --bg: an overlay for controls that sit on top of media */
+  --scrim: rgba(14, 17, 22, .74);
 }
-.gen-banner, .gen-privacy, .gen-estimate { color:var(--accent2); font-size:.85rem; margin:.4rem 0; }
-.gen-status { color:var(--dim); font-size:.85rem; }
-.gen-row { display:flex; flex-wrap:wrap; gap:1rem; margin:.6rem 0; }
-textarea#gen-brief, select#gen-model { width:100%; background:#0f1216; color:var(--fg);
-  border:1px solid var(--edge); border-radius:5px; padding:.5rem; font:inherit; margin:.3rem 0 .8rem; }
-.gen-job, .gen-card { border:1px solid var(--edge); border-radius:6px; padding:.7rem; margin:.4rem 0; }
-.gen-job video, .gen-card video { width:100%; max-height:280px; background:#000; }
+* { box-sizing:border-box; margin:0; padding:0; }
+[hidden] { display:none !important; }
+body { background:var(--bg); color:var(--text); font:14px/1.5 var(--font-ui); }
+
+/* Keyboard first: one visible focus ring everywhere, and a way past the header. */
+:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:var(--radius-sm); }
+.skip-link { position:absolute; left:var(--space-2); top:-3rem; z-index:10;
+  background:var(--surface-3); color:var(--text); border:1px solid var(--muted);
+  border-radius:var(--radius-sm); padding:var(--space-2) var(--space-3); }
+.skip-link:focus { top:var(--space-2); }
+/* Clicking into the region is not an arrival worth ringing; following the
+   skip link with a keyboard is, and the rule above draws it. */
+main:focus:not(:focus-visible) { outline:none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration:0.01ms !important;
+    animation-duration:0.01ms !important;
+    animation-iteration-count:1 !important;
+    scroll-behavior:auto !important;
+  }
+}
+
+header { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-4);
+  padding:var(--space-4) var(--space-6);
+  background:var(--surface-1); border-bottom:2px solid var(--accent); }
 .brand { font-size:1.4rem; font-weight:800; letter-spacing:.02em; color:var(--accent); }
-.tag { color:var(--dim); font-size:.85rem; }
-.pill { margin-left:auto; background:#0f1216; border:1px solid var(--edge); border-radius:999px;
-  padding:.3rem .9rem; color:var(--dim); font-size:.8rem; }
+.tag { color:var(--muted); font-size:.85rem; }
+.headmeta { margin-left:auto; display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--space-3); }
+.pill { background:var(--bg); border:1px solid var(--border);
+  border-radius:999px; padding:var(--space-1) var(--space-3); font-size:.8rem; }
+.hmeta { color:var(--muted); font-size:.78rem; font-family:var(--font-mono); }
 
-main { display:grid; grid-template-columns:1fr 1fr; gap:1rem; padding:1.5rem; max-width:1200px; margin:0 auto; }
-.panel { background:var(--panel); border:1px solid var(--edge); border-radius:8px; padding:1.2rem; }
-.panel.wide { grid-column:1 / -1; }
-h2 { font-size:1rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:1rem;
-  display:flex; align-items:center; gap:.6rem; }
-h3 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:1rem 0 .6rem; }
+/* Sidebar on the desktop, a scrolling tab row on a phone. Never a hover menu:
+   every workflow stays one visible click away on both. */
+.shell { display:grid; grid-template-columns:190px minmax(0,1fr); gap:var(--space-6);
+  align-items:start; max-width:1400px; margin:0 auto;
+  padding:var(--space-6) var(--space-6) var(--space-4); }
+.viewnav { display:flex; flex-direction:column; gap:var(--space-1);
+  position:sticky; top:var(--space-4); }
+.viewnav a { display:flex; align-items:center; min-height:44px;
+  padding:var(--space-2) var(--space-3); color:var(--muted); text-decoration:none;
+  border-left:3px solid transparent; border-radius:var(--radius-sm);
+  transition:background-color .15s ease, color .15s ease; }
+.viewnav a:hover { color:var(--text); background:var(--surface-1); }
+.viewnav a[aria-current="page"] { color:var(--text); background:var(--surface-2);
+  border-left-color:var(--accent); font-weight:600; }
 
-.totals { display:flex; gap:1.5rem; margin-bottom:1rem; }
-.totals .num { font-size:2rem; font-weight:800; color:var(--fg); }
-.totals .num small { display:block; font-size:.7rem; font-weight:400; color:var(--dim); text-transform:uppercase; letter-spacing:.08em; }
+main { display:block; min-width:0; }
+.view { display:flex; flex-direction:column; gap:var(--space-4); }
+.viewhead { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-3); }
+.viewtools { display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--space-2); margin-left:auto; }
+.viewgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+  gap:var(--space-4); align-items:start; }
+.note { color:var(--muted); font-size:.85rem; }
+.panel { background:var(--surface-1); border:1px solid var(--border);
+  border-radius:var(--radius-md); padding:var(--space-4); min-width:0; }
+.viewgrid .panel.wide { grid-column:1 / -1; }
+h2 { font-size:1.15rem; letter-spacing:.01em; }
+h3 { font-size:1rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--muted); margin-bottom:var(--space-4); }
+h4 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
+  color:var(--muted); margin:var(--space-4) 0 var(--space-2); }
 
-.bars .bar { display:flex; align-items:center; gap:.6rem; margin:.3rem 0; }
-.bars .bar .name { width:70px; color:var(--dim); font-size:.8rem; }
-.bars .bar .track { flex:1; height:14px; background:#0f1216; border-radius:3px; overflow:hidden; }
-.bars .bar .fill { height:100%; background:var(--accent); }
-.bars .bar .n { width:40px; text-align:right; font-variant-numeric:tabular-nums; }
+/* The live region is the primary short-result surface; the log is scrollback. */
+.live-region { min-height:1.4em; color:var(--text); font-size:.85rem;
+  margin-bottom:var(--space-3); }
 
-.kinds { display:flex; flex-wrap:wrap; gap:.4rem; }
-.kinds .chip { background:#0f1216; border:1px solid var(--edge); border-radius:4px; padding:.25rem .6rem; font-size:.8rem; }
-.kinds .chip b { color:var(--accent2); margin-left:.35rem; }
+/* Status: icon and word carry the meaning, colour only reinforces it. */
+.badge { display:inline-flex; align-items:center; gap:var(--space-2);
+  font-size:.8rem; }
+.badge-icon { font-weight:700; }
+.badge-word { text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
+.badge-detail { color:var(--muted); text-transform:none; letter-spacing:0; }
+.badge-healthy { color:var(--accent); }
+.badge-working { color:var(--info); }
+.badge-attention { color:var(--warning); }
+.badge-failed { color:var(--danger); }
+.badge-offline { color:var(--muted); }
+.badge-offline .badge-icon { color:var(--danger); }
 
-.actions { display:flex; flex-direction:column; gap:1rem; }
-.action-group { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
-.action-group .lbl { width:100%; color:var(--dim); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; }
-button, .linkbtn { background:#0f1216; color:var(--fg); border:1px solid var(--edge); border-radius:5px;
-  padding:.45rem .8rem; font:inherit; font-size:.85rem; cursor:pointer; text-decoration:none; }
+/* One region, one state. */
+.panel-state { display:flex; flex-wrap:wrap; align-items:center;
+  gap:var(--space-3); margin-bottom:var(--space-3); }
+.panel-state:empty { display:none; }
+.panel-state-msg { color:var(--muted); font-size:.85rem; }
+
+/* Every primary or destructive target clears 44x44px, in one place. */
+.panel-retry, .pv-inspect, .pv-play, .danger-btn, .libbar #clear-filters,
+#more, .dlg-actions button, .insp-primary, .insp-secondary, .insp-copy-btn,
+.search, .libbar select, .dlg input[type="text"],
+#shuffle, #inspector-close, .linkbtn, .cmp-presets button { min-height:44px; }
+/* The one place a height alone is not enough: a "15s" preset is 37px wide. */
+.cmp-presets button { min-width:44px; }
+/* A 13px checkbox is not a target, and one of these sits inside a destructive
+   confirmation. The box is sized up and its label is the rest of the row, so
+   the pair clears 44px however the row wraps. */
+.field-check { min-height:44px; }
+.field-check > input[type="checkbox"] { width:24px; height:24px; }
+.field-check > label { display:flex; align-items:center; min-height:44px; }
+
+.totals { display:flex; flex-wrap:wrap; gap:var(--space-4) var(--space-6);
+  margin-bottom:var(--space-4); }
+.totals .num { font-size:1.8rem; font-weight:800; font-variant-numeric:tabular-nums; }
+.totals .num small { display:block; font-size:.7rem; font-weight:400; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.08em; }
+.totals-missing { width:100%; color:var(--muted); font-size:.75rem;
+  font-family:var(--font-mono); overflow-wrap:anywhere; }
+
+/* Warnings come before the healthy detail: one line, one link, one fix. */
+.warnings { list-style:none; display:flex; flex-direction:column; gap:var(--space-1); }
+.warning { display:flex; align-items:flex-start; gap:var(--space-2); }
+.warning-icon { color:var(--warning); font-weight:700; line-height:1.6; }
+.warning-link { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-2);
+  flex:1; min-width:0; color:var(--text); text-decoration:none;
+  padding:var(--space-2); min-height:44px; border-radius:var(--radius-sm);
+  border:1px solid transparent; }
+.warning-link:hover { border-color:var(--accent); background:var(--surface-2); }
+.warning-msg { overflow-wrap:anywhere; }
+.warning-go { color:var(--accent); font-size:.78rem; text-transform:uppercase;
+  letter-spacing:.06em; white-space:nowrap; }
+
+/* A labelled fact. Values that can be an id, a URL or a server string wrap
+   rather than pushing the panel sideways. */
+.summary { display:flex; flex-direction:column; gap:var(--space-1); }
+.summary-row { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  align-items:baseline; font-size:.85rem; }
+.summary-row .lbl { min-width:6.5rem; color:var(--muted); }
+.summary-row .val { font-family:var(--font-mono); overflow-wrap:anywhere;
+  min-width:0; }
+
+.nowcards { display:flex; flex-wrap:wrap; gap:var(--space-2); margin-top:var(--space-3); }
+.nowcard { flex:1; min-width:0; background:var(--surface-2); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:var(--space-2); }
+.nowcard-ch { display:block; color:var(--muted); font-size:.7rem;
+  text-transform:uppercase; letter-spacing:.08em; }
+.nowcard-now { display:block; font-size:.8rem; font-family:var(--font-mono);
+  overflow-wrap:anywhere; }
+
+/* Jobs this page started. The server keeps no list yet, so this one says so. */
+.joblist { list-style:none; display:flex; flex-direction:column; gap:var(--space-2); }
+.jobrow { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-3);
+  padding-bottom:var(--space-2); border-bottom:1px solid var(--border); }
+.jobrow-age { color:var(--muted); font-size:.75rem; font-family:var(--font-mono); }
+.jobrow-result { color:var(--muted); font-size:.75rem; font-family:var(--font-mono);
+  overflow-wrap:anywhere; min-width:0; flex:1; }
+
+.bars .bar { display:flex; align-items:center; gap:var(--space-2); margin:var(--space-1) 0; }
+.bars .bar .name { width:70px; color:var(--muted); font-size:.8rem; }
+.bars .bar .track { flex:1; height:14px; background:var(--bg);
+  border-radius:var(--radius-sm); overflow:hidden; }
+.bars .bar .fill { height:100%; background:var(--accent); display:block; }
+.bars .bar .n { width:40px; text-align:right; font-family:var(--font-mono);
+  font-variant-numeric:tabular-nums; }
+
+.actions { display:flex; flex-direction:column; gap:var(--space-4); }
+.action-group { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); }
+.action-group .lbl { width:100%; margin:0; color:var(--muted); font-size:.75rem;
+  text-transform:uppercase; letter-spacing:.08em; font-weight:600; }
+/* A control's edge is a boundary, not a divider: --border is 1.64:1 on a
+   panel, which fails WCAG 1.4.11, so every interactive edge on this page is
+   drawn in --muted (7.13:1) and --border keeps the dividers it was picked for. */
+button, .linkbtn { background:var(--surface-2); color:var(--text);
+  border:1px solid var(--muted); border-radius:var(--radius-sm);
+  padding:var(--space-2) var(--space-3); font:inherit; font-size:.85rem;
+  cursor:pointer; text-decoration:none; transition:border-color .15s ease; }
+.linkbtn { display:inline-flex; align-items:center; }
 button:hover, .linkbtn:hover { border-color:var(--accent); }
-button em { color:var(--dim); font-style:normal; font-size:.75rem; }
-button:disabled { opacity:.5; cursor:wait; }
-.mini { font-size:.75rem; padding:.2rem .5rem; }
+button em { color:var(--muted); font-style:normal; font-size:.75rem; }
+/* Disabled here means "not applicable", never "busy": a wait cursor would say
+   the server is working when the answer is usually "choose a kind first". */
+button:disabled { opacity:.55; cursor:not-allowed; }
+.mini { font-size:.75rem; padding:var(--space-1) var(--space-2); }
 
-.log { background:#0b0d10; border:1px solid var(--edge); border-radius:5px; padding:.7rem;
-  margin-top:1rem; font:12px/1.4 ui-monospace,Menlo,monospace; color:var(--dim); max-height:120px; overflow:auto; white-space:pre-wrap; }
+.log { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-2); font:12px/1.4 var(--font-mono); color:var(--muted);
+  max-height:120px; overflow:auto; white-space:pre-wrap; }
 
-.preview { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:.8rem; }
-.pv-card { background:#0f1216; border:1px solid var(--edge); border-radius:6px; overflow:hidden; }
-.pv-card video, .pv-card img { width:100%; height:120px; object-fit:cover; background:#000; display:block; }
-.pv-card .pv-body { padding:.5rem .6rem; }
-.pv-card .pv-kind { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); }
-.pv-card .pv-title { font-size:.8rem; color:var(--fg); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pv-card .pv-meta { font-size:.7rem; color:var(--dim); margin-top:.2rem; }
-.pv-card.pv-textcard { min-height:170px; display:flex; flex-direction:column; align-items:center;
-  justify-content:center; text-align:center; padding:1rem; }
-.pv-card.pv-textcard .tc { font-size:.85rem; color:var(--fg); }
-
-@media (max-width:820px){ main{ grid-template-columns:1fr; } }
-
-footer { text-align:center; padding:1.5rem; color:var(--dim); font-size:.8rem; border-top:1px solid var(--edge); margin-top:1rem; }
-footer a { color:var(--accent); text-decoration:none; }
-footer a:hover { text-decoration:underline; }
-
-/* Browse UI */
-.search { margin-left:auto; background:#0f1216; border:1px solid var(--edge); border-radius:5px;
-  color:var(--fg); font:inherit; font-size:.85rem; padding:.35rem .7rem; width:180px; }
-.filters { display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1rem; }
-.fchip { background:#0f1216; border:1px solid var(--edge); border-radius:999px; padding:.3rem .8rem;
-  font-size:.8rem; color:var(--dim); cursor:pointer; }
-.fchip:hover { border-color:var(--accent); }
-.fchip.on { background:var(--accent); color:#0b0d10; border-color:var(--accent); font-weight:600; }
-.fchip b { margin-left:.4rem; opacity:.7; }
-.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:.8rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:var(--space-3); }
+.pv-card { position:relative; background:var(--surface-2); border:1px solid var(--border);
+  border-radius:var(--radius-sm); overflow:hidden; min-width:0; }
+.pv-card video, .pv-card img { width:100%; height:120px; object-fit:cover;
+  background:var(--bg); display:block; }
+.pv-card .pv-body { padding:var(--space-2); }
+.pv-card .pv-kind { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--accent); }
+.pv-card .pv-title { font-size:.8rem; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; }
+.pv-card .pv-meta { font-size:.7rem; color:var(--muted); margin-top:var(--space-1);
+  font-family:var(--font-mono); }
+.pv-card.pv-textcard { min-height:170px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; text-align:center; padding:var(--space-4); }
+.pv-card.pv-textcard .tc { font-size:.85rem; white-space:pre-line; line-height:1.35; }
 .pv-stream { height:120px; display:flex; align-items:center; justify-content:center;
-  background:linear-gradient(135deg,#1a2a26,#0f1216); color:var(--accent2); font-weight:700; letter-spacing:.1em; }
-#more-row { text-align:center; margin-top:1rem; }
-.empty { color:var(--dim); padding:2rem; text-align:center; grid-column:1/-1; }
-.pv-card.pv-textcard .tc { white-space:pre-line; line-height:1.35; }
+  background:var(--surface-3); color:var(--warning); font-weight:700; letter-spacing:.1em;
+  text-align:center; padding:0 var(--space-2); }
+.pv-dead { color:var(--danger); letter-spacing:.04em; }
+.pv-factors, .pv-credits, .pv-freshness {
+  font-size:.7rem; color:var(--muted); margin-top:var(--space-1);
+  padding:0 var(--space-2); font-family:var(--font-mono); overflow-wrap:anywhere; }
+
+/* Family and audio: the two labels a shelf of cards is scanned by, each one a
+   named chip rather than a run-on line. */
+.pv-chips { display:flex; flex-wrap:wrap; gap:var(--space-1);
+  margin-top:var(--space-1); padding:0 var(--space-2); }
+.pv-chip { display:inline-flex; align-items:baseline; gap:var(--space-1);
+  background:var(--surface-3); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:0 var(--space-1); font-size:.7rem;
+  min-width:0; }
+.pv-chip-k { color:var(--muted); }
+.pv-chip-v { font-family:var(--font-mono); overflow-wrap:anywhere; }
+.pv-chip-none { font-size:.7rem; color:var(--muted);
+  font-family:var(--font-mono); }
+
+/* The pool state in words, with the card text rather than over the media. */
+.pv-state { padding:0 var(--space-2) var(--space-1); }
+
+/* The card's one action: always visible, never on hover, never an icon alone. */
+.pv-actions { display:flex; gap:var(--space-2); padding:var(--space-2);
+  border-top:1px solid var(--border); }
+.pv-inspect { flex:1; font-size:.8rem; }
+
+/* A live stream is a badge and a Play button until someone presses it: no
+   element on this card holds the URL before that. */
+.pv-stream-box { display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:var(--space-2); background:var(--surface-3);
+  padding:var(--space-3); }
+.pv-stream-box video { width:100%; height:120px; }
+.pv-live-note { color:var(--muted); font-size:.7rem; text-align:center;
+  text-transform:none; letter-spacing:0; }
+
+/* Deletion sits apart from everything it could be mistaken for. */
+.danger-zone { border-color:var(--danger); }
+.danger-btn { border-color:var(--danger); color:var(--danger);
+  background:var(--surface-2); }
+.danger-btn:hover:not(:disabled) { background:var(--danger); color:var(--bg);
+  border-color:var(--danger); }
+.danger-btn:disabled { color:var(--muted); border-color:var(--border); opacity:1; }
+
+footer { display:flex; flex-wrap:wrap; justify-content:center; gap:var(--space-2) var(--space-6);
+  padding:var(--space-6); color:var(--muted); font-size:.8rem;
+  border-top:1px solid var(--border); margin-top:var(--space-4); }
+footer a { color:var(--accent); }
+.fver { font-family:var(--font-mono); }
+/* Hiding a control is not authorization: the API is open, and says so here. */
+.notice { color:var(--warning); }
+
+/* Browse UI. Every filter is a labelled control in a row that wraps; nothing
+   here carries a meaning its own label does not say. */
+.ask-label { color:var(--muted); font-size:.78rem;
+  text-transform:uppercase; letter-spacing:.06em;
+  display:block; margin-bottom:var(--space-2); }
+.libbar { display:flex; flex-wrap:wrap; align-items:flex-end;
+  gap:var(--space-3); margin-bottom:var(--space-3); }
+.field { display:flex; flex-direction:column; gap:var(--space-1); min-width:0; }
+.field > label { color:var(--muted); font-size:.72rem; text-transform:uppercase;
+  letter-spacing:.06em; }
+.field-check { flex-direction:row; align-items:center; gap:var(--space-2); }
+.field-check > label { text-transform:none; letter-spacing:0; font-size:.85rem;
+  color:var(--text); order:2; }
+.search, .libbar select, .dlg input[type="text"] {
+  background:var(--bg); border:1px solid var(--muted);
+  border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:.85rem;
+  padding:var(--space-2); min-width:140px; }
+.libcounts { color:var(--muted); font-size:.8rem; font-family:var(--font-mono);
+  margin-bottom:var(--space-3); overflow-wrap:anywhere; }
+#more-row { text-align:center; margin-top:var(--space-4); }
+.empty { color:var(--muted); padding:var(--space-8); text-align:center; grid-column:1/-1; }
+
+/* The list density. Same cards, one per row, media beside the text. */
+.grid-list { grid-template-columns:1fr; }
+.grid-list .pv-card { display:grid; grid-template-columns:180px minmax(0,1fr) auto;
+  align-items:start; }
+.grid-list .pv-card.pv-textcard { grid-template-columns:1fr; min-height:0; }
+.grid-list .pv-card video, .grid-list .pv-card img { height:100%; max-height:120px; }
+.grid-list .pv-actions { border-top:none; border-left:1px solid var(--border); }
+
+/* Dialogs. One rule shows both the native element and the fallback panel: the
+   UA sets `open` on showModal, and app.js sets the same attribute by hand when
+   the browser has no HTMLDialogElement to call it on. */
+dialog.dlg { display:none; }
+dialog.dlg[open] { display:block; }
+.dlg { max-width:640px; width:calc(100% - var(--space-8)); max-height:86vh;
+  overflow:auto; background:var(--surface-1); color:var(--text);
+  border:1px solid var(--border); border-radius:var(--radius-md);
+  padding:var(--space-4); }
+.dlg::backdrop { background:var(--scrim); }
+/* Without a native dialog there is no top layer and no ::backdrop, so the
+   fallback panel — the one app.js stamps role="dialog" on — places and dims
+   itself. A native dialog is left entirely to the UA's modal positioning. */
+dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
+  transform:translate(-50%,-50%); box-shadow:0 0 0 100vmax var(--scrim); }
+.dlg-head { display:flex; align-items:baseline; gap:var(--space-3);
+  margin-bottom:var(--space-3); }
+.dlg-head h2 { flex:1; min-width:0; overflow-wrap:anywhere; }
+.dlg-title { font-size:1.05rem; margin-bottom:var(--space-3); overflow-wrap:anywhere; }
+.dlg-line { color:var(--muted); font-size:.85rem; margin-bottom:var(--space-2);
+  overflow-wrap:anywhere; }
+.dlg-body { display:flex; flex-direction:column; gap:var(--space-4); }
+.dlg-actions { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-top:var(--space-4); }
+.dlg-confirm { font-weight:600; }
+.dlg video, .dlg img { width:100%; max-height:220px; object-fit:contain;
+  background:var(--bg); }
+
+/* Inspector blocks: one heading, then labelled facts. */
+.insp-block { border-top:1px solid var(--border); padding-top:var(--space-3);
+  display:flex; flex-direction:column; gap:var(--space-1); }
+.insp-h { font-size:.75rem; margin-bottom:var(--space-1); }
+.insp-note { color:var(--muted); font-size:.8rem; }
+.insp-none { color:var(--muted); font-size:.85rem; font-family:var(--font-mono); }
+.insp-card-text { background:var(--bg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:var(--space-3);
+  font:13px/1.4 var(--font-mono); white-space:pre-wrap; overflow-wrap:anywhere; }
+.insp-reasons { list-style:none; display:flex; flex-direction:column;
+  gap:var(--space-1); font-size:.85rem; }
+.insp-reasons li::before { content:"▸ "; color:var(--muted); }
+/* The score is a product, so it is drawn as one. Each term reuses .summary-row,
+   which already puts figures in the page's monospace; a term the product cannot
+   recover from is underlined AND named in the sentence below, never colour
+   alone. */
+.insp-eq { display:flex; flex-wrap:wrap; align-items:baseline; gap:var(--space-2);
+  margin:var(--space-1) 0; }
+.insp-eq .summary-row { gap:var(--space-1); font-size:.8rem; }
+.insp-eq .summary-row .lbl { min-width:0; }
+.insp-eq-op { color:var(--muted); font-family:var(--font-mono); }
+.insp-term-zero { border-bottom:2px solid var(--warning); }
+.insp-term-zero .lbl, .insp-term-zero .val { color:var(--warning); }
+.insp-actions { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-top:var(--space-2); }
+.insp-primary { font-weight:600; border-color:var(--accent);
+  color:var(--accent); }
+.insp-primary:hover:not(:disabled) { background:var(--accent); color:var(--bg); }
+.insp-block.danger-zone { border:1px solid var(--danger);
+  border-radius:var(--radius-sm); padding:var(--space-3); }
+.insp-block input.url { width:100%; font-family:var(--font-mono); }
+/* Copy's outcome: reserved height, so saying it does not shift the block. */
+.insp-copy-btn { align-self:flex-start; }
+.insp-copy { min-height:1.4em; font-size:.8rem; }
 
 /* Natural-language ask bar */
-.askbar { background:linear-gradient(135deg,#1c2530,#1a1f27); border-color:var(--accent); }
-.ask-row { display:flex; gap:.6rem; }
-.ask { flex:1; background:#0b0d10; border:1px solid var(--edge); border-radius:6px; color:var(--fg);
-  font:inherit; font-size:1rem; padding:.7rem 1rem; }
-.ask:focus { outline:none; border-color:var(--accent); }
-#ask-go { background:var(--accent); color:#0b0d10; border:none; border-radius:6px; font-weight:700;
-  padding:0 1.4rem; font-size:.95rem; cursor:pointer; }
-#ask-go:disabled { opacity:.5; cursor:wait; }
-.ask-result { margin-top:.7rem; font-size:.9rem; min-height:1.2em; }
-.ask-result.working { color:var(--accent2); }
-.ask-result.done { color:var(--accent); }
-.ask-result.err { color:#e07a7a; }
-.ask-hints { margin-top:.6rem; color:var(--dim); font-size:.78rem; }
-.ask-hints b { color:var(--fg); font-weight:600; }
+.askbar { border-color:var(--accent); }
+.ask-row { display:flex; flex-wrap:wrap; gap:var(--space-2); }
+.ask { flex:1; min-width:200px; background:var(--bg); border:1px solid var(--muted);
+  border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:1rem;
+  padding:var(--space-3); }
+#ask-go { background:var(--accent); color:var(--bg); border:1px solid var(--accent);
+  border-radius:var(--radius-sm); font-weight:700; min-height:44px;
+  padding:0 var(--space-6); font-size:.95rem; }
+#ask-go:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
+.ask-result { margin-top:var(--space-2); font-size:.9rem; min-height:1.4em; }
+.ask-hints { margin-top:var(--space-2); color:var(--muted); font-size:.78rem; }
+.ask-hints b { color:var(--text); font-weight:600; }
 
-/* Delete controls. Deliberately low-contrast until hover: destructive actions
-   should be reachable without being the first thing the eye lands on. */
-.pv-card { position: relative; }
-.pv-del { position:absolute; top:.35rem; right:.35rem; z-index:3;
-  border:0; border-radius:50%; width:1.55rem; height:1.55rem; line-height:1;
-  background:rgba(0,0,0,.55); color:rgba(255,255,255,.55); cursor:pointer;
-  font-size:.85rem; opacity:0; transition:opacity .15s ease, background .15s ease, color .15s ease; }
-.pv-card:hover .pv-del { opacity:1; }
-.pv-del:hover { background:#a33; color:#fff; }
-.pv-card.gone { opacity:0; transform:scale(.94); transition:opacity .2s ease, transform .2s ease; }
+.memory-status { font-size:.75rem; color:var(--muted); margin-top:var(--space-2);
+  font-family:var(--font-mono); overflow-wrap:anywhere; }
 
-/* The park-recovery control. Placed like .pv-del — absolute, so it cannot push
-   a text card's centred content around — but bottom-left and always visible:
-   it only renders on rows that are actually parked, where turning them back on
-   is the useful thing to do, not the dangerous one. */
-.pv-card .pv-enable { position:absolute; left:.35rem; bottom:.35rem; z-index:3;
-  padding:.15rem .55rem; font-size:.7rem; line-height:1.3;
-  background:rgba(0,0,0,.6); border-color:var(--accent); color:var(--accent); }
-.pv-card .pv-enable:hover { background:var(--accent); color:#0b0d10; }
+.station-row, .station-url { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  align-items:center; margin:var(--space-1) 0; }
+.station-body > .badge { margin-bottom:var(--space-2); }
+.station-row .lbl, .station-url .lbl { min-width:6.5rem; color:var(--muted); }
+.station-url input.url { flex:1; min-width:0; font-family:var(--font-mono);
+  font-size:.85rem; background:var(--bg); color:var(--text);
+  border:1px solid var(--muted); border-radius:var(--radius-sm); padding:var(--space-1); }
+.station .muted, .station-body .muted { color:var(--muted); }
 
-.fchip.danger { border-color:#a33; color:#e28; }
-.fchip.danger:hover { background:#a33; color:#fff; }
+/* Configuration, read-only: one group per file the server loaded at startup. */
+.cfg-group { display:flex; flex-direction:column; gap:var(--space-1);
+  border-top:1px solid var(--border); padding-top:var(--space-2);
+  margin-top:var(--space-2); }
+#station-config > .note { margin-bottom:var(--space-2); }
 
-.pv-creative, .pv-factors, .pv-relax, .pv-credits, .pv-freshness { font-size:.7rem; color:var(--dim); margin-top:.2rem; }
-.memory-status { font-size:.75rem; color:var(--dim); margin-top:.6rem; }
-.pack-summary { margin-bottom:.8rem; font-size:.85rem; }
-.pack-summary .attn { color:var(--accent2); margin-top:.3rem; }
-.ask-result.err, .preview-err { color:#e07a7a; }
+/* Below 760px the sidebar becomes a horizontally scrolling tab row under the
+   header. Still every view, still one visible tap each — nothing moves behind
+   a hover or a menu. */
+@media (max-width: 760px) {
+  .shell { grid-template-columns:1fr; gap:var(--space-4); padding:var(--space-3); }
+  header { padding:var(--space-3); }
+  .headmeta { margin-left:0; }
+  .viewnav { position:static; flex-direction:row; overflow-x:auto;
+    gap:var(--space-2); padding-bottom:var(--space-1);
+    border-bottom:1px solid var(--border); }
+  .viewnav a { white-space:nowrap; border-left:none;
+    border-bottom:3px solid transparent; border-radius:0; }
+  .viewnav a[aria-current="page"] { border-left-color:transparent;
+    border-bottom-color:var(--accent); }
+  .viewtools { margin-left:0; }
+}
 
-.station-row, .station-url { display: flex; gap: .6rem; align-items: center; margin: .25rem 0; }
-.station-row .lbl, .station-url .lbl { min-width: 6.5rem; }
-.station-url input.url { flex: 1; font-family: monospace; font-size: .85rem; }
-.station .muted { opacity: .7; }
+/* One column of controls, and anything that can be an id or a URL wraps
+   instead of scrolling the page sideways: 320px and 200% zoom stay usable. */
+@media (max-width: 480px) {
+  .viewgrid { grid-template-columns:1fr; }
+  /* Everything else stacks below 480px; the equation must not. A column of
+     labelled figures is not a product, so its terms keep label-beside-value
+     and the row wraps between terms instead. */
+  .insp-eq .summary-row { flex-direction:row; align-items:baseline; }
+  .insp-eq .summary-row .lbl { min-width:0; }
+  .viewtools, .action-group { width:100%; }
+  .viewtools > button, .action-group > button, .action-group > .linkbtn { flex:1; }
+  .ask-row { flex-direction:column; align-items:stretch; }
+  .summary-row, .station-row, .station-url { flex-direction:column;
+    align-items:stretch; gap:var(--space-1); }
+  .summary-row .lbl, .station-row .lbl, .station-url .lbl { min-width:0; }
+  .search { width:100%; }
+  .libbar { flex-direction:column; align-items:stretch; }
+  .field, .search, .libbar select { width:100%; min-width:0; }
+  .grid-list .pv-card { grid-template-columns:1fr; }
+  .grid-list .pv-actions { border-left:none; border-top:1px solid var(--border); }
+  /* A modal on a phone is the screen: nothing useful is gained by leaving a
+     sliver of the page showing behind it. */
+  .dlg { width:100%; max-width:none; max-height:100%; height:100%;
+    border-radius:0; border:none; }
+  dialog.dlg[role="dialog"] { top:0; left:0; transform:none; box-shadow:none; }
+}
+
+/* Paid-generation controls deliberately remain a first-class, responsive view. */
+.generation-view { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-4); }
+.generation-view .wide { grid-column:1/-1; }
+.generation-view textarea,.generation-view select { width:100%; margin:var(--space-1) 0 var(--space-3); }
+.gen-row { display:flex; flex-wrap:wrap; gap:var(--space-3); }
+.gen-row label { min-width:9rem; flex:1; }
+.gen-job,.gen-card { border:1px solid var(--border); border-radius:var(--radius-md); padding:var(--space-3); margin:var(--space-2) 0; overflow-wrap:anywhere; }
+.gen-card video { display:block; width:100%; max-height:280px; background:#000; margin-bottom:var(--space-2); }
+.gen-banner,.gen-privacy,.gen-estimate { color:var(--warning); }
+.gen-status { color:var(--muted); font-variant-numeric:tabular-nums; }
+@media (max-width:700px) { .generation-view { grid-template-columns:minmax(0,1fr); } }
+
+/* ---- F3 composer ---- */
+
+/* Controls first: presets, then the four bounded fields, then the optional
+   type filter. Every one is a labelled native control. */
+.cmp-presets { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-bottom:var(--space-3); }
+.cmp-presets button[aria-pressed="true"] { border-color:var(--accent);
+  color:var(--accent); background:var(--surface-3); }
+.cmpbar { display:flex; flex-wrap:wrap; align-items:flex-end;
+  gap:var(--space-3); margin-bottom:var(--space-3); }
+.cmpbar input, .cmpbar select { background:var(--bg); border:1px solid var(--muted);
+  border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:.85rem;
+  padding:var(--space-2); min-width:140px; min-height:44px; }
+[aria-invalid="true"] { border-color:var(--danger); }
+
+.cmp-types { border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-3); margin-bottom:var(--space-3);
+  display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-3); }
+.cmp-types legend { color:var(--muted); font-size:.72rem;
+  text-transform:uppercase; letter-spacing:.06em; padding:0 var(--space-1); }
+.cmp-note { color:var(--muted); font-size:.78rem; }
+.cmp-types .cmp-note { flex-basis:100%; }
+
+/* What is wrong, in words, beside the button it disables. */
+.cmp-validation { display:flex; flex-direction:column; gap:var(--space-1);
+  margin-bottom:var(--space-3); }
+.cmp-invalid { color:var(--danger); font-size:.85rem; }
+#cmp-go { min-height:44px; padding:0 var(--space-6); font-weight:700;
+  border-color:var(--accent); color:var(--accent); }
+#cmp-go:hover:not(:disabled) { background:var(--accent); color:var(--bg); }
+
+/* The one summary line, in the same monospace as every other figure. */
+.cmp-summary { font-family:var(--font-mono); font-size:.9rem;
+  overflow-wrap:anywhere; }
+.cmp-count, .cmp-progress { color:var(--muted); font-size:.8rem;
+  font-family:var(--font-mono); margin-top:var(--space-1);
+  overflow-wrap:anywhere; }
+
+/* A relaxed rule is editorial news, so it is a panel with sentences in it. */
+.cmp-attn, .cmp-stale { border:1px solid var(--warning); border-radius:var(--radius-sm);
+  padding:var(--space-3); margin-top:var(--space-3); }
+.cmp-relax { list-style:disc; margin:var(--space-2) 0 0 var(--space-4);
+  font-size:.85rem; display:flex; flex-direction:column; gap:var(--space-1); }
+.cmp-relax li { margin-left:var(--space-2); }
+.cmp-stale .cmp-note { margin-top:var(--space-2); }
+
+/* Playback: four named controls, all of them real tap targets. */
+.cmp-playback { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-top:var(--space-3); }
+.cmp-playback button { min-height:44px; padding:0 var(--space-4); }
+
+/* One medium at a time lives here, under the item it belongs to. */
+.cmp-stage { margin-top:var(--space-3); background:var(--surface-2);
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-3); min-height:120px; }
+.cmp-stage:empty { display:none; }
+.cmp-stage-label { color:var(--muted); font-size:.78rem;
+  margin-bottom:var(--space-2); overflow-wrap:anywhere; }
+.cmp-stage video, .cmp-stage img { width:100%; max-height:320px;
+  object-fit:contain; background:var(--bg); display:block; }
+.cmp-textcard { display:flex; align-items:center; justify-content:center;
+  text-align:center; padding:var(--space-6); background:var(--surface-3);
+  border-radius:var(--radius-sm); }
+.cmp-textcard .tc { font-size:.9rem; white-space:pre-line; line-height:1.35; }
+
+/* The break as an editorial unit: a horizontal row that scrolls inside itself
+   rather than sideways, relative width by duration with a floor under it, and
+   the length written out as text whatever the width says. */
+.cmp-timeline { display:flex; gap:var(--space-2); list-style:none;
+  margin-top:var(--space-4); overflow-x:auto; padding-bottom:var(--space-2);
+  align-items:stretch; }
+.cmp-item { flex:1 1 0; min-width:170px; background:var(--surface-2);
+  border:1px solid var(--border); border-radius:var(--radius-sm);
+  padding:var(--space-2); display:flex; flex-direction:column; gap:var(--space-1); }
+.cmp-item[aria-current="true"] { border-color:var(--accent); background:var(--surface-3); }
+.cmp-head { display:flex; justify-content:space-between; gap:var(--space-2);
+  font-family:var(--font-mono); font-size:.72rem; }
+.cmp-order { color:var(--accent); font-weight:700; }
+.cmp-dur { color:var(--muted); }
+.cmp-title { font-size:.85rem; overflow-wrap:anywhere; }
+.cmp-item .summary-row { font-size:.7rem; gap:var(--space-1); }
+.cmp-item .summary-row .lbl { min-width:4.5rem; }
+.cmp-inspect { margin-top:auto; min-height:44px; }
+
+/* Below 760px the timeline is an ordered stack: still numbered, still in the
+   server's order, nothing behind a swipe. */
+@media (max-width: 760px) {
+  .cmp-timeline { flex-direction:column; overflow-x:visible; }
+  /* The per-item flex-grow app.js sets is a WIDTH share. Stacked, the same
+     number would stretch a long item's HEIGHT, which says nothing. It is an
+     inline style, so only !important can take it back. */
+  .cmp-item { min-width:0; flex-grow:0 !important; }
+}
+
+@media (max-width: 480px) {
+  .cmpbar { flex-direction:column; align-items:stretch; }
+  .cmpbar input, .cmpbar select { width:100%; min-width:0; }
+  .cmp-presets button, .cmp-playback button { flex:1; }
+}
+
+/* ---- F4 station + operations ---- */
+
+/* Hiding a control is not authorization, so the warning is stated rather than
+   the buttons removed. Compact, at the top of the view it applies to. */
+.notice-panel { border:1px solid var(--warning); border-radius:var(--radius-md);
+  background:var(--surface-1); color:var(--warning); padding:var(--space-3);
+  margin-bottom:var(--space-4); font-size:.85rem; }
+
+/* What an action needs before it will work, beside the group it belongs to. */
+.req { color:var(--muted); font-weight:400; text-transform:none;
+  letter-spacing:normal; }
+.action-group .note { width:100%; margin:0; }
+.action-group .note code { font-family:var(--font-mono); font-size:.8rem;
+  background:var(--bg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:0 var(--space-1); }
+
+/* One block per channel: its state in words, then the facts behind it. */
+.station-ch, .station-urls { border:1px solid var(--border);
+  border-radius:var(--radius-md); background:var(--surface-1);
+  padding:var(--space-3); margin:var(--space-3) 0; }
+.station-ch-name { margin:0 0 var(--space-2); font-size:.75rem; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.08em; }
+.station-ch > .badge { margin-bottom:var(--space-2); }
+.station-row .next { font-family:var(--font-mono); font-size:.85rem;
+  overflow-wrap:anywhere; }
+
+/* Copy's outcome sits on its own line with reserved height, so saying it does
+   not shift the row that was just clicked. */
+.station-url { align-items:center; }
+.st-copy { width:100%; min-height:1.4em; margin:0; font-size:.8rem; }
+.station-pv { margin-top:var(--space-2); }
+.station-pv .note { margin:0 0 var(--space-2); }
+
+/* The preview is built only on request and lives outside the redrawn summary. */
+.station-preview:empty { display:none; }
+.st-preview { border:1px solid var(--warning); border-radius:var(--radius-md);
+  background:var(--surface-1); padding:var(--space-3); margin-top:var(--space-4); }
+.st-preview video { width:100%; max-height:360px; background:var(--bg);
+  border-radius:var(--radius-sm); display:block; }
+
+.conform-body { margin-bottom:var(--space-3); }
+.conform-body .badge { margin-top:var(--space-2); }
+
+/* A job's raw result, bounded and foldable, instead of one truncated log. */
+.jobrow-details { width:100%; min-width:0; }
+.jobrow-details summary { color:var(--muted); font-size:.75rem; cursor:pointer; }
+.jobrow-details pre.jobrow-result { margin-top:var(--space-1);
+  padding:var(--space-2); background:var(--bg); border:1px solid var(--border);
+  border-radius:var(--radius-sm); max-height:200px; overflow:auto;
+  white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* Every primary target on these two views clears 44x44px like the rest. */
+.st-copy-btn, .st-open, .jobrow-retry, .jobrow-check, [data-station], [data-starter],
+[data-prep], [data-maint], [data-gen], [data-src] { min-height:44px; }
+
+@media (max-width: 480px) {
+  .station-ch, .station-urls { padding:var(--space-2); }
+  .st-copy-btn, .jobrow-retry, .jobrow-check { width:100%; }
+  .jobrow { flex-direction:column; align-items:stretch; gap:var(--space-2); }
+}

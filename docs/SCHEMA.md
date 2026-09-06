@@ -40,6 +40,13 @@ Job execution status is separate from per-output `review_status`. Ambiguous
 create (`submitting` without a stored provider job id) becomes
 `submission_unknown` and never automatically creates another paid job.
 
+The worker claims and resumes these rows across restarts; it does not create a
+second provider job when a submission is ambiguous. Reservations, provider
+identity, capability/pricing snapshots, and usage remain durable and secret
+free. Local raw downloads live under `GENERATION_STAGING_DIR`; normalized
+candidates live under `GENERATION_OUTPUT_DIR` and are quarantined until the
+output row is registered.
+
 Columns match `bumparr/db.py`: local id, provider/model aliases, briefs,
 secret-free request/capability/usage JSON, provider job id, UTC `budget_day`,
 integer micro-USD reservations, and timestamps. Money is never stored as
@@ -51,6 +58,11 @@ binary float.
 `review_status` (`pending`/`approved`/`rejected`/`deleted`). Approval is the
 only writer that enables the linked playable and restores proposed weight
 `1.0`.
+
+Pending, rejected, and failed candidates remain review/audit records; they are
+not playable and do not enter random, fill, M3U, or station selection. Deleting
+an output preserves the job audit while removing its private media according to
+the configured retention/cleanup rules.
 
 Station timeline entries also keep in-memory `family`, `text_heavy`,
 `energy`, `audio`, `template`, and `music_id` for adjacency. Those are not

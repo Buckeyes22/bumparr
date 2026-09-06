@@ -1252,31 +1252,45 @@ def render_one(row, card_font, brand_font, brand, force=False):
     return "rendered", rel
 
 
-def render_all(limit=None, kinds=None, force=False):
+def render_all(limit=None, kinds=None, force=False, ids=None):
     """Render pending cards and point their registry rows at the files.
 
     Setting `uri` is the whole point: it is what promotes a card from
     browser-only payload to something `/playlist.m3u` and `media_url` can hand
     to any consumer.
+
+    `ids`, if given, selects exactly those card rows by id and ignores
+    `limit`/`kinds` and the render-pending/`enabled` filters entirely — the
+    operator named the row, so it renders (subject only to render_one's own
+    cache/`force` decision) no matter how large the rest of the pool is or how
+    long it has already had a uri. This is what `--id` and
+    `POST /api/render/cards?bumper_id=` use for a single-card render; the
+    caller (the API route) is what validates `type='card'` before the job
+    starts, so a row of another type simply is not selected here.
     """
     card_font, brand_font = fonts()
     brand = config.BRAND
     print("[render] card font: %s | brand font: %s" % (card_font, brand_font))
 
-    q = "SELECT * FROM playables WHERE type='card' AND enabled=1"
     args = []
-    if not force:
-        # Volatile kinds stay in the candidate set even once they have a uri:
-        # their file expires, and render_one decides per-file whether it is
-        # still truthful. Everything else is skipped once rendered.
-        vol = ",".join("'%s'" % k for k in VOLATILE_TTL)
-        q += " AND (uri IS NULL OR uri='' OR kind IN (%s))" % vol
-    if kinds:
-        q += " AND kind IN (%s)" % ",".join("?" * len(kinds))
-        args += list(kinds)
-    q += " ORDER BY created_at DESC"
-    if limit:
-        q += " LIMIT %d" % int(limit)
+    if ids:
+        q = ("SELECT * FROM playables WHERE type='card' AND id IN (%s)"
+             % ",".join("?" * len(ids)))
+        args = list(ids)
+    else:
+        q = "SELECT * FROM playables WHERE type='card' AND enabled=1"
+        if not force:
+            # Volatile kinds stay in the candidate set even once they have a uri:
+            # their file expires, and render_one decides per-file whether it is
+            # still truthful. Everything else is skipped once rendered.
+            vol = ",".join("'%s'" % k for k in VOLATILE_TTL)
+            q += " AND (uri IS NULL OR uri='' OR kind IN (%s))" % vol
+        if kinds:
+            q += " AND kind IN (%s)" % ",".join("?" * len(kinds))
+            args += list(kinds)
+        q += " ORDER BY created_at DESC"
+        if limit:
+            q += " LIMIT %d" % int(limit)
 
     with db.conn() as c:
         rows = c.execute(q, args).fetchall()
@@ -1324,10 +1338,14 @@ if __name__ == "__main__":
     ap.add_argument("--force", action="store_true", help="re-render even if a file exists")
     ap.add_argument("--refresh-volatile", action="store_true",
                     help="only re-render perishable kinds (clock, weather) whose files expired")
+    ap.add_argument("--id", action="append", dest="ids",
+                    help="render only this card id (repeatable); ignores --limit/--kind")
     a = ap.parse_args()
     db.init_db()
     t0 = time.time()
-    if a.refresh_volatile:
+    if a.ids:
+        res = render_all(ids=a.ids, force=a.force)
+    elif a.refresh_volatile:
         res = refresh_volatile()
     else:
         res = render_all(limit=a.limit, kinds=a.kinds, force=a.force)

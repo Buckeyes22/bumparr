@@ -28,11 +28,18 @@ One SQLite database (`DB_PATH`) is authoritative:
 - `playout` / `play_history` — the channel playout cursor and play history.
   Station playout is the shipped writer; other players may write their own
   channel ids. Status, preview, and dashboard inspection never write history.
+- `generation_jobs` / `generation_outputs` — durable paid-generation workflow
+  state and candidate review state. These remain separate from `playables`
+  until an operator approves an output; approval then enables its linked
+  playable.
 
 Everything else is a writer to or reader from this table. There is no second
 authoritative store. The station conform cache under
 `ASSET_ROOT/.cache/station/` is derived from playable rows and can be rebuilt.
-The fetch queue's state file is the only work queue that survives a restart.
+The fetch queue's state file survives a restart for acquisition work, while
+`generation_jobs` and `generation_outputs` persist the provider workflow and
+review state. Short-lived Operations jobs report local actions; they are not a
+second durable generation queue.
 `config_files/bumper_catalog.yaml` is a descriptive inventory, not something
 runtime parses to decide what to generate.
 
@@ -83,7 +90,9 @@ flowchart TD
 - **`ingest.py`** — the natural-language intake. A URL, "more trivia", or a
   vibe like "5 stoner clips" routes to the right producer: live-cam insert,
   YouTube capture, archive.org/Wikimedia/Pexels/Pixabay/LoC search, or card
-  generation. Every path ends in a file on disk plus a registry row.
+  generation. Ordinary media paths end in a file on disk plus a registry row;
+  durable video generation first ends in a persisted job/output record and only
+  becomes a playable file-backed row after local processing and review approval.
 - **`seed.py`** — scans `ASSET_ROOT` and registers any video file, so anything
   dropped in by hand or by another tool becomes a bumper on the next pass.
   Idempotent; runs on every startup.
@@ -258,5 +267,5 @@ preview reads never extend a timeline or write history.
 | `bumparr/generators/` | card production: model, grounded, dated, weather, channel memory, bg |
 | `bumparr/sources/` | self-maintaining sources: window capture, fetch queue |
 | `bumparr/config_files/` | user-editable content config (cams, queue, seasons, seeds, catalog, channel profile, music beds, operator messages) |
-| `bumparr/web/` | dashboard (vanilla JS over the API) |
+| `bumparr/web/` | six-view dashboard — Overview, Library, Composer, Station, Operations, and Generation — using vanilla JS over the API |
 | `bumparr/tools/overnight.sh` | scheduled batch: generate cards, then quarry |

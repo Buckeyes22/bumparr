@@ -25,6 +25,10 @@ Before changing code, read these files in order:
    [ROTATION.md](ROTATION.md), [API.md](API.md), and [STATION.md](STATION.md);
 5. the implementation and tests named in the phase being executed.
 
+The operator frontend under `bumparr/web/` has its own self-contained
+execution specification, [FRONTEND_PLAN.md](FRONTEND_PLAN.md); read it before
+changing the dashboard.
+
 Implement phases in order. A phase may be delivered in multiple pull requests,
 but do not start work whose listed dependencies are incomplete. Run focused
 tests after each task and the full verification matrix at the end of each

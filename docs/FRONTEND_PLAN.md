@@ -1,17 +1,40 @@
 # Operator frontend design enhancement plan
 
-**Status:** proposed execution plan
+**Status:** implemented frontend baseline (F0–F6), with Generation integrated
+in the combined checkout.
 
-**Audit base:** `c38d140` plus the product documents dated 2026-09-05
+**Audit base:** `c38d140` plus product documents dated 2026-09-05. The phased
+sections below preserve the pre-implementation audit and acceptance history;
+descriptions of the old single-page surface are historical.
 
-**Primary surface:** the existing web dashboard at `/`
+**Primary surface:** the existing web dashboard at `/`.
 
-**Explicit non-goal:** a terminal UI or frontend-framework rewrite
+**Explicit non-goal:** a terminal UI or frontend-framework rewrite.
+
+### Post-review job lifecycle closeout (2026-09-05)
+
+The frontend branch covered late POST responses after navigation,
+foreground-to-background job handoff, terminal ingest result updates, unique
+merged running-job counts, stale registry snapshots, and watcher ownership on
+re-entry. `Stop checking` is view-scoped; `Check now` resumes it, and leaving
+and re-entering Operations starts a fresh check without cancelling server work.
+
+Historical evidence was 311 Node tests and 605 Python tests on that standalone
+branch. Those counts are not combined-branch totals. Chromium was checked;
+Firefox was not run. Paid-provider, production-ingest, and deployment
+acceptance remain outstanding.
+
+The combined branch was subsequently validated with 729 Python tests and
+326 Node tests (including all prior console and generation tests), plus
+lint/compile/syntax checks, a real-API Chromium integration check, and a
+network-disabled non-root container smoke. The readable six-view static
+bundle is 216,599 bytes, below the unchanged 262,144-byte cap. See
+[PR_SUMMARY.md](PR_SUMMARY.md) for the scope and remaining external evidence.
 
 ## Purpose
 
-Build the existing dashboard into a focused operator console for Bumparr. The
-console should help a person answer six questions quickly:
+Build the existing dashboard into a focused operator console. It answers six
+questions quickly:
 
 1. Is the service, pool, and station healthy?
 2. What material do I have, and should it remain on air?
@@ -45,7 +68,7 @@ service.
 
 ## Current frontend audit
 
-### What exists
+### Pre-implementation audit (historical)
 
 The dashboard is served by FastAPI from `bumparr/web/`:
 
@@ -584,6 +607,29 @@ permanence for `on_this_day` or config-owned cams. Test API before UI wiring.
 ## Performance limits
 
 - Keep static HTML/CSS/JS under 150 KiB uncompressed, excluding media.
+- Keep static HTML/CSS/JS under **256 KiB (262,144 B) uncompressed**, excluding
+  media, and serve it compressed.
+
+  This was 150 KiB, which was measured unreachable during F6 and revised rather
+  than quietly failed. At the F6 audit base the three files were 226,286 B;
+  stripping *every* comment from all three landed at 169,722 B, and stripping
+  every comment **and** all indentation and blank lines still landed at
+  156,526 B — 2,926 B over, having destroyed exactly the invariant
+  documentation this plan asks to keep and made a build-step-free codebase
+  unmaintainable. There is no arrangement of "tidy without removing capability"
+  that reaches 150 KiB, and F5 added to it.
+
+  The revised cap is what the design supports with its contracts intact, and
+  `node --test bumparr/web/app.test.js` asserts the three-file total against it
+  so it stops drifting. What actually crosses the wire is gzipped by
+  `SelectiveGZip(minimum_size=1000)` in `bumparr/app.py`, wrapping Starlette's
+  `GZipMiddleware`: `app.js` is roughly
+  a quarter of its on-disk size compressed, which is the number a browser and a
+  reverse proxy care about. Media is excluded on purpose — `/media`,
+  `/station/seg` and `/api/stream` serve bytes that are already compressed, and
+  a request carrying a `Range` header is passed through on any path, because a
+  compressed `206` cannot be seeked. `tests/test_app_api.py` asserts all of it
+  over a real HTTP server.
 - Server pagination: 24 default, UI maximum 100.
 - Fetch detail/explain only when inspector opens unless already returned.
 - At most one active media preview.
@@ -609,6 +655,9 @@ Keep one script unless genuinely unmanageable. Organize `app.js` as:
 11. Operations/jobs;
 12. lifecycle/visibility/boot;
 13. CommonJS exports for tests.
+10. Operations/jobs;
+11. lifecycle/visibility/boot;
+12. CommonJS exports for tests.
 
 Prefer pure `formatDuration`, `formatAge`, `selectionLabel`, `gapLabel`, and
 `stationState`. API content enters only through `textContent`, safe properties,
@@ -757,6 +806,9 @@ pending candidate can be enabled through a generic control.
 
 **Dependencies:** F0–F5 and F5G when generated-content UI is included in the
 release.
+### F6 — accessibility, performance, release polish
+
+**Dependencies:** F0–F5.
 
 - Complete manual matrix.
 - Fix focus/contrast/zoom/touch/motion/screen-reader issues.

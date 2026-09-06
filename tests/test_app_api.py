@@ -5,8 +5,10 @@ the real view functions in a subprocess with DB_PATH/ASSET_ROOT pointed at a
 temp dir (config paths bind at import time), while the pure helper and the
 route-ordering invariant are asserted in-process.
 """
+import gzip
 import json
 import os
+import random
 import socket
 import subprocess
 import sys
@@ -277,6 +279,90 @@ class AppApi(unittest.TestCase):
         self.assertEqual(out["by_kind"]["shared"], 2)
         self.assertEqual(out["by_type"], {"card": 1, "video": 1})
 
+    def test_status_counts_parked_dead_and_unrendered(self):
+        """The additive counts must agree with the `state` filter's definitions."""
+        live = _row(1, 10.0)
+        parked = _row(2, 10.0); parked["enabled"] = 0
+        dead = _row(3, 10.0); dead["health"] = "dead"
+        unrendered = _row(4, 4.0, type="card", kind="trivia")
+        unrendered["uri"] = None
+        out = self._run_child("status", [live, parked, dead, unrendered])
+        self.assertEqual(out["parked"], 1)
+        self.assertEqual(out["dead"], 1)
+        self.assertEqual(out["unrendered"], 1)
+        # No version constant exists anywhere in the package; the key must be
+        # omitted rather than invented.
+        self.assertNotIn("version", out)
+
+    def test_list_total_reflects_filtered_rows_before_pagination(self):
+        seed = [_row(i, 10.0) for i in range(5)]
+        out = self._run_child("list", seed, limit=2, offset=0)
+        self.assertEqual(out["count"], 2)
+        self.assertEqual(out["total"], 5)
+        out = self._run_child("list", seed, limit=2, offset=4)
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["total"], 5)
+
+    def test_list_state_all_applies_no_operational_filter(self):
+        on = _row(1, 10.0, type="video")
+        off = _row(2, 10.0, type="video"); off["enabled"] = 0
+        dead = _row(3, 10.0, type="video"); dead["health"] = "dead"
+        unrendered = _row(4, 4.0, type="card", kind="trivia"); unrendered["uri"] = None
+        seed = [on, off, dead, unrendered]
+        out = self._run_child("list", seed, limit=10, offset=0, state="all")
+        self.assertEqual(out["count"], 4)
+        self.assertEqual(out["total"], 4)
+
+    def test_list_state_playable_excludes_unrendered_card_includes_stream(self):
+        on = _row(1, 10.0, type="video")
+        unrendered = _row(2, 4.0, type="card", kind="trivia"); unrendered["uri"] = None
+        stream = _row(3, 45.0, type="stream", kind="webcam")
+        stream["uri"] = "http://example.com/a.m3u8"
+        seed = [on, unrendered, stream]
+        out = self._run_child("list", seed, limit=10, offset=0, state="playable")
+        ids = {b["id"] for b in out["bumpers"]}
+        self.assertEqual(ids, {"t:item-1", "t:item-3"})
+        self.assertEqual(out["total"], 2)
+
+    def test_list_state_parked_ignores_health(self):
+        off_ok = _row(1, 10.0, type="video"); off_ok["enabled"] = 0
+        off_dead = _row(2, 10.0, type="video")
+        off_dead["enabled"] = 0; off_dead["health"] = "dead"
+        on = _row(3, 10.0, type="video")
+        out = self._run_child("list", [off_ok, off_dead, on], limit=10, offset=0,
+                              state="parked")
+        self.assertEqual({b["id"] for b in out["bumpers"]},
+                         {"t:item-1", "t:item-2"})
+
+    def test_list_state_dead(self):
+        dead = _row(1, 10.0, type="video"); dead["health"] = "dead"
+        on = _row(2, 10.0, type="video")
+        out = self._run_child("list", [dead, on], limit=10, offset=0, state="dead")
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-1"})
+
+    def test_list_state_unrendered(self):
+        unrendered = _row(1, 4.0, type="card", kind="trivia"); unrendered["uri"] = None
+        rendered = _row(2, 4.0, type="card", kind="trivia")
+        out = self._run_child("list", [unrendered, rendered], limit=10, offset=0,
+                              state="unrendered")
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-1"})
+
+    def test_list_state_composes_with_type_filter(self):
+        on = _row(1, 10.0, type="video")
+        stream = _row(2, 45.0, type="stream", kind="webcam")
+        stream["uri"] = "http://example.com/a.m3u8"
+        out = self._run_child("list", [on, stream], limit=10, offset=0,
+                              state="playable", type="stream")
+        self.assertEqual({b["id"] for b in out["bumpers"]}, {"t:item-2"})
+
+    def test_hostile_title_in_state_filtered_list_is_plain_json_data(self):
+        hostile = '<img src=x onerror=alert(1)>"; DROP TABLE playables; --'
+        row = _row(1, 4.0)
+        row["title"] = hostile
+        out = self._run_child("list", [row], limit=10, offset=0, state="playable")
+        self.assertEqual(out["bumpers"][0]["title"], hostile)
+        self.assertEqual(out["total"], 1)
+
     def test_status_profile_is_not_a_path(self):
         out = self._run_child("status")
         profile = out["profile"]
@@ -408,6 +494,15 @@ class HttpValidation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(prefix="bumparr-http-test-")
+        # Two files the static mounts will serve, so the compression rules can
+        # be probed against real bytes. Random content, because the point of
+        # the first assertion is that gzip would make an already-compressed
+        # file BIGGER, and random bytes are the honest stand-in for one.
+        assets = Path(cls.tmp.name) / "assets"
+        (assets / ".cache" / "station").mkdir(parents=True, exist_ok=True)
+        cls.media_bytes = random.Random(7).randbytes(50000)
+        (assets / "probe.bin").write_bytes(cls.media_bytes)
+        (assets / ".cache" / "station" / "probe.ts").write_bytes(cls.media_bytes)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             cls.port = sock.getsockname()[1]
@@ -481,6 +576,8 @@ class HttpValidation(unittest.TestCase):
             ("/api/starter?limit=0", "POST"),
             ("/api/render/cards?limit=1001", "POST"),
             ("/api/generate/trivia?n=101", "POST"),
+            ("/api/jobs?limit=0", "GET"),
+            ("/api/jobs?limit=51", "GET"),
         ]
         for path, method in cases:
             with self.subTest(path=path):
@@ -493,10 +590,130 @@ class HttpValidation(unittest.TestCase):
         self.assertEqual(self._status("/api/bumpers/fill?seconds=5&types=evil"), 400)
         self.assertEqual(self._status("/api/bumpers/fill?seconds=5&placement=close"), 200)
 
+    def test_bumpers_state_filter_validation_over_http(self):
+        self.assertEqual(self._status("/api/bumpers?state=bogus"), 422)
+        self.assertEqual(self._status("/api/bumpers?state=playable"), 200)
+        self.assertEqual(self._status("/api/bumpers?state=all"), 200)
+
+    def test_render_cards_bumper_id_length_bound(self):
+        self.assertEqual(
+            self._status("/api/render/cards?bumper_id=" + "x" * 201, "POST"), 422)
+
+    def test_pool_disable_unknown_id_is_404_over_http(self):
+        self.assertEqual(self._status("/api/pool/disable?bumper_id=nope", "POST"), 404)
+
+    def test_render_cards_unknown_bumper_id_is_404_over_http(self):
+        self.assertEqual(
+            self._status("/api/render/cards?bumper_id=nope", "POST"), 404)
+
     def test_random_default_count_contract_over_http(self):
         result = self._json("/api/bumpers/random")
         self.assertLessEqual(result["count"], 5)
         self.assertEqual(result["count"], len(result["bumpers"]))
+
+    def test_jobs_list_shape_over_http(self):
+        result = self._json("/api/jobs")
+        self.assertEqual(set(result), {"jobs", "count"})
+        self.assertEqual(result["count"], len(result["jobs"]))
+        self.assertLessEqual(len(result["jobs"]), 20)
+
+    GZIP = {"Accept-Encoding": "gzip"}
+
+    def _headers(self, path, headers=None):
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d%s" % (self.port, path), headers=headers or {})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status, dict(response.headers), response.read()
+
+    def test_dashboard_assets_are_gzipped_when_the_client_asks(self):
+        """The dashboard ships uncompressed sources; the wire carries them small.
+
+        There is no build step, so app.js is a readable ~195 KB file on disk.
+        The gzip middleware is what keeps that off the network, and this asserts
+        the header rather than trusting the middleware is still installed.
+        """
+        status, headers, body = self._headers("/web/app.js", self.GZIP)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-encoding"), "gzip")
+        # urllib does not decode for us, so this is the compressed length.
+        raw = len(body)
+        plain_status, plain_headers, plain_body = self._headers(
+            "/web/app.js", {"Accept-Encoding": "identity"})
+        self.assertEqual(plain_status, 200)
+        self.assertIsNone(plain_headers.get("content-encoding"),
+                          "a client that did not ask gets the file as it is")
+        self.assertLess(raw, len(plain_body) // 2,
+                        "gzip is worth having: %d compressed vs %d plain"
+                        % (raw, len(plain_body)))
+        self.assertIn(b'"use strict"', plain_body[:64])
+
+    def test_small_answers_are_left_uncompressed(self):
+        """minimum_size=1000: below that the header costs more than it saves."""
+        _, headers, body = self._headers("/healthz", self.GZIP)
+        self.assertLess(len(body), 1000)
+        self.assertIsNone(headers.get("content-encoding"))
+
+    def test_media_is_never_gzipped(self):
+        """An MP4 is already compressed: gzipping it spends CPU to grow it.
+
+        Starlette's GZipMiddleware has no content-type rule, so left to itself
+        it does exactly that to every file under /media.
+        """
+        status, headers, body = self._headers("/media/probe.bin", self.GZIP)
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("content-encoding"),
+                          "media is handed to the client as it is on disk")
+        self.assertEqual(len(body), len(self.media_bytes))
+        self.assertEqual(body, self.media_bytes, "byte for byte")
+        self.assertEqual(headers.get("content-length"),
+                         str(len(self.media_bytes)))
+
+    def test_station_segments_are_never_gzipped(self):
+        """The same rule for the conformed segments a player pulls in sequence."""
+        status, headers, body = self._headers("/station/seg/probe.ts", self.GZIP)
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("content-encoding"))
+        self.assertEqual(body, self.media_bytes)
+
+    def test_a_range_request_to_media_can_still_seek(self):
+        """Content-Range describes decoded bytes, so a gzipped 206 cannot seek.
+
+        The middleware would have rewritten the body and the Content-Length
+        while leaving Content-Range describing the range the client asked for --
+        which is how a player loses the ability to jump around a file.
+        """
+        headers = dict(self.GZIP, Range="bytes=0-1023")
+        status, got, body = self._headers("/media/probe.bin", headers)
+        self.assertEqual(status, 206)
+        self.assertIsNone(got.get("content-encoding"))
+        self.assertEqual(got.get("content-length"), "1024")
+        self.assertEqual(got.get("content-range"),
+                         "bytes 0-1023/%d" % len(self.media_bytes))
+        self.assertEqual(len(body), 1024)
+        self.assertEqual(body, self.media_bytes[:1024])
+
+    def test_a_range_request_anywhere_is_left_alone(self):
+        """The rule is the range, not only the path: /web is compressible too."""
+        headers = dict(self.GZIP, Range="bytes=0-1023")
+        status, got, body = self._headers("/web/app.js", headers)
+        self.assertEqual(status, 206)
+        self.assertIsNone(got.get("content-encoding"))
+        self.assertEqual(got.get("content-length"), "1024")
+        self.assertEqual(len(body), 1024)
+
+    def test_api_answers_still_compress_and_still_parse(self):
+        """The dashboard's own reads keep the benefit, and stay readable."""
+        _, headers, body = self._headers("/openapi.json", self.GZIP)
+        self.assertEqual(headers.get("content-encoding"), "gzip",
+                         "a routed JSON answer over the threshold is compressed")
+        self.assertIn("openapi", json.loads(gzip.decompress(body)))
+        # /api/status is small on an empty pool, so this asserts it round-trips
+        # whichever side of minimum_size it lands on rather than asserting a
+        # header the pool size decides.
+        _, status_headers, status_body = self._headers("/api/status", self.GZIP)
+        if status_headers.get("content-encoding") == "gzip":
+            status_body = gzip.decompress(status_body)
+        self.assertIn("total", json.loads(status_body))
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ Pool overview.
 
 ```json
 {"brand": "Bumparr", "total": 412, "playable_now": 350,
+ "parked": 40, "dead": 6, "unrendered": 12,
  "by_type": {"video": 210, "card": 150, "stream": 20, "image": 32},
  "by_kind": {"ambient": 40, "trivia": 60, ...},
  "profile": {"version": 1, "valid": true, "source": "shipped-default"},
@@ -39,6 +40,14 @@ Pool overview.
 
 `playable_now` is the enabled-and-healthy count before dynamic seasonal and
 duration filters. The gap to `total` is disabled or dead items.
+
+`parked` is rows with `enabled=0`. `dead` is rows with `health='dead'`
+(regardless of `enabled` — a row can be both). `unrendered` is card rows with
+no media file yet (`type='card' AND (uri IS NULL OR uri='')`), regardless of
+`enabled`. All three use the exact same definitions as `GET /api/bumpers`'s
+`state` filter below, so the two never disagree. There is no package version
+to report (Bumparr ships no version string anywhere), so no `version` key is
+added here.
 
 `profile` is the loaded channel profile's health, not the YAML path.
 `source` is only `shipped-default`, `custom`, or `fallback-after-error`.
@@ -66,6 +75,7 @@ and unhealthy rows.
 | `type` | all | `video` \| `card` \| `stream` \| `image` |
 | `kind` | all | any kind (`ambient`, `trivia`, `webcam`, `station_id`, …) |
 | `enabled` | all | `true` for rows still on air, `false` for parked ones |
+| `state` | `all` | `all` \| `playable` \| `parked` \| `dead` \| `unrendered` |
 | `q` | none | title/kind search (maximum 100 characters) |
 | `limit` | 200 | page size (1–1000) |
 | `offset` | 0 | page offset (non-negative) |
@@ -74,8 +84,23 @@ Omitting `enabled` means *no filter*, not `enabled=false` — the default listin
 keeps showing both. `?enabled=false` is how you find what the system parked
 without paging the whole pool by eye; `POST /api/pool/enable` is the way back.
 
-Response: `{"count": N, "bumpers": [{id, type, kind, source, duration, title,
-tags, enabled, health, media_url, payload, creative, music_credits?}]}`. `payload` is the
+`state` narrows by operational health/renderedness and composes with every
+filter above (AND, same as `enabled`/`type`/`kind`/`q`): `all` applies no
+operational filter; `playable` is `enabled` + `health='ok'` + a resolvable
+media URI (a stream's own `uri`, or a rendered file for anything else);
+`parked` is `enabled=0` regardless of health; `dead` is `health='dead'`
+regardless of `enabled`; `unrendered` is a card with no file yet. An invalid
+value is a FastAPI 422 validation response, not a silent fallback to `all`.
+`state=playable` additionally requires a media URI, so it can read smaller
+than `/api/status`'s `playable_now` by exactly the enabled-and-healthy-but-
+unrendered cards — `playable_now` does not check for a uri, `state=playable`
+does.
+
+Response: `{"count": N, "total": M, "bumpers": [{id, type, kind, source,
+duration, title, tags, enabled, health, media_url, payload, creative,
+music_credits?}]}`. `count` is the number of rows on this page; `total` is the
+number matching every filter above **before** `limit`/`offset` — use it to
+know how many pages exist. `payload` is the
 parsed JSON card content (lines/answer/number/meaning/…), null-ish for plain
 media. `creative` is the resolved vocabulary from `bumparr.creative` (family,
 roles, energy, audio, …); it does not replace `payload`. `music_credits` is
@@ -190,10 +215,30 @@ timeline or write play history.
 
 ```json
 {"ffmpeg": true, "conformed": 12, "eligible": 14, "pending": 2,
+ "last_conform": {"at": 1710000000.0, "conformed": 2, "failed": 0, "pruned": 1,
+                   "skipped": 0, "ffmpeg": true},
  "urls": {"channel_m3u": "…/station/channel.m3u", "guide_xml": "…/station/guide.xml",
           "live": "…/station/live/index.m3u8", "standby": "…/station/standby/index.m3u8"},
- "channels": {"live": {"now": {}, "next": {}}, "standby": {"now": {}, "next": {}}}}
+ "channels": {"live": {"now": {}, "next": {}, "state": "active", "reason": "playing",
+                        "last_playlist_request": 1710000005.2, "lookahead_seconds": 24},
+              "standby": {"now": {}, "next": {}, "state": "idle", "reason": "no_recent_client",
+                          "last_playlist_request": null, "lookahead_seconds": 24}}}
 ```
+
+Each channel adds `state` (`active` \| `idle` \| `unavailable`) and `reason`:
+
+| `state` | `reason` | Meaning |
+|---|---|---|
+| `active` | `playing` | `now` is a real, conformed item. |
+| `active` | `slate` | `now` is the built-in brand slate — playable, but not real content. |
+| `idle` | `no_recent_client` | Nothing is current, but the pool has conformed items; no playlist client has asked for this channel recently. |
+| `unavailable` | `nothing_conformed` | Nothing has been conformed yet at all — the playlist route would 503. |
+
+`last_playlist_request` (epoch seconds, or `null`) and `lookahead_seconds` come
+straight from the channel; reading `/api/station` never sets or advances
+either. Top-level `last_conform` is `null` until a conform sweep has completed
+at least once in this process, then holds that sweep's stats — `ffmpeg absent`
+needs no dedicated key beyond the existing top-level `ffmpeg: false`.
 
 A playlist returns 503 when nothing has been conformed yet; run the conform action and try again.
 Set `PUBLIC_URL` to an address reachable by the consumer, since playlists and
@@ -274,6 +319,32 @@ lasts exactly until the next restart. Putting the entry back is what stops the
 parking; enabling is what undoes the park already recorded, because the loader
 never re-enables a cam it does find. Both steps, in that order.
 
+### `POST /api/pool/disable`
+
+Turn one row off: `?bumper_id=<id>`. The reversible counterpart to `enable` —
+sets `enabled=0` and touches nothing else: not `health`, not `uri`, not the
+file, not history. This is "stop offering this," never "this is broken"
+(that is `health`, which a sweep or a future failure reporter owns) or "this
+is gone" (`DELETE /api/bumpers/{id}`, a different endpoint with its own
+file-removal contract). Response: `{id, enabled, changed}` — `changed` is
+`true` only if the row was enabled before this call — or 404 `{error}` if no
+such id.
+
+The same optional `warning` key as `enable`, but for the opposite direction:
+present only when a schedule may put the row back regardless of this call.
+Today that is exactly an `on_this_day` card that belongs to today — the
+dated-card rotation (`bumparr.jobs.dated_card_loop`) enables every disabled
+row matching today's date on its next pass (startup, then hourly), so
+disabling one is undone almost immediately unless the operator knows to
+expect it. A card for another day gets no warning (the rotation only ever
+turns those off, never back on, so disabling one is not undone). A
+config-owned live cam also gets no warning: `live_cams.load_cams` never sets
+`enabled=1` on a row it finds in the YAML — refreshing a cam's `uri`/weight
+never touches `enabled` — so a disabled cam stays disabled until an operator
+re-enables it, no matter how many reloads happen. Absent for every other row;
+the three keys above never change, and absence is never a promise of
+permanence for `on_this_day` or config-owned rows either way.
+
 ### `POST /api/starter`
 
 Run the shipped starter seeds (the suggested first pulls). Opt-in, spaced out
@@ -284,8 +355,16 @@ for the archives. Params: `dry_run`, `only_free` (skip stock-API entries),
 
 Render text cards to MP4 so non-browser consumers can play them. Offline and
 idempotent; already-rendered cards are skipped. Params: `limit` (render in
-batches, 1–1000), `force`. Returns a background job id. Details in
-[RENDERING.md](RENDERING.md).
+batches, 1–1000), `force`, `bumper_id` (maximum 200 characters). Returns a
+background job id. Details in [RENDERING.md](RENDERING.md).
+
+`bumper_id`, if given, renders exactly that one card instead of a batch pass —
+validated before the job starts: 404 `{error: "not found"}` for an unknown id,
+400 `{error: "not a card"}` if the row is not `type='card'`. The job label is
+`render card <id>` (truncated to 80 characters), so it is identifiable in the
+job list even while several renders run at once. `force` still applies.
+`limit`/`bumper_id` are mutually exclusive in effect: batch behaviour with
+`limit` is unchanged when `bumper_id` is absent.
 
 ### `POST /api/generate/{kind}`
 
@@ -318,6 +397,27 @@ GET /api/request/a3f…
 The same registry handles starter/render/generate/source actions. `status` is
 `working` | `done` | `error`. Jobs are in-memory, capped at 100, retain finished
 results for at least an hour, and run at most two blocking actions concurrently.
+
+### `GET /api/jobs?limit=20`
+
+Read-only list of the same in-memory job registry, newest first, for an
+operator overview (`limit`: 1–50, default 20). Pure: it never starts, cancels,
+or otherwise changes a job.
+
+```json
+{"jobs": [{"id": "a3f1c9d4e7b2", "request": "more space ambient", "status": "done",
+           "created_at": 1710000000.1, "updated_at": 1710000004.7,
+           "result": "pulled 3 clip(s) into 'ambient': …"}],
+ "count": 1}
+```
+
+Each entry's `request` (the job label) is truncated to 120 characters with a
+trailing `…` when cut; `result` is truncated to 2000 characters if a string,
+or — if a dict — kept as a dict with its string values (including one level
+of nesting) truncated the same way; any other type is stringified and then
+truncated. `null` results (a job still `working`) stay `null`. Truncation
+happens only in this response; the registry itself is untouched. Internal
+bookkeeping fields (such as `worker_active`) never appear here.
 
 ### `POST /api/sources/{action}`
 
@@ -353,9 +453,28 @@ here when the cam isn't CORS-direct.
 | `/web/…` | dashboard assets |
 | `/` | the dashboard itself |
 
+Responses over 1000 bytes are gzipped when the client sends
+`Accept-Encoding: gzip`, which covers `/`, `/web/…`, `/api/…`, the playlists and
+the guide. Three things are never compressed, whatever the client asks for:
+
+- anything under `/media/…`, `/station/seg/…` or `/api/stream/…`, because an
+  MP4 or an MPEG-TS segment is already compressed — gzipping one spends CPU to
+  make it *larger* (50,000 B of media becomes 50,038 B at level 9);
+- **any request carrying a `Range` header**, on any path. A compressed `206`
+  answers with a `Content-Range` describing the decoded bytes and a body of a
+  different length, which is not something a client can seek with;
+- anything under 1000 bytes, where the header costs more than it saves.
+
+Starlette's own `GZipMiddleware` decides on `Accept-Encoding`, `minimum_size`
+and an existing `Content-Encoding` alone, so the first two rules are applied by
+a wrapper (`SelectiveGZip` in `bumparr/app.py`) that hands those requests
+straight to the app.
+
 ## Dashboard
 
-`/` is a single-page dashboard over the API above:
+`/` is a single-page dashboard over the API above. Its structure, panel states,
+accessibility rules, and visual tokens are specified in
+[FRONTEND_PLAN.md](FRONTEND_PLAN.md).
 
 - **Ask bar** — the `POST /api/request` flow with polling; the way to pull in
   URLs, request card kinds, or search by vibe without touching the API.
@@ -434,3 +553,284 @@ a processing-failed output; use `retry-processing`, not a paid regeneration.
 Failed database registration retains the stable landed file for worker recovery.
 Queue and review lists have independent `limit` (1–100) and `offset` pagination;
 the output list also accepts `review_status` (pending/approved/rejected/deleted).
+Navigation is hash-driven — six views, no server routes and no router library:
+`#/overview`, `#/library`, `#/composer`, `#/station`, `#/operations`, and
+`#/generation`. An unknown
+or empty hash is *replaced* with `#/overview` (replaced, not pushed, so a typo
+never becomes a stop on the way back); a plain fragment such as the skip link's
+`#main` is left to the browser. Deep links and back/forward work because the
+hash decides which view is shown and the page's own state decides what it holds,
+so every view can be re-rendered without a reload. Library filters travel in the
+hash query — `#/library?state=parked&kind=trivia&type=card&q=harbour` — read on
+entry and written back (with `location.replace`, so filtering costs no history
+entries) on every change; `state` and `type` are checked against the values
+`GET /api/bumpers` accepts and an unknown one is dropped rather than forwarded.
+Leaving a view stops its refresh clock, aborts the reads it left in flight,
+stops every job poll whichever surface started it, closes any modal it had open
+(handing focus to `<main>` rather than letting it fall to `<body>`), clears the
+live region, and pauses and detaches its media. Below 760px the view list is a
+scrolling tab row, so a route change also scrolls the current tab into view —
+once per change, never on a refresh.
+
+- **Overview** (`#/overview`) — triage. Reads `GET /api/status`,
+  `GET /api/station` and `GET /api/jobs`, and nothing else; all three are pure,
+  so opening it never creates or advances a station timeline. Actionable
+  warnings come first, each derived from an
+  explicit field — never from a parsed human string — and each linking to the
+  view that can fix it: no playable items (`playable_now == 0`), unrendered
+  cards (`unrendered > 0`), a conform backlog (`station.pending > 0`), missing
+  ffmpeg (`station.ffmpeg === false`), a channel profile or music manifest that
+  is invalid or fell back, and a failed job among the five the panel below is
+  showing — from the whole registry, not only this tab's own work. A
+  field this build of the server does not send raises no warning and is shown as
+  "Not available in this version." rather than as a zero. Then the healthy
+  detail: service (brand, version, last refresh), pool counts (total, playable,
+  parked, dead, unrendered, kinds and the type bars), the station summary with
+  compact now cards per channel, configuration (profile and music-manifest
+  source/validity, plus channel memory) and the five most recent jobs.
+- **Library** (`#/library`) — `/api/bumpers` behind a toolbar of labelled
+  controls: search, type, kind (built from `status.by_kind`, counts included),
+  state, page size (24/48/100 — the UI never asks for more than 100),
+  grid/list layout, and **Clear filters**. Every filter composes on the server
+  and travels in the hash query above, written back with `location.replace` on
+  each change so the address bar is always a deep link to what is on screen.
+  Results report **Showing N of TOTAL** from `total`, and **Load more** appends
+  the next page. Each card shows a preview, kind, title, duration or **LIVE**,
+  its pool state in words (playable / parked / dead / unrendered), compact
+  **family** and **audio** chips from the resolved `creative` (a row the server
+  resolved neither for says "Not available in this version." rather than
+  showing nothing), and an always-visible **Inspect** button —
+  the card's only action control. Each card is an `<article>` named after its
+  row, so a grid is not a run of unnamed regions. Video is `preload="metadata"`,
+  muted and controlled; only one preview plays at a time; hovering a card
+  previews it unless the browser reports `prefers-reduced-motion: reduce`, since
+  on a touch screen that hover is a tap. A row the pool marked **dead** gets a
+  sentence rather than an element pointed at media the pool could not read. A
+  live stream is a badge and a **Play live stream** button that builds the
+  player only when pressed, under a note that doing so makes the page a real
+  client of the station. Grid/list layout is the one thing kept in
+  `localStorage`. An empty pool says so and offers **Open operations**, which is
+  where material is added — nothing on this view generates anything.
+- **Item inspector** — an always-available **Inspect** on every card opens a
+  modal (native `<dialog>`, with a `role="dialog"` fallback panel where
+  `HTMLDialogElement` is undefined) and reads
+  `GET /api/bumpers/{id}?explain=true` once, on open — the listing never
+  carries `selection`, `uri` or the history columns. It shows the media/text
+  preview and card answer, identity (id, title, type, kind, source, duration,
+  tags), state (enabled, health, rendered, base weight, failures), creative
+  (family, roles, energy, audio, text-heavy, template, brand mode), selection
+  (eligible now, the ordered `reasons` with a plain reading of each, and the
+  score drawn as the product it is —
+  `base × season × daypart × recency × affinity × fatigue = score`, every term
+  in monospace, a term the server sent as `0` or as `null` marked and named as
+  the **zero gate** under an Attention badge with its matching `reasons` token
+  read out in words, and a term the build did not send shown as "Not available
+  in this version." rather than as a zero), **Provenance & rights** (registered
+  and payload source, background attribution and its links, and every field of
+  the `music_credits` snapshot — title, creator, license, attribution, source
+  page, license URL and bed id; a field the snapshot left empty reads "not
+  recorded", which is a different claim from a build that lacks it), history
+  (created, last played, play count) and the media URL as a read-only field with a **Copy**
+  control — the Clipboard API where the browser grants it, a selection to copy
+  by hand where it does not, and a visible sentence either way, since a silent
+  Copy button cannot be told from a broken one. The primary action is the
+  reversible one for the state: **Disable from rotation**
+  (`POST /api/pool/disable`), **Enable** (`POST /api/pool/enable`) for a parked
+  row, **Render card** (`POST /api/render/cards?bumper_id=`, a background job
+  that appears in Recent jobs) for an unrendered card, and — because there is
+  no per-item recheck endpoint — **Run revive (all retired)**
+  (`POST /api/pool/revive`) for a dead one, labelled as the pool-wide sweep it
+  is. A mutation updates only the row it changed and refreshes the counts: it
+  never resets filters, page offset or scroll, and any `warning` the server
+  answers with is rendered inside the dialog as well as announced. Focus goes to
+  the heading on open and back to the Inspect button on close; Escape closes it;
+  Tab is trapped while it is modal and reaches everything the browser would —
+  the media preview included, so the item under review can be played and
+  scrubbed by keyboard. The inspector is opened from any surface
+  that draws a card, so a route change — from the Composer as much as the
+  Library — closes it and aborts its read.
+- **Deletion** — permanent deletion exists only in the inspector's danger zone
+  and in the Library's own **Danger zone**; no card carries a delete control.
+  Both confirmations name the item, state the file consequence in the
+  endpoint's terms, offer the `keep_file` / `keep_files` the endpoint documents,
+  and put **Cancel** first and focus it; the destructive button is never the
+  default, and dismissing the dialog any way at all — Cancel or Escape —
+  resolves as a refusal and sends nothing. Bulk kind deletion
+  (`DELETE /api/pool/kind/{kind}`) additionally requires typing the kind name
+  exactly before its confirm button works. A `cleanup_failed` response keeps
+  the inspector open carrying that news, because it is the only surface that
+  said so. A deletion that empties the listing says the listing is empty, and
+  focus lands on the counts line above the grid rather than on the control that
+  has just been removed with its row. A row that records no source, no background attribution and no music
+  credits says **"No provenance recorded"** under an Attention badge and adds
+  that this is a note, not a block: every curation control above it stays
+  enabled, because provenance is editorial news and not authorization.
+- **Composer** (`#/composer`) — review a break as an editorial unit. Labelled
+  controls (15/30/60/90-second presets, a custom duration `0.1 <= s <= 86400` —
+  the endpoint accepts anything above zero, and 0.1 is the smallest value the
+  control's own step can express, so the two agree,
+  tolerance `0..3600` defaulting to 1.5, maximum items `1..40` defaulting to 8,
+  placement any/open/inside/close, and optional video/card/image/stream
+  checkboxes — ticking none asks for every type) build one request:
+  `GET /api/bumpers/fill?seconds&tolerance&max_items&placement&types&explain=true`.
+  Anything out of the range the endpoint documents disables **Compose break**
+  and is named in words, so an invalid request is never sent. Composition is
+  never reproduced in the browser: the answer is rendered in the server's order,
+  as a horizontal timeline on desktop and an ordered stack below 760px, each
+  item carrying its order number, title, kind, family, duration, audio, role,
+  brand mode and an **Inspect** button. One summary line reads
+  `Requested 30.0s | Composed 29.4s | Gap +0.6s | Within tolerance`, where
+  `gap = requested - total` (positive underfilled, negative overfilled) and
+  "within tolerance" is the server's `exact`, never a comparison with zero.
+  Every token in `composition.relaxed_rules` is spelled out as a sentence in an
+  Attention panel rather than a tooltip. **Play sequence / Previous / Next /
+  Stop** preview the break locally: one medium at a time, advancing on the
+  medium's `ended` and on the declared duration for a payload-only card, with
+  the item index and elapsed/remaining shown; a live stream keeps its own Play
+  button so the sequence never opens one. A medium the browser cannot decode
+  says so and the sequence moves on rather than sitting on it for ever; one that
+  stalls says the wait is the network's and leaves **Next** to the operator.
+  From stopped, **Next** starts at the top and **Previous** at the end. Playback stops and resets on a new
+  composition and on leaving the view. After a disable, enable, render or delete
+  through the inspector the break is marked **Stale — recompose to reflect
+  changes** and Play is disabled: no item is ever substituted client-side. The
+  whole view is GET-only — it does not call station `advance()`, write play
+  history, or mutate `play_count`/`last_played`.
+- **Station** (`#/station`) — `/api/station`. Each channel states one condition
+  in the operator's own words, mapped from `state`/`reason` and never from a
+  parsed sentence: active and playing, **"Using slate — all playable candidates
+  are currently gated."**, **"Idle — no playlist client has requested this
+  channel recently."**, **"Unavailable — conform at least one eligible item."**,
+  and — because ffmpeg's absence is that last state's cause rather than another
+  symptom of it — **"Cannot conform — ffmpeg is unavailable in the service."**
+  when `ffmpeg` is `false`. A read that failed says **"Station status
+  unavailable; last successful update was …"** and keeps the last good body on
+  screen. Each channel also shows now/next with their times and the remaining
+  duration, `last_playlist_request` and `lookahead_seconds` (absent in an older
+  build, so reported as unavailable rather than as a zero) — reading them never
+  sets them. The four handoff URLs (`channel_m3u`, `guide_xml`, `live`,
+  `standby`) are read-only fields with a **Copy** control: the Clipboard API
+  where the browser grants it, a selection to copy by hand where it does not,
+  and a visible sentence either way; focusing a field still selects it. A
+  channel is previewable only where `video.canPlayType("application/vnd.apple.
+  mpegurl")` is truthy — Chromium and Firefox generally answer `""` — and then
+  only behind an explicit **Open preview**, under a note that opening it makes
+  this page a real playlist client that may advance and report playout. Where
+  the browser cannot play HLS the offer is the URL and *Open in external player
+  (VLC, mpv, IINA)*, never a broken `<video>`; no remote HLS library is loaded
+  in either case. The preview element is built by the press, never by a render,
+  is muted with `preload="none"` and never autoplays, lives outside the region
+  the 20-second refresh redraws, and is detached on close and on leaving the
+  view. The **Conform** panel shows conformed/eligible, pending, ffmpeg and the
+  `last_conform` sweep (its age and its conformed/failed/pruned/skipped counts;
+  `null` reads as "no sweep has finished in this service yet", an absent key as
+  unavailable), says that conforming can be slow, and carries **Conform now**
+  (`POST /api/station/conform`), which disables only itself. A read-only
+  **Configuration** block reports what the server loaded at startup from
+  `status.profile` (source, version, valid), `status.music` (source, version,
+  valid, enabled beds, compatibility mode) and `status.memory` (refresh
+  interval, enabled kinds, history channel, and the operator-messages file's
+  own source and validity), each under one status badge — `valid: false` or
+  `source: "fallback-after-error"` is an Attention, never a silent default. It
+  states that configuration is file-owned and edited in those files on the
+  server, and it carries no control that can write configuration — no
+  `<input>`, `<select>`, `<textarea>` or `<form>` in any state; the only control
+  it ever offers is the panel's own **Retry**, which re-reads `/api/status`
+  when that read failed. The browser never writes YAML or environment. A file
+  this build does not report says "Not available in this version."; before
+  `/api/status` has answered, all three say why there is nothing to read yet
+  instead. A `last read` age is shown because the Station's 20-second clock
+  re-reads `/api/station` only.
+- **Operations** (`#/operations`) — opens with the unauthenticated-API warning,
+  then groups every action by what it costs, each group a heading stating its
+  requirements before execution: **1 Add material** — the ask bar
+  (`POST /api/request` with polling) and the starter seeds; **2 Generate cards**
+  — every kind `POST /api/generate/{kind}` accepts, badged grounded, model or
+  needs-network, 20 items per run; **3 Refresh sources** — `/api/sources/*`;
+  **4 Prepare output** — `POST /api/render/cards` and `POST /api/station/conform`;
+  **5 Maintenance** — `/api/pool/tidy` and `/api/pool/revive`, each with the
+  endpoint's own `dry_run` preview first. Only the starter *run* stops to
+  confirm; routine refresh and maintenance do not. Destructive work is linked,
+  never duplicated: bulk kind deletion stays in the Library's danger zone, and
+  `bumparr.prune --apply` / `--drop-category` are named as CLI-only. Starting a
+  job disables only the duplicate of that action — every button that starts the
+  same work carries the same job key, so the Station's **Conform now** and this
+  view's **Conform station** (and any **Retry** for it) lock together and
+  nothing else does — so unrelated
+  controls stay usable within the server's own concurrency. Which panel reports
+  a run is decided by the view the operator started it from, not by the action:
+  a conform started on the Station reports in the Station's own conform panel,
+  and the same conform started from a Retry on Operations reports in the
+  Operations panel, rather than into a region inside a view that is hidden. A `429`
+  (`{"error": "job capacity reached"}`) is reported as the server declining to
+  start, not as the work failing, and never costs the operator the text they
+  typed.
+- **Recent jobs** — one list from two registries, shown five-deep on the
+  Overview and in full on Operations: `GET /api/jobs?limit=20` merged by job id
+  with the jobs this page started (which knows a label before the POST answers
+  and covers the synchronous actions the registry never sees). Both views read
+  the list, so both show the whole registry. The server wins
+  on status and result. Each row carries the action, its created and updated
+  ages, an icon-word-colour status, and — on Operations — the bounded raw
+  result or error in an expandable block, plus **Retry** only where repeating
+  is safe (source refreshes, render, conform, tidy, revive, generate) and never
+  for the starter, an ingest of arbitrary text, or anything that deletes. Retry
+  is also withheld while a job is still `working` — a second copy of work
+  already in flight is not an escape hatch — and it carries the same job key as
+  the panel button for that action, so one lock covers both. The lock counts
+  holders rather than being a flag, because the server runs two blocking actions
+  at a time and the first to finish must not hand back a control the second is
+  still holding. Where a *poll* has been lost the row offers **Check now**
+  instead, which asks again rather than starting a second run. A list that could
+  not be refreshed after a good read is marked stale, with its age and a Retry
+  for the read, and never silently shown as current. A working job started
+  from any view — Station, Operations, the inspector, the ask bar — is polled
+  at `GET /api/request/{id}` every three seconds from wherever it was
+  started, until `done` or `error`. Operations additionally adopts every
+  *other* working job in the list — one this page did not itself start,
+  begun by another tab or the CLI — into that same three-second watch, but
+  only while Operations is open; elsewhere (the Overview, say) such a job is
+  not polled at three seconds, and its status is only as fresh as that view's
+  own periodic read (the Overview's own 20-second `GET /api/jobs`). Either
+  way, a lost read keeps the row `status unknown` and backs off to ten
+  seconds rather than inventing a failure; a `404` ends the poll as expired
+  and is never reported as success; no five-minute cap is imposed. Reaching a
+  terminal state always refreshes the pool counts and the station, and
+  refreshes the library listing too when the library is the view on screen. A
+  poll never outlives the view that started it — every watch is registered by
+  job id and the shared route teardown ends all of them, whether the Station,
+  Operations or the inspector started the work — and a surface that starts a
+  job takes it over from the background watch rather than polling it twice.
+  Work abandoned this way keeps running on the server and is picked up again
+  by the background watch the next time Operations is opened, which is where
+  it can be seen.
+- **Shell** — the header carries the service status pill, compact profile
+  validity, the number of unique working jobs in the merged page/server registry,
+  and how old the
+  last read is; the footer carries the version (or "version not reported" — the
+  server ships no version string), the *unprotected operator API* notice and a
+  link to `/docs`.
+- **States** — short results are announced in an `aria-live` region, which is
+  cleared on a route change so a message about one view is never read as news
+  about another; every region renders one explicit state: loading, populated,
+  useful empty, error with Retry, or last-known content marked stale with its
+  update time. A **Retry** says it is retrying while its read is in flight, so a
+  live control cannot be mistaken for a dead one. A failed read never clears
+  known-good content. Overview and Station refresh every 20 s while the tab is
+  visible, and at once when it becomes visible again.
+- **Accessibility** — one `<h1>` and ordered headings with no skipped levels, a
+  skip link, a visible label on every control, `:focus-visible` everywhere,
+  44x44 primary and destructive targets, `aria-current` on the view in the list,
+  and decorative glyphs hidden from assistive technology. Every text/surface
+  pairing in the palette clears WCAG AA, and interactive borders are drawn in
+  `--muted` rather than `--border` so a control's boundary clears 1.4.11. There
+  is no horizontal page scrolling at 320px or at 200% zoom on any view.
+
+The jobs list says which registries it could read: before `GET /api/jobs`
+answers it reports only what this page started and says so, and once it has
+answered an empty list is the server's own answer rather than a page that has
+been idle.
+
+The dashboard persists nothing of its own — no accounts, no stored responses —
+and is a thin client over the endpoints in this file, so anything the UI can do,
+curl can do.

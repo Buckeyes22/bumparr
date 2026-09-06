@@ -3,6 +3,10 @@
 Date: 2026-09-05. Scope: the seventeen findings from the G0–G5 generation
 implementation audit, including the teammate's incomplete remediation.
 
+The historical statement below that no commit or push was performed describes
+that audit scope. Current combined-branch publication and integration evidence
+belongs in [PR_SUMMARY.md](PR_SUMMARY.md).
+
 This report supersedes the initial completion claim in
 [GENERATION_IMPLEMENTATION_STATUS.md](GENERATION_IMPLEMENTATION_STATUS.md).
 Generation remains opt-in. These are local implementation and regression

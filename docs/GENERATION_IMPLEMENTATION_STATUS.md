@@ -1,7 +1,9 @@
 # Generation implementation status (G0–G5)
 
 **Status:** G0–G5 local implementation and the seventeen review findings have
-been remediated; current evidence is in [GENERATION_REMEDIATION.md](GENERATION_REMEDIATION.md).
+been remediated; detailed generation evidence is in
+[GENERATION_REMEDIATION.md](GENERATION_REMEDIATION.md), while consolidated
+combined-branch validation is tracked in [PR_SUMMARY.md](PR_SUMMARY.md).
 Generation is **off by default**. No document here claims that MiniMax or OpenRouter audiovisual
 acceptance has been proven with paid calls. Tests use injected fake
 transports and tiny local ffmpeg fixtures only.
@@ -134,7 +136,10 @@ and was used to mint tiny local clips and run the happy-path normalize.
 - Live OpenRouter `/api/v1/videos/models` catalog is not snapshotted from a
   credentialed account; G5 uses in-repo protocol fixtures.
 - Local Docker build, Compose forwarding validation, and network-disabled
-  non-root smoke evidence are in the remediation report; no production deploy.
+  non-root smoke evidence are recorded as passed in
+  [GENERATION_REMEDIATION.md](GENERATION_REMEDIATION.md); this is not a
+  production deploy. Current combined-branch integration checks and final
+  suite counts belong in [PR_SUMMARY.md](PR_SUMMARY.md).
 
 ## Operator-controlled paid validation (not CI)
 

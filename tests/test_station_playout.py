@@ -213,13 +213,17 @@ class Snapshot(Base):
 
     def test_snapshot_is_read_only_and_does_not_report(self):
         ch = self.channel()
-        self.assertEqual(ch.snapshot(1000.0), {"now": None, "next": None})
+        self.assertEqual(ch.snapshot(1000.0),
+                         {"now": None, "next": None, "last_playlist_request": None,
+                          "lookahead_seconds": ch.lookahead})
         self.assertEqual(ch.timeline, [])
         ch.playlist(1000.0, URL)
         timeline = list(ch.timeline)
         reported = ch.reported
 
-        self.assertEqual(ch.snapshot(5000.0), {"now": None, "next": None})
+        self.assertEqual(ch.snapshot(5000.0),
+                         {"now": None, "next": None, "last_playlist_request": 1000.0,
+                          "lookahead_seconds": ch.lookahead})
         self.assertEqual(ch.timeline, timeline)
         self.assertEqual(ch.reported, reported)
         with db.conn() as c:

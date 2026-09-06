@@ -4,165 +4,418 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bumparr</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/web/style.css" />
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to the dashboard</a>
+
   <header>
-    <div class="brand">▮ Bumparr</div>
-    <div class="tag">bumper generator for the *arr stack</div>
-    <nav class="nav" aria-label="Operator views">
-      <a href="#/overview" data-view="overview">Overview</a>
-      <a href="#/generation" data-view="generation">Generation</a>
-    </nav>
-    <div id="status-pill" class="pill">…</div>
+    <h1 class="brand"><span aria-hidden="true">▮</span> Bumparr</h1>
+    <p class="tag">bumper generator for the *arr stack</p>
+    <div class="headmeta">
+      <div id="status-pill" class="pill">…</div>
+      <div id="header-profile" class="hmeta"></div>
+      <div id="header-jobs" class="hmeta"></div>
+      <div id="header-refresh" class="hmeta"></div>
+    </div>
   </header>
 
-  <section id="generation-view" class="generation-view" hidden>
-    <div class="panel wide">
-      <h2>Generation</h2>
-      <p id="gen-banner" class="gen-banner"></p>
-      <p id="gen-privacy" class="gen-privacy"></p>
-      <div id="gen-status" class="gen-status"></div>
-      <p id="gen-message" role="status" aria-live="polite"></p>
-    </div>
-    <div class="panel">
-      <h2>Create</h2>
-      <label class="lbl" for="gen-model">Model</label>
-      <select id="gen-model"></select>
-      <label class="lbl" for="gen-brief">Creative brief</label>
-      <textarea id="gen-brief" rows="6" maxlength="8000"
-        placeholder="Subject, setting, action, camera, rhythm, palette, sound. Do not name Adult Swim, artists, or living people."></textarea>
-      <div class="gen-row">
-        <label>Duration <select id="gen-duration"></select></label>
-        <label>Resolution <select id="gen-resolution"></select></label>
-        <label>Energy
-          <select id="gen-energy">
-            <option value="quiet">quiet</option>
-            <option value="neutral">neutral</option>
-            <option value="loud">loud</option>
-          </select>
-        </label>
-      </div>
-      <p class="lbl">Exact submitted prompt</p>
-      <pre id="gen-prompt" class="log"></pre>
-      <p id="gen-estimate" class="gen-estimate"></p>
-      <div class="action-group">
-        <button id="gen-preflight" type="button">Preflight</button>
-        <button id="gen-submit" type="button" disabled>Create paid job</button>
-      </div>
-    </div>
-    <div class="panel">
-      <h2>Queue</h2>
-      <div id="gen-jobs"></div>
-      <div class="action-group">
-        <button id="gen-jobs-prev">Newer jobs</button><button id="gen-jobs-next">Older jobs</button>
-      </div>
-    </div>
-    <div class="panel wide">
-      <h2>Review</h2>
-      <label>Review state <select id="gen-review-state">
-        <option value="pending">Pending / processing failed</option>
-        <option value="approved">Approved</option><option value="rejected">Rejected</option>
-        <option value="deleted">Deleted</option>
-      </select></label>
-      <div id="gen-review"></div>
-      <div class="action-group">
-        <button id="gen-review-prev">Newer outputs</button><button id="gen-review-next">Older outputs</button>
-      </div>
-    </div>
-  </section>
+  <div class="shell">
+    <!-- Hash routes, no server routes and no router library. The active view
+         carries aria-current="page"; below 760px this becomes a scrolling
+         tab row under the header rather than a sidebar. -->
+    <nav id="viewnav" class="viewnav" aria-label="Views">
+      <a href="#/overview" data-view="overview">Overview</a>
+      <a href="#/library" data-view="library">Library</a>
+      <a href="#/composer" data-view="composer">Composer</a>
+      <a href="#/station" data-view="station">Station</a>
+      <a href="#/operations" data-view="operations">Operations</a>
+      <a href="#/generation" data-view="generation">Generation</a>
+    </nav>
 
-  <main id="overview-view">
-    <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
-    <section class="panel wide askbar">
-      <div class="ask-row">
-        <input id="ask" class="ask" autocomplete="off"
-          placeholder="pull something into the rotation…  e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
-        <button id="ask-go">＋ Add</button>
-      </div>
-      <div id="ask-result" class="ask-result"></div>
-      <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
-    </section>
+    <main id="main" tabindex="-1">
+      <!-- Primary short feedback. Panels keep their own explicit state region. -->
+      <p id="live-region" class="live-region" role="status" aria-live="polite"></p>
 
-    <!-- top row: pool stats + actions -->
-    <section class="panel">
-      <h2>Pool</h2>
-      <div id="totals" class="totals"></div>
-      <div id="by-type" class="bars"></div>
-      <div id="memory-status" class="memory-status"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Station</h2>
-      <div id="station" class="station"></div>
-      <div class="action-group">
-        <button data-station="conform">Conform now <em>(prepare the pool for the live channels)</em></button>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Actions</h2>
-      <div class="actions">
-        <div class="action-group">
-          <span class="lbl">Generate cards</span>
-          <button data-gen="trivia">Trivia <em>(grounded)</em></button>
-          <button data-gen="fun_facts">Fun facts <em>(grounded)</em></button>
-          <button data-gen="on_this_day">On this day</button>
-          <button data-gen="psa">PSAs <em>(model)</em></button>
+      <!-- Triage: warnings first, healthy detail after. Reads only
+           GET /api/status and GET /api/station, so opening it never creates or
+           advances a station timeline. The default view ships visible and the
+           other four hidden, so a page whose script never ran still shows a
+           shell rather than nothing at all. -->
+      <section class="view" id="view-overview" aria-labelledby="h-overview">
+        <div class="viewhead">
+          <h2 id="h-overview">Overview</h2>
         </div>
-        <div class="action-group">
-          <span class="lbl">Refresh sources</span>
-          <button data-src="capture-windows">Recapture live cams</button>
-          <button data-src="fetch-queue">Run fetch queue</button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Starter pack</span>
-          <button data-starter="dry">Preview seeds</button>
-          <button data-starter="run">Seed the pool <em>(uses your API keys)</em></button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Maintenance</span>
-          <button data-maint="tidy">Tidy up <em>(empty dirs, 0-byte files)</em></button>
-          <button data-maint="revive">Recheck retired <em>(restore playable)</em></button>
-        </div>
-        <div class="action-group">
-          <span class="lbl">Consume</span>
-          <a class="linkbtn" href="/playlist.m3u" target="_blank">playlist.m3u</a>
-          <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
-        </div>
-      </div>
-      <pre id="log" class="log">ready.</pre>
-    </section>
+        <div id="pool-state" class="panel-state"></div>
 
-    <!-- read-only preview: one item or a duration pack. Never advances playout. -->
-    <section class="panel wide">
-      <h2>Preview
-        <button id="preview-one" class="mini">one item</button>
-        <button data-pack="15" class="mini">15s</button>
-        <button data-pack="30" class="mini">30s</button>
-        <button data-pack="60" class="mini">60s</button>
-        <button data-pack="90" class="mini">90s</button>
-      </h2>
-      <div id="preview-summary"></div>
-      <div id="preview-grid" class="grid"></div>
-    </section>
+        <section class="panel wide" id="panel-warnings" aria-labelledby="h-warnings">
+          <h3 id="h-warnings">Needs attention</h3>
+          <div id="warnings-state" class="panel-state"></div>
+          <ul id="warnings" class="warnings"></ul>
+        </section>
 
-    <!-- browser: filter by category, see everything -->
-    <section class="panel wide">
-      <h2>Browse the pool
-        <input id="search" class="search" placeholder="filter by title…" />
-        <button id="shuffle" class="mini">⟳ shuffle preview</button>
-      </h2>
-      <div id="filters" class="filters"></div>
-      <div id="grid" class="grid"></div>
-      <div id="more-row"><button id="more" class="mini hidden">load more</button></div>
-    </section>
-  </main>
+        <div class="viewgrid">
+          <section class="panel" id="panel-service" aria-labelledby="h-service">
+            <h3 id="h-service">Service</h3>
+            <div id="service-summary" class="summary"></div>
+          </section>
+
+          <section class="panel" id="panel-pool" aria-labelledby="h-pool">
+            <h3 id="h-pool">Pool</h3>
+            <div id="totals" class="totals"></div>
+            <div id="by-type" class="bars"></div>
+          </section>
+
+          <section class="panel" id="panel-ov-station" aria-labelledby="h-ov-station">
+            <h3 id="h-ov-station">Station</h3>
+            <div id="ov-station-state" class="panel-state"></div>
+            <div id="ov-station" class="summary"></div>
+            <div id="ov-now" class="nowcards"></div>
+          </section>
+
+          <section class="panel" id="panel-config" aria-labelledby="h-config">
+            <h3 id="h-config">Configuration</h3>
+            <div id="config-summary" class="summary"></div>
+            <div id="memory-status" class="memory-status"></div>
+          </section>
+
+          <section class="panel wide" id="panel-jobs" aria-labelledby="h-jobs">
+            <h3 id="h-jobs">Recent jobs</h3>
+            <div id="jobs-state" class="panel-state"></div>
+            <ul id="jobs-list" class="joblist"></ul>
+          </section>
+        </div>
+      </section>
+
+      <!-- Curate: filter the pool, inspect a row, act on it reversibly. Every
+           filter is a labelled control and every action has a name; permanent
+           deletion lives only in the inspector or the danger zone below. -->
+      <section class="view" id="view-library" aria-labelledby="h-library" hidden>
+        <div class="viewhead">
+          <h2 id="h-library">Library</h2>
+          <div class="viewtools">
+            <button id="shuffle" class="mini"><span aria-hidden="true">⟳</span> shuffle preview</button>
+          </div>
+        </div>
+        <div class="panel wide">
+          <div class="libbar" role="group" aria-label="Filter the pool">
+            <p class="field">
+              <label for="search">Search titles and kinds</label>
+              <input id="search" class="search" placeholder="e.g. harbour" autocomplete="off" />
+            </p>
+            <p class="field">
+              <label for="filter-type">Type</label>
+              <select id="filter-type">
+                <option value="">All types</option>
+                <option value="video">Video</option>
+                <option value="card">Card</option>
+                <option value="image">Image</option>
+                <option value="stream">Stream</option>
+              </select>
+            </p>
+            <p class="field">
+              <label for="filter-kind">Kind</label>
+              <select id="filter-kind"><option value="">All kinds</option></select>
+            </p>
+            <p class="field">
+              <label for="filter-state">State</label>
+              <select id="filter-state">
+                <option value="all">All states</option>
+                <option value="playable">Playable</option>
+                <option value="parked">Parked</option>
+                <option value="dead">Dead</option>
+                <option value="unrendered">Unrendered</option>
+              </select>
+            </p>
+            <p class="field">
+              <label for="page-size">Per page</label>
+              <select id="page-size">
+                <option value="24">24</option>
+                <option value="48">48</option>
+                <option value="100">100</option>
+              </select>
+            </p>
+            <p class="field">
+              <label for="density">Layout</label>
+              <select id="density">
+                <option value="grid">Grid</option>
+                <option value="list">List</option>
+              </select>
+            </p>
+            <button id="clear-filters" class="mini">Clear filters</button>
+          </div>
+          <p id="library-counts" class="libcounts" tabindex="-1"></p>
+          <div id="browse-state" class="panel-state"></div>
+          <div id="grid" class="grid"></div>
+          <div id="more-row"><button id="more" class="mini" hidden>Load more</button></div>
+        </div>
+
+        <!-- Bulk deletion takes the files with it, so it sits apart from the
+             browsing controls and asks for the kind by name first. -->
+        <section class="panel wide danger-zone" id="library-danger"
+                 aria-labelledby="h-lib-danger">
+          <h3 id="h-lib-danger">Danger zone</h3>
+          <p id="danger-note" class="note"></p>
+          <button id="drop-kind" class="danger-btn" disabled>Delete every item in this kind</button>
+        </section>
+      </section>
+
+      <!-- Review sequences. The server composes the break; this view asks for
+           one, shows it in the order it came back, and plays it locally. Every
+           request it makes is a GET: nothing here advances the live channels
+           or writes play history. -->
+      <section class="view" id="view-composer" aria-labelledby="h-composer" hidden>
+        <div class="viewhead">
+          <h2 id="h-composer">Composer</h2>
+        </div>
+        <p class="note">Read-only: composing a break and playing it back here never
+          advances the live channels and never writes play history.</p>
+
+        <section class="panel wide" id="panel-compose" aria-labelledby="h-compose">
+          <h3 id="h-compose">Break to fill</h3>
+          <div class="cmp-presets" role="group" aria-label="Duration presets">
+            <button type="button" class="mini" data-preset="15">15s</button>
+            <button type="button" class="mini" data-preset="30">30s</button>
+            <button type="button" class="mini" data-preset="60">60s</button>
+            <button type="button" class="mini" data-preset="90">90s</button>
+          </div>
+          <div class="cmpbar">
+            <p class="field">
+              <label for="cmp-seconds">Seconds to fill</label>
+              <input id="cmp-seconds" type="number" inputmode="decimal" autocomplete="off"
+                     min="0.1" max="86400" step="0.1" value="30" />
+            </p>
+            <p class="field">
+              <label for="cmp-tolerance">Tolerance (seconds)</label>
+              <input id="cmp-tolerance" type="number" inputmode="decimal" autocomplete="off"
+                     min="0" max="3600" step="0.1" value="1.5" />
+            </p>
+            <p class="field">
+              <label for="cmp-max-items">Maximum items</label>
+              <input id="cmp-max-items" type="number" inputmode="numeric" autocomplete="off"
+                     min="1" max="40" step="1" value="8" />
+            </p>
+            <p class="field">
+              <label for="cmp-placement">Placement</label>
+              <select id="cmp-placement">
+                <option value="any">Any</option>
+                <option value="open">Open</option>
+                <option value="inside">Inside</option>
+                <option value="close">Close</option>
+              </select>
+            </p>
+          </div>
+          <fieldset class="cmp-types">
+            <legend>Allowed types</legend>
+            <p class="cmp-note">Tick none to let the server choose from every type.</p>
+            <p class="field field-check">
+              <input id="cmp-type-video" type="checkbox" data-cmptype="video" />
+              <label for="cmp-type-video">Video</label>
+            </p>
+            <p class="field field-check">
+              <input id="cmp-type-card" type="checkbox" data-cmptype="card" />
+              <label for="cmp-type-card">Card</label>
+            </p>
+            <p class="field field-check">
+              <input id="cmp-type-image" type="checkbox" data-cmptype="image" />
+              <label for="cmp-type-image">Image</label>
+            </p>
+            <p class="field field-check">
+              <input id="cmp-type-stream" type="checkbox" data-cmptype="stream" />
+              <label for="cmp-type-stream">Stream</label>
+            </p>
+          </fieldset>
+          <!-- Filled by app.js when a control is out of range; the Compose
+               button is disabled for exactly as long as it has anything in it,
+               so an invalid request is never sent. -->
+          <div id="cmp-validation" class="cmp-validation" role="status"
+               aria-live="polite" hidden></div>
+          <button id="cmp-go" type="button">Compose break</button>
+        </section>
+
+        <section class="panel wide" id="panel-break" aria-labelledby="h-break">
+          <h3 id="h-break">Composed break</h3>
+          <div id="composer-state" class="panel-state"></div>
+          <p id="composer-summary" class="cmp-summary"></p>
+          <p id="composer-count" class="cmp-count"></p>
+          <div id="composer-attention" class="cmp-attn" hidden></div>
+          <div id="composer-stale" class="cmp-stale" hidden></div>
+          <div class="cmp-playback" role="group" aria-label="Sequence playback">
+            <button id="cmp-play" type="button" disabled><span aria-hidden="true">▶</span> Play sequence</button>
+            <button id="cmp-prev" type="button" disabled><span aria-hidden="true">◀</span> Previous</button>
+            <button id="cmp-next" type="button" disabled>Next <span aria-hidden="true">▶</span></button>
+            <button id="cmp-stop" type="button" disabled><span aria-hidden="true">■</span> Stop</button>
+          </div>
+          <p id="cmp-progress" class="cmp-progress"></p>
+          <div id="composer-stage" class="cmp-stage"></div>
+          <ol id="composer-timeline" class="cmp-timeline"></ol>
+        </section>
+      </section>
+
+      <!-- Operate the HLS station. Every read here is inspection only; the one
+           control that makes this page a real playlist client is Open preview,
+           which says so before it is pressed. -->
+      <section class="view" id="view-station" aria-labelledby="h-station" hidden>
+        <div class="viewhead">
+          <h2 id="h-station">Station</h2>
+        </div>
+        <section class="panel wide" id="panel-channels" aria-labelledby="h-channels">
+          <h3 id="h-channels">Channels</h3>
+          <div id="station-state" class="panel-state"></div>
+          <div id="station" class="station"></div>
+          <!-- Owned by the preview alone: the summary above is redrawn every 20
+               seconds, and rebuilding an open video element would reopen the
+               stream each time. -->
+          <div id="station-preview" class="station-preview"></div>
+        </section>
+
+        <!-- Read-only by construction: this block ships a heading and two empty
+             containers, and app.js fills them with text and badges alone. There
+             is no input, select, textarea or form here, because configuration
+             is edited in its files on the server and never from the browser. -->
+        <section class="panel wide" id="panel-station-config"
+                 aria-labelledby="h-station-config">
+          <h3 id="h-station-config">Configuration</h3>
+          <div id="station-config-state" class="panel-state"></div>
+          <div id="station-config" class="summary"></div>
+        </section>
+
+        <section class="panel wide" id="panel-conform" aria-labelledby="h-conform">
+          <h3 id="h-conform">Conform</h3>
+          <p class="note">Conforming re-encodes eligible items into HLS segments so the
+            channels have something to play. It can be slow — a large backlog takes
+            minutes — and the job keeps running on the server if you leave this view.</p>
+          <div id="conform-state" class="panel-state"></div>
+          <div id="conform" class="summary"></div>
+          <div class="viewtools">
+            <button data-station="conform" data-job-key="station conform">Conform now
+              <em>(needs ffmpeg)</em></button>
+          </div>
+        </section>
+      </section>
+
+      <!-- Create and maintain: everything that starts a job, grouped by what it
+           costs to run. Every group states its requirements before execution;
+           nothing is hidden for safety, because hiding a button is not
+           authorization and the API is open either way. -->
+      <section class="view" id="view-operations" aria-labelledby="h-operations" hidden>
+        <div class="viewhead">
+          <h2 id="h-operations">Operations</h2>
+        </div>
+
+        <p class="notice notice-panel">This operator API has no authentication. Do not
+          expose this service to the public internet.</p>
+
+        <!-- 1. Add material: natural-language ingest, and the starter seeds. -->
+        <section class="panel wide askbar" id="panel-ask" aria-labelledby="h-ask">
+          <h3 id="h-ask">1 · Add material</h3>
+          <label class="ask-label" for="ask">Describe what to pull in</label>
+          <div class="ask-row">
+            <input id="ask" class="ask" autocomplete="off"
+              placeholder="e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
+            <button id="ask-go"><span aria-hidden="true">＋</span> Add</button>
+          </div>
+          <div id="ask-result" class="ask-result"></div>
+          <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
+          <div class="action-group">
+            <h4 class="lbl">Starter pack <span class="req">needs network · uses your API keys</span></h4>
+            <button data-starter="dry" data-job-key="check starter">Preview seeds</button>
+            <button data-starter="run" data-job-key="run starter">Seed the pool</button>
+          </div>
+        </section>
+
+        <section class="panel wide" id="panel-actions" aria-labelledby="h-actions">
+          <h3 id="h-actions">Actions</h3>
+          <div id="actions-state" class="panel-state"></div>
+          <div class="actions">
+            <div class="action-group">
+              <h4 class="lbl">2 · Generate cards <span class="req">20 items per run</span></h4>
+              <button data-gen="trivia" data-job-key="generate trivia">Trivia <em>(grounded)</em></button>
+              <button data-gen="fun_facts" data-job-key="generate fun_facts">Fun facts <em>(grounded)</em></button>
+              <button data-gen="number" data-job-key="generate number">Numbers <em>(grounded)</em></button>
+              <button data-gen="on_this_day" data-job-key="generate on_this_day">On this day <em>(needs network)</em></button>
+              <button data-gen="weather" data-job-key="generate weather">Weather <em>(needs network)</em></button>
+              <button data-gen="psa" data-job-key="generate psa">PSAs <em>(model)</em></button>
+              <button data-gen="corrections" data-job-key="generate corrections">Corrections <em>(model)</em></button>
+              <button data-gen="achievements" data-job-key="generate achievements">Achievements <em>(model)</em></button>
+              <button data-gen="coming_up" data-job-key="generate coming_up">Coming up <em>(model)</em></button>
+              <button data-gen="tiny_games" data-job-key="generate tiny_games">Tiny games <em>(model)</em></button>
+            </div>
+            <div class="action-group">
+              <h4 class="lbl">3 · Refresh sources <span class="req">needs network</span></h4>
+              <button data-src="capture-windows" data-job-key="capture-windows">Recapture live cams</button>
+              <button data-src="fetch-queue" data-job-key="fetch-queue">Run fetch queue</button>
+            </div>
+            <div class="action-group">
+              <h4 class="lbl">4 · Prepare output <span class="req">needs ffmpeg</span></h4>
+              <button data-prep="render" data-job-key="render cards">Render cards <em>(text cards → MP4)</em></button>
+              <button data-prep="conform" data-job-key="station conform">Conform station <em>(can be slow)</em></button>
+            </div>
+            <div class="action-group">
+              <h4 class="lbl">5 · Maintenance <span class="req">local only</span></h4>
+              <button data-maint="tidy-dry" data-job-key="preview tidy">Preview tidy</button>
+              <button data-maint="tidy" data-job-key="tidy up">Tidy up <em>(empty dirs, 0-byte files)</em></button>
+              <button data-maint="revive-dry" data-job-key="preview recheck">Preview recheck</button>
+              <button data-maint="revive" data-job-key="recheck retired">Recheck retired <em>(restore playable)</em></button>
+            </div>
+            <div class="action-group">
+              <h4 class="lbl">Destructive work lives elsewhere</h4>
+              <p class="note">Deleting every item in a kind is in the
+                <a href="#/library">Library danger zone</a>. Pruning off-shape material
+                and dropping a whole category are CLI-only and irreversible —
+                <code>python -m bumparr.prune --apply</code> and
+                <code>--drop-category NAME</code>, documented in
+                <a href="https://github.com/mikemcg94/bumparr/blob/main/docs/CLI.md"
+                   target="_blank" rel="noopener">docs/CLI.md</a>. Nothing on this page
+                runs them.</p>
+            </div>
+            <div class="action-group">
+              <h4 class="lbl">Consume</h4>
+              <a class="linkbtn" href="/playlist.m3u" target="_blank" rel="noopener">playlist.m3u</a>
+              <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank" rel="noopener">random API</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel wide" id="panel-ops-jobs" aria-labelledby="h-ops-jobs">
+          <h3 id="h-ops-jobs">Recent jobs</h3>
+          <div id="ops-jobs-state" class="panel-state"></div>
+          <ul id="ops-jobs-list" class="joblist"></ul>
+          <h4 id="h-log">Action output</h4>
+          <pre id="log" class="log" aria-labelledby="h-log" tabindex="0">ready.</pre>
+        </section>
+      </section>
+
+      <section class="view generation-view" id="view-generation" aria-labelledby="h-generation" hidden>
+        <div class="viewhead"><h2 id="h-generation">Generation</h2></div>
+        <section class="panel wide"><p id="gen-banner" class="gen-banner"></p><p id="gen-privacy" class="gen-privacy"></p><div id="gen-status" class="gen-status"></div><p id="gen-message" role="status" aria-live="polite"></p></section>
+        <section class="panel"><h3>Create</h3><label for="gen-model">Model</label><select id="gen-model"></select><label for="gen-brief">Creative brief</label><textarea id="gen-brief" rows="6" maxlength="8000" placeholder="Subject, setting, action, camera, rhythm, palette, sound."></textarea><div class="gen-row"><label>Duration <select id="gen-duration"></select></label><label>Resolution <select id="gen-resolution"></select></label><label>Energy <select id="gen-energy"><option value="quiet">quiet</option><option value="neutral">neutral</option><option value="loud">loud</option></select></label></div><p>Exact submitted prompt</p><pre id="gen-prompt" class="log"></pre><p id="gen-estimate" class="gen-estimate"></p><div class="action-group"><button id="gen-preflight" type="button">Preflight</button><button id="gen-submit" type="button" disabled>Create paid job</button></div></section>
+        <section class="panel"><h3>Queue</h3><div id="gen-jobs"></div><div class="action-group"><button id="gen-jobs-prev">Newer jobs</button><button id="gen-jobs-next">Older jobs</button></div></section>
+        <section class="panel wide"><h3>Review</h3><label>Review state <select id="gen-review-state"><option value="pending">Pending / processing failed</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="deleted">Deleted</option></select></label><div id="gen-review"></div><div class="action-group"><button id="gen-review-prev">Newer outputs</button><button id="gen-review-next">Older outputs</button></div></section>
+      </section>
+    </main>
+  </div>
 
   <footer>
-    Bumparr —
-    AGPL-3.0, source: <a href="https://github.com/mikemcg94/bumparr" target="_blank" rel="noopener">github.com/mikemcg94/bumparr</a>
+    <p id="footer-version" class="fver">version not reported</p>
+    <p class="notice">Unprotected operator API — do not expose publicly</p>
+    <p>Bumparr — AGPL-3.0, source:
+      <a href="https://github.com/mikemcg94/bumparr" target="_blank" rel="noopener">github.com/mikemcg94/bumparr</a>
+      · <a href="/docs">API documentation</a></p>
   </footer>
+
+  <!-- One inspector for the whole page, empty until something is inspected.
+       Native <dialog> where the browser has one; app.js falls back to a fixed
+       panel with role/aria-modal when HTMLDialogElement is undefined. -->
+  <dialog id="inspector" class="dlg dlg-inspector" aria-labelledby="inspector-title">
+    <div class="dlg-head">
+      <h2 id="inspector-title" tabindex="-1">Item</h2>
+      <button id="inspector-close" class="mini">Close</button>
+    </div>
+    <div id="inspector-state" class="panel-state"></div>
+    <div id="inspector-body" class="dlg-body"></div>
+  </dialog>
 
   <script src="/web/app.js"></script>
 </body>

@@ -162,6 +162,42 @@ class PoolEnable(PoolRecovery):
         self.assertEqual(self._state()["s"], (1, "dead"))
 
 
+class PoolDisable(PoolRecovery):
+    """Reversible rejection — the operator saying "stop offering this," never
+    "this is broken" (health) or "this is gone" (delete)."""
+
+    def test_enabled_row_is_disabled(self):
+        self._seed(("s", "stream", "webcam", "http://example.com/a.m3u8", 45, 1, "ok", "{}"))
+        out = webapp.disable_playable("s")
+        self.assertEqual((out["enabled"], out["changed"]), (False, True))
+        self.assertEqual(self._state()["s"], (0, "ok"))
+
+    def test_disabling_a_disabled_row_is_a_noop(self):
+        self._seed(("s", "stream", "webcam", "http://example.com/a.m3u8", 45, 0, "ok", "{}"))
+        out = webapp.disable_playable("s")
+        self.assertEqual((out["enabled"], out["changed"]), (False, False))
+
+    def test_unknown_id_is_404(self):
+        out = webapp.disable_playable("nope")
+        self.assertEqual(out.status_code, 404)
+        self.assertEqual(json.loads(out.body), {"error": "not found"})
+
+    def test_disable_does_not_touch_health_or_uri(self):
+        rel = self._file("ambient/keep.mp4")
+        self._seed(("v", "video", "ambient", rel, 5, 1, "dead", "{}"))
+        webapp.disable_playable("v")
+        self.assertEqual(self._state()["v"], (0, "dead"))
+        with db.conn() as c:
+            row = c.execute("SELECT uri FROM playables WHERE id=?", ("v",)).fetchone()
+        self.assertEqual(row["uri"], rel)
+
+    def test_disable_never_deletes_the_file(self):
+        rel = self._file("ambient/present.mp4")
+        self._seed(("v", "video", "ambient", rel, 5, 1, "ok", "{}"))
+        webapp.disable_playable("v")
+        self.assertTrue((config.ASSET_ROOT / rel).is_file())
+
+
 class CalendarParkWarning(PoolRecovery):
     """Enabling a row whose `enabled` belongs to the calendar, not the operator.
 
@@ -243,6 +279,61 @@ class CalendarParkWarning(PoolRecovery):
         self.assertIn("parked by date", webapp.enable_playable("c")["warning"])
         self._rotate()
         self.assertEqual(self._state()["c"][0], 0)
+
+
+class CalendarDisableWarning(PoolRecovery):
+    """Disabling a row whose `enabled` the calendar rotation may put back.
+
+    Mirrors CalendarParkWarning: the only row a schedule can un-disable today
+    is an on_this_day card that belongs to today (bumparr.jobs verified via
+    the module-level rotation test below). Cards for another day are already
+    what the rotation wants (off) and it never flips one back on; a
+    config-owned live cam's loader never re-enables a row it finds either
+    (see tests/test_live_cams.py::test_disabled_dead_cam_preserved_on_reload),
+    so neither gets a warning.
+    """
+
+    def _otd(self, pid, for_date, enabled=1):
+        payload = json.dumps({"lines": ["ON THIS DAY"], "for_date": for_date},
+                             sort_keys=True)
+        self._seed((pid, "card", "on_this_day", None, 8, enabled, "ok", payload))
+
+    def test_todays_card_warns_it_will_be_reenabled(self):
+        self._otd("c", on_this_day.today_key())
+        out = webapp.disable_playable("c")
+        self.assertEqual(self._state()["c"][0], 0)
+        self.assertIn("warning", out)
+        self.assertIn("belongs to today", out["warning"])
+        self.assertIn("dated_card_loop", out["warning"])
+        self.assertIn("enable it again", out["warning"])
+
+    def test_other_days_card_carries_no_warning(self):
+        other = "01-02" if on_this_day.today_key() != "01-02" else "03-04"
+        self._otd("c", other)
+        out = webapp.disable_playable("c")
+        self.assertNotIn("warning", out)
+
+    def test_ordinary_row_carries_no_warning(self):
+        """Nothing rotates a cam, so there is nothing to warn about."""
+        self._seed(("s", "stream", "webcam", "http://example.com/a.m3u8", 45, 1, "ok", "{}"))
+        self.assertNotIn("warning", webapp.disable_playable("s"))
+
+    def test_existing_response_keys_are_unchanged(self):
+        self._otd("c", on_this_day.today_key())
+        out = webapp.disable_playable("c")
+        self.assertEqual({k: out[k] for k in ("id", "enabled", "changed")},
+                         {"id": "c", "enabled": False, "changed": True})
+
+    def test_warning_matches_the_next_rotation_pass(self):
+        """Verified against the real code, not just asserted: disabling today's
+        card is undone by the very next retire_other_days pass."""
+        self._otd("c", on_this_day.today_key())
+        out = webapp.disable_playable("c")
+        self.assertIn("warning", out)
+        with db.conn() as c:
+            on_this_day.retire_other_days(c)
+            c.commit()
+        self.assertEqual(self._state()["c"][0], 1)
 
 
 class DatedCardRotation(PoolRecovery):
@@ -367,6 +458,24 @@ class EnabledFilter(PoolRecovery):
         out = webapp.list_bumpers(None, type="nope", enabled=False,
                                   q=None, limit=100, offset=0)
         self.assertEqual(out.status_code, 400)
+
+
+class HostileStrings(PoolRecovery):
+    """A hostile literal used as an id must stay parameterized data, never
+    interpreted — through the new disable route specifically."""
+
+    def test_hostile_id_round_trips_through_disable(self):
+        hostile_id = '\'; DROP TABLE playables; --'
+        self._seed((hostile_id, "stream", "webcam", "http://example.com/a.m3u8",
+                    45, 1, "ok", "{}"))
+        out = webapp.disable_playable(hostile_id)
+        self.assertEqual(out["id"], hostile_id)
+        self.assertEqual(out["changed"], True)
+        self.assertEqual(self._state()[hostile_id], (0, "ok"))
+        # The table is still there and still holds exactly this one row.
+        with db.conn() as c:
+            n = c.execute("SELECT COUNT(*) n FROM playables").fetchone()["n"]
+        self.assertEqual(n, 1)
 
 
 if __name__ == "__main__":

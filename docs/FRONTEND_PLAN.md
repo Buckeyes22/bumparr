@@ -6,6 +6,28 @@
 **Primary surface:** the existing web dashboard at `/`  
 **Explicit non-goal:** a terminal UI or frontend-framework rewrite
 
+### Post-review job lifecycle closeout (2026-09-05)
+
+The follow-up fixes on `feat/frontend-plan` cover late POST responses after
+navigation, foreground-to-background job handoff, terminal updates to the ingest
+result line, unique merged running-job counts, stale registry snapshots, and
+watch ownership during re-entry. They preserve newer drafts, active ask controls,
+and the existing response-body deadline/cancellation behavior.
+
+`Stop checking` is view-scoped: a jobs-list refresh does not restart it; the
+operator can resume with `Check now`, or leave and re-enter Operations for a
+fresh check. It never cancels the server's job.
+
+Regression evidence: the Node suite has 311 passing tests, including seven new
+job-lifecycle cases; the selector drift test also checks boot `on("#id", ...)`
+bindings. All 605 Python tests, Ruff, compileall, JavaScript syntax, and
+`git diff --check` pass. The static bundle is 260,648 bytes, below the unchanged
+262,144-byte cap. A Chromium UI check uses the real static bundle with an inert local
+job fixture to exercise delayed acceptance, navigation, preserved draft/focus,
+and success/failure completion. This is not a paid-provider or production-ingest
+test and does not replace the outstanding Firefox matrix above. Integration
+with the main checkout's separate generation changes remains a separate step.
+
 ## Purpose
 
 Build the existing dashboard into a focused operator console for Bumparr. The
@@ -544,7 +566,8 @@ permanence for `on_this_day` or config-owned cams. Test API before UI wiring.
   The revised cap is what the design supports with its contracts intact, and
   `node --test bumparr/web/app.test.js` asserts the three-file total against it
   so it stops drifting. What actually crosses the wire is gzipped by
-  `GZipMiddleware(minimum_size=1000)` in `bumparr/app.py`: `app.js` is roughly
+  `SelectiveGZip(minimum_size=1000)` in `bumparr/app.py`, wrapping Starlette's
+  `GZipMiddleware`: `app.js` is roughly
   a quarter of its on-disk size compressed, which is the number a browser and a
   reverse proxy care about. Media is excluded on purpose — `/media`,
   `/station/seg` and `/api/stream` serve bytes that are already compressed, and

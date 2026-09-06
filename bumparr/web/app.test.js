@@ -5221,7 +5221,10 @@ test("every element app.js reaches for by id exists in index.html and here", () 
   const source = readWeb("app.js");
   const html = readWeb("index.html");
   const wanted = new Set();
-  const literal = /\$\("#([\w-]+)"\)/g;
+  // Include the boot helper's on("#id", ...) bindings as well as $()/$$()
+  // lookups: a renamed control can otherwise disappear from the fake DOM and
+  // its listener quietly never gets wired while the surrounding tests pass.
+  const literal = /(?:\$\(|\bon\()\s*["']#([\w-]+)["'](?=\s*(?:\)|,))/g;
   let hit;
   while ((hit = literal.exec(source))) wanted.add(hit[1]);
   assert.ok(wanted.size > 30, "the selector sweep found " + wanted.size + " ids");
@@ -5840,6 +5843,247 @@ test("a long job result is bounded before it reaches the page", () => {
   assert.ok(pre, "the raw result is in an expandable block");
   assert.equal(pre.textContent.length, 2001, "2000 characters plus the ellipsis");
   assert.ok(pre.textContent.endsWith("…"), "and it says it was cut");
+});
+
+// --- jobs: route hand-off and the merged registry ---------------------------
+
+test("an ask whose POST lands after Operations is reopened is handed to one new watch",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let landPost;
+  let statusReads = 0;
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    calls.push(u);
+    if ((opts && opts.method) === "POST" && u === "/api/request") {
+      return new Promise((resolve) => { landPost = resolve; });
+    }
+    if (u.startsWith("/api/request/late")) {
+      statusReads++;
+      return jsonReply({ status: "done", result: "captured 4 clips" });
+    }
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "old request";
+  const old = submitAsk();
+  await flush();
+  await applyHash("#/overview");
+  await flush();
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "new draft must survive";
+
+  landPost(jsonReply({ job_id: "late", status: "working" }));
+  await flush();
+  assert.equal($("#ask").value, "new draft must survive",
+               "the abandoned submit cannot clear text typed after re-entry");
+  t.mock.timers.tick(3000);
+  await flush();
+  await old;
+  assert.equal(statusReads, 1, "the late id is adopted once, without an orphan or duplicate poll");
+  assert.match(textOf($("#ops-jobs-list")), /captured 4 clips/);
+  assert.match(textOf($("#ops-jobs-list")), /Healthy/);
+
+  await applyHash("#/overview");
+  const settled = statusReads;
+  t.mock.timers.tick(30000);
+  await flush();
+  assert.equal(statusReads, settled, "the adopted watch still belongs to Operations");
+});
+
+test("Stop checking survives a jobs refresh until Check now explicitly resumes it",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let statusReads = 0;
+  let statusWorks = false;
+  const listed = serverJob({ id: "stopped", request: "add: slow camera",
+    status: "working", result: null });
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      return jsonReply({ job_id: "stopped", status: "working" });
+    }
+    if (u.startsWith("/api/request/stopped")) {
+      statusReads++;
+      if (!statusWorks) throw new TypeError("camera host unreachable");
+      return jsonReply({ status: "working" });
+    }
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [listed], count: 1 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "slow camera";
+  const running = submitAsk();
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  const stop = buttonIn($("#ask-result"), "Stop checking");
+  assert.ok(stop, "a lost foreground read offers an explicit stop");
+  await stop.click();
+  await running;
+  assert.equal(statusReads, 1);
+
+  await loadJobs();
+  await flush();
+  t.mock.timers.tick(30000);
+  await flush();
+  assert.equal(statusReads, 1,
+               "a successful same-route registry refresh does not reverse Stop checking");
+  const check = buttonIn($("#ops-jobs-list"), "Check now");
+  assert.ok(check, "the stopped row keeps the deliberate way to resume");
+  statusWorks = true;
+  await check.click();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(statusReads, 2, "Check now explicitly resumes this job's watch");
+  stopJobWatches();
+});
+
+test("an action POST landing after re-entry is handed to one Operations watch",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let landPost;
+  let statusReads = 0;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      return new Promise((resolve) => { landPost = resolve; });
+    }
+    if (u.startsWith("/api/request/action-late")) {
+      statusReads++;
+      return jsonReply({ status: "done", result: "rendered 12 cards" });
+    }
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+
+  await applyHash("#/station");
+  await flush();
+  const stale = doAction("/api/render/cards", "render cards");
+  await flush();
+  const abandonedLine = textOf($("#conform-state"));
+  await applyHash("#/overview");
+  await flush();
+  await applyHash("#/operations");
+  await flush();
+  landPost(jsonReply({ job_id: "action-late", status: "working" }));
+  await stale;
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(statusReads, 1, "the stale action surface creates no duplicate poll");
+  assert.match(textOf($("#ops-jobs-list")), /rendered 12 cards/);
+  assert.equal(textOf($("#conform-state")), abandonedLine,
+               "the abandoned Station surface receives no late terminal write");
+});
+
+test("a re-entered Operations view reflects a background ask finishing", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let final = { status: "working" };
+  const listed = serverJob({ id: "ask1", request: "add: harbour cams",
+    status: "working", result: null });
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      return jsonReply({ job_id: "ask1", status: "working" });
+    }
+    if (u.startsWith("/api/request/ask1")) return jsonReply(final);
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [listed], count: 1 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "harbour cams";
+  const started = submitAsk();
+  await flush();
+  await applyHash("#/overview");
+  await flush();
+  await started;
+  await applyHash("#/operations");
+  await flush();
+  assert.match(textOf($("#ask-result")), /still running/i);
+
+  final = { status: "error", result: "camera refused connection" };
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.match(textOf($("#ask-result")), /camera refused connection/,
+               "the parked result line follows its registry job to the last word");
+  assert.doesNotMatch(textOf($("#ask-result")), /still running/i);
+  assert.match(textOf($("#ask-result")), /Failed/);
+});
+
+test("a background completion cannot overwrite the newer ask's live controls", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let oldFinal = { status: "working" };
+  let landNew;
+  const old = serverJob({ id: "old", request: "add: old", status: "working", result: null });
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      return new Promise((resolve) => { landNew = resolve; });
+    }
+    if (u.startsWith("/api/request/old")) return jsonReply(oldFinal);
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [old], count: 1 });
+    if (u.startsWith("/api/bumpers")) return jsonReply({ count: 0, total: 0, bumpers: [] });
+    return jsonReply(u.startsWith("/api/station") ? OK_STATION : OK_STATUS);
+  };
+
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "new ask";
+  const newer = submitAsk();
+  await flush();
+  assert.equal($("#ask").disabled, true);
+  oldFinal = { status: "done", result: "old complete" };
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal($("#ask").disabled, true, "the newer pending POST still owns the form");
+  assert.match(textOf($("#ask-result")), /downloads and captures can take a bit/);
+  assert.doesNotMatch(textOf($("#ask-result")), /old complete/);
+
+  landNew(jsonReply({ status: "done", result: "new complete" }));
+  await newer;
+  assert.match(textOf($("#ask-result")), /new complete/);
+});
+
+test("the header counts unique working jobs in the merged registry", () => {
+  STATE.jobs.items = [
+    { id: "same", label: "local copy", status: "working", startedAt: 2000,
+      updatedAt: 2000, result: "" },
+    { id: "finished", label: "finished here", status: "done", startedAt: 1000,
+      updatedAt: 9000, result: "ok" },
+  ];
+  STATE.jobs.server = [
+    serverJob({ id: "same", status: "working", created_at: 2, updated_at: 2 }),
+    serverJob({ id: "remote", status: "working", created_at: 3, updated_at: 3 }),
+    serverJob({ id: "finished", status: "working", created_at: 1, updated_at: 4 }),
+    serverJob({ id: "terminal", status: "error", created_at: 4, updated_at: 4 }),
+  ];
+  renderChrome();
+  assert.equal(textOf($("#header-jobs")), "2 jobs running",
+               "server-only work counts, duplicates count once, and newer terminal truth wins");
+});
+
+test("a newer individual terminal result beats an older cached working row", () => {
+  const rows = mergeJobs(
+    [{ id: "parked", label: "add: cams", status: "error", startedAt: 1000,
+       updatedAt: 9000, result: "camera offline" }],
+    [serverJob({ id: "parked", request: "add: cams", status: "working",
+                created_at: 1, updated_at: 4, result: null })]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, "error");
+  assert.equal(rows[0].result, "camera offline");
 });
 
 test("the Overview's list is the server's registry, not only this tab's", async () => {

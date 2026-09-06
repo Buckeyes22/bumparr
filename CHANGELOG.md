@@ -25,13 +25,23 @@
   content marked stale with its age. A failed read never clears known-good data,
   and a field this build of the server does not send reads "Not available in this
   version." rather than as a zero.
-- **Honest jobs.** Every working job is polled to a terminal state, whoever
-  started it; a lost read keeps the row `status unknown` and backs off rather
+- **Honest jobs.** Operations follows working jobs to a terminal state, whoever
+  started them; Overview refreshes its registry snapshot every 20 seconds.
+  A lost read keeps the row `status unknown` and backs off rather
   than inventing a failure; a `404` ends the poll as expired and is never
   reported as success; no five-minute cap is imposed. Starting an action disables
   only the duplicate of that action. No poll outlives the view that started it —
   the work carries on server-side and is picked up again when the operator
   returns to the view that can show it.
+- Late ingest/action responses hand their job IDs to the active Operations
+  watcher without clearing newer input or replacing an existing watcher.
+  Background completion updates the ingest result line as well as the job list;
+  the header counts unique working jobs from the merged registry, and an older
+  working snapshot cannot undo a known terminal result. **Stop checking** stays
+  stopped through same-view registry refreshes; **Check now** explicitly resumes,
+  and leaving/re-entering Operations starts a fresh check. Seven additional
+  regression tests cover these transitions and preserve the existing body-read
+  timeout and cancellation protections.
 - **Accessible by construction.** One `<h1>` and ordered headings, a skip link,
   a visible label on every control, native controls throughout, a visible
   `:focus-visible` ring, 44x44 primary and destructive targets, correct dialog
@@ -97,8 +107,8 @@
   is the same shared registry Operations reads rather than only what this tab
   started, so a job that failed elsewhere — another tab, or the schedule —
   raises the same warning here, pointing at Operations.
-- The header carries the service pill, profile validity, the number of jobs
-  this page is still waiting on, and the age of the last read; the footer
+- The header carries the service pill, profile validity, the number of working
+  jobs in the merged page/server registry, and the age of the last read; the footer
   carries the version (or "version not reported"), the *unprotected operator
   API* notice and a link to `/docs`.
 - The 20-second refresh belongs to the two views that show live figures —

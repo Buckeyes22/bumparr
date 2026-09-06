@@ -141,7 +141,7 @@ function initialState() {
     // `ask` is the ask form itself: whether its controls are held, the job it
     // was started for, and its own last word. The controls are never a fact
     // about the elements — leaving the view and coming back re-derives them.
-    ops: { copied: null, preview: null, running: {}, jobNotes: {}, hls: null,
+    ops: { copied: null, preview: null, running: {}, jobNotes: {}, stoppedJobs: {}, hls: null,
            ask: { busy: false, job: null, level: "", message: "" } },
     notices: [],
   };
@@ -517,6 +517,7 @@ function enterRoute(name, params) {
 // the inspector belongs to every surface that draws a card, and a conform is
 // the same kind of job whether the Station or Operations started it.
 function exitRoute(name) {
+  STATE.route = "";
   stopRefresh();
   // Every job poll, whichever surface started it: a poll is a timer, and the
   // rule for timers is that none of them outlives the view. A job still
@@ -670,7 +671,7 @@ function renderHeaderMeta(at) {
   }
   const jobsEl = $("#header-jobs");
   if (jobsEl) {
-    const running = STATE.jobs.items.filter((job) => job.status === "working").length;
+    const running = jobsList().filter((job) => job.status === "working").length;
     jobsEl.textContent = running === 1 ? "1 job running" : running + " jobs running";
   }
   const refreshEl = $("#header-refresh");
@@ -2826,12 +2827,20 @@ async function inspectorJob(options) {
     r = await api(url, { method: "POST", timeout: 0 });
   } catch (err) {
     finishJob(record, "error", err.message);
-    announce("✗ " + label + " failed: " + err.message);
-    setInspectorBusy("");
+    if (current()) {
+      announce("✗ " + label + " failed: " + err.message);
+      setInspectorBusy("");
+    }
     return null;
   }
   if (r && r.job_id) {
     record.id = String(r.job_id);
+    if (!current()) {
+      handoffJob(record);
+      return r;
+    }
+    record.polling = true;
+    stopJobWatch(record.id);
     r = await watchJob(r, {
       superseded: () => !current(),
       release: () => setInspectorBusy(""),
@@ -2842,6 +2851,11 @@ async function inspectorJob(options) {
         if (current()) renderJobState($("#inspector-state"), "attention", message, actions);
       },
     });
+    if (!current()) {
+      handoffJob(record);
+      return r;
+    }
+    record.polling = false;
   }
   const payload = r && r.result !== undefined ? r.result : r;
   let message;
@@ -2854,6 +2868,7 @@ async function inspectorJob(options) {
     message = typeof payload === "string" ? payload : JSON.stringify(payload);
   }
   finishJob(record, r && r.status ? jobOutcome(r.status) : "done", message);
+  if (!current()) return r;
   announce(label + ": " + humanMessage(message, "done"));
   setInspectorBusy("");
   if (inspectorOnMutate) inspectorOnMutate(kind, id);
@@ -4086,8 +4101,9 @@ const recentJobs = (items, limit) =>
  *
  * Rows are keyed by job id: once a POST answers, the page's record carries the
  * server's id and the two merge into one row. The server wins on status and
- * result (it is running the work); the page keeps the label it already showed
- * if the server sends none, and keeps its own Retry descriptor. Pure.
+ * result while it has newer news; a server row still saying working cannot
+ * undo this page's terminal poll result. The page keeps the label it already
+ * showed if the server sends none, and keeps its own Retry descriptor. Pure.
  */
 function mergeJobs(client, server) {
   const rows = [];
@@ -4095,9 +4111,15 @@ function mergeJobs(client, server) {
   const push = (row) => {
     const seen = at.get(row.id);
     if (seen === undefined) { at.set(row.id, rows.length); rows.push(row); return; }
-    rows[seen] = Object.assign({}, rows[seen], row, {
-      label: row.label || rows[seen].label,
-      retry: row.retry || rows[seen].retry,
+    const previous = rows[seen];
+    const staleWorking = row.status === "working" &&
+      (previous.status === "done" || previous.status === "error");
+    const next = staleWorking ? Object.assign({}, row, {
+      status: previous.status, result: previous.result, updatedAt: previous.updatedAt,
+    }) : row;
+    rows[seen] = Object.assign({}, previous, next, {
+      label: next.label || previous.label,
+      retry: next.retry || previous.retry,
       source: "both",
     });
   };
@@ -4149,16 +4171,19 @@ function jobRowEl(job, opts) {
   }
   // Keyed by a server-supplied id, so it is read as a map and not as an object
   // whose prototype would answer for "constructor" or "__proto__".
-  const note = own(STATE.ops.jobNotes, job.id);
+  const note = own(STATE.ops.jobNotes, job.id) || own(STATE.ops.stoppedJobs, job.id);
   if (note) {
     li.append(statusBadge("attention", String(note)));
     // The escape from a lost poll is another poll, not another run of the job:
     // the work is very likely still going, and starting a second copy of it is
     // the one thing that would make the situation worse.
     const watch = JOB_WATCH.get(job.id);
-    if (watch && watch.check) {
+    if ((watch && watch.check) || own(STATE.ops.stoppedJobs, job.id)) {
       const check = makeButton("Check now", "jobrow-check mini",
-        () => { watch.check(); }, "Check the status of " + job.label + " now");
+        () => {
+          if (watch && watch.check) watch.check();
+          else resumeJobWatch(job.id);
+        }, "Check the status of " + job.label + " now");
       check.dataset.jobId = String(job.id);
       li.append(check);
     }
@@ -4229,9 +4254,6 @@ function renderOpsJobs(at) {
   return renderJobsState($("#ops-jobs-state"), items.length);
 }
 
-// A read that fails leaves the page's own list standing: the jobs this tab
-// started are still true, and blanking them would lose the only record of a
-// job whose POST never reached the registry.
 async function loadJobs() {
   if (jobsAbort) jobsAbort.abort();
   const controller = new AbortController();
@@ -4254,6 +4276,11 @@ async function loadJobs() {
   STATE.jobs.loading = false;
   STATE.jobs.error = null;
   STATE.jobs.server = body && Array.isArray(body.jobs) ? body.jobs : [];
+  STATE.jobs.server.forEach((job) => {
+    if (job && job.id !== undefined && job.id !== null && job.status !== "working") {
+      delete STATE.ops.stoppedJobs[String(job.id)];
+    }
+  });
   STATE.jobs.updatedAt = now();
   renderJobs();
   // The failed-job warning is derived from this list, so a read that changes
@@ -4266,15 +4293,8 @@ async function loadJobs() {
 }
 
 // --- following a job to a terminal state --------------------------------------
-// Every working job in the list is followed, whether this page started it or
-// the server already had it: a row that says "working" for ever is a lie, and a
-// job another tab started is still an operator's job.
-
 const JOB_WATCH = new Map();
 
-// A pause a control can cut short or abandon. Both watchers use it, so "Check
-// now" and "Stop checking" cannot behave differently depending on which surface
-// started the job.
 function interruptiblePause() {
   let wake = null;
   return {
@@ -4286,10 +4306,6 @@ function interruptiblePause() {
   };
 }
 
-// The row is rebuilt around the button that was just pressed, so focus would
-// fall to <body>. Only when the press is what moved it: this is also called
-// from a background poll nobody is looking at, and stealing focus then would
-// take the operator out of whatever they were typing.
 function noteJob(id, message) {
   const active = typeof document !== "undefined" ? document.activeElement : null;
   const held = Boolean(active && active.dataset &&
@@ -4319,6 +4335,7 @@ function applyJobResult(id, final) {
   const answer = final && typeof final === "object" ? final : {};
   const text = rawResult(answer.result === undefined ? answer : answer.result);
   delete STATE.ops.jobNotes[id];
+  delete STATE.ops.stoppedJobs[id];
   const record = STATE.jobs.items.find((r) => String(r.id) === id);
   if (record) finishJob(record, jobOutcome(answer.status), text);
   const row = STATE.jobs.server.find((r) => r && String(r.id) === id);
@@ -4326,6 +4343,10 @@ function applyJobResult(id, final) {
     row.status = jobOutcome(answer.status);
     row.result = text;
     row.updated_at = now() / 1000;
+  }
+  const ask = STATE.ops.ask;
+  if (!ask.busy && !ask.level && ask.job && String(ask.job.id) === String(id)) {
+    renderAsk();
   }
   renderJobs();
   renderWarnings();
@@ -4368,6 +4389,7 @@ function syncJobWatches() {
   if (STATE.route !== "operations") return null;
   jobsList().forEach((job) => {
     if (job.status !== "working") return;
+    if (own(STATE.ops.stoppedJobs, job.id)) return;
     // No server id yet: the POST has not answered, so there is nothing to poll.
     if (job.id.indexOf("page-") === 0) return;
     // Its own surface is already waiting on it; two polls would double the load
@@ -4379,6 +4401,22 @@ function syncJobWatches() {
   return null;
 }
 
+function handoffJob(record) {
+  if (!record) return null;
+  record.polling = false;
+  if (STATE.route === "operations" && String(record.id).indexOf("page-") !== 0) {
+    syncJobWatches();
+  }
+  return null;
+}
+
+function resumeJobWatch(id) {
+  delete STATE.ops.stoppedJobs[id];
+  syncJobWatches();
+  renderJobs();
+  return null;
+}
+
 function stopJobWatches() {
   JOB_WATCH.forEach((entry) => entry.stop());
   JOB_WATCH.clear();
@@ -4386,6 +4424,9 @@ function stopJobWatches() {
   // starts fresh watches, which raise their own the moment a read is lost —
   // a note with neither Check now nor Retry beside it is not an escape.
   STATE.ops.jobNotes = {};
+  // A stopped check belongs to this view too: reopening Operations is an
+  // intentional fresh look at the jobs the server still reports as working.
+  STATE.ops.stoppedJobs = {};
   return null;
 }
 
@@ -4502,7 +4543,10 @@ function watchJob(job, view) {
   if (id) JOB_WATCH.set(id, entry);
   const escapes = [
     { label: "Check now", onClick: paused.wake },
-    { label: "Stop checking", onClick: entry.stop },
+    { label: "Stop checking", onClick: () => {
+      if (id) STATE.ops.stoppedJobs[id] = JOB_STOPPED;
+      entry.stop();
+    } },
   ];
   const release = () => {
     if (id && JOB_WATCH.get(id) === entry) JOB_WATCH.delete(id);
@@ -4579,6 +4623,12 @@ async function doAction(url, label, opts) {
     const synchronous = !r || !r.job_id;
     if (!synchronous) {
       record.id = String(r.job_id);
+      if (!current()) {
+        handoffJob(record);
+        release();
+        if (STATE.route === "operations") loadJobs();
+        return null;
+      }
       record.polling = true;
       stopJobWatch(record.id);
       r = await watchJob(r, {
@@ -4592,6 +4642,13 @@ async function doAction(url, label, opts) {
         },
       });
       record.polling = false;
+      if (!current()) {
+        handoffJob(record);
+        release();
+        refreshAfterJob();
+        if (STATE.route === "operations") loadJobs();
+        return null;
+      }
     }
     const result = r && r.result !== undefined ? r.result : r;
     let msg = jobResultText(result);
@@ -4730,11 +4787,15 @@ async function submitAsk() {
   // below belongs to this ask any more: clearing the field would take what a
   // newer ask has already typed into it, and taking the job over would stop the
   // watch the view it was re-entered on has just started.
-  if (!current()) return null;
+  if (!current()) {
+    handoffJob(record);
+    return null;
+  }
   // This surface takes the job over from the background watch, exactly as
   // doAction does: two polls would double the load on the registry and race
   // each other to write the answer.
   stopJobWatch(record.id);
+  record.polling = true;
   inp.value = "";
   // The same poller the Actions panel uses: never a false success, never a
   // failure invented from a lost read, and never a form left disabled.
@@ -4750,6 +4811,11 @@ async function submitAsk() {
       if (current()) renderJobState(out, "attention", message, actions);
     },
   });
+  record.polling = false;
+  if (!current()) {
+    handoffJob(record);
+    return null;
+  }
   finish(final.status === "done" ? "healthy"
     : (final.status === "unknown" ? "attention" : "failed"), final.result || "done");
 }

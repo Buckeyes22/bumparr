@@ -144,6 +144,12 @@ class FakeNode {
   click() { return this.dispatch("click"); }
   focus() { global.document.activeElement = this; }
   select() { this.selected = true; }
+  // Counted rather than mocked: the assertion is that a route change scrolls
+  // the current tab into view once, and that a refresh does not do it again.
+  scrollIntoView(options) {
+    this.scrolls = (this.scrolls || 0) + 1;
+    this.scrollOptions = options;
+  }
   // Modal open/close. close() is idempotent, so a double teardown is harmless
   // here for the same reason it is on the real element.
   showModal() { this.open = true; this.setAttribute("open", ""); }
@@ -395,6 +401,13 @@ global.document = {
 global.confirm = () => true;
 // A browser with a real <dialog>. The fallback-panel test deletes this.
 global.HTMLDialogElement = function HTMLDialogElement() {};
+// prefers-reduced-motion, which app.js asks about before it starts a hover
+// preview. Off by default, which is the browser's own default.
+let reduceMotion = false;
+global.matchMedia = (query) => ({
+  media: String(query),
+  matches: reduceMotion && /prefers-reduced-motion/.test(String(query)),
+});
 // Density is the only thing the dashboard is allowed to remember locally.
 const stored = new Map();
 let storageThrows = false;
@@ -477,6 +490,10 @@ test.beforeEach(() => {
   stored.clear();
   storageThrows = false;
   document.activeElement = null;
+  reduceMotion = false;
+  // Node has no execCommand, which is the shape of a browser that dropped it.
+  // The tests that need the legacy copy path install one.
+  delete document.execCommand;
   // Node ships a `navigator` with no `clipboard`, which is the shape a browser
   // without permission presents. Tests that need one install it.
   Object.defineProperty(globalThis, "navigator", {
@@ -2957,7 +2974,11 @@ test("a preset fills the seconds field in and sends nothing by itself", () => {
 test("an out-of-range control disables Compose and sends no request", async () => {
   const calls = stubFill(breakBody([BREAK_ITEM()]));
   const cases = [
-    ["#cmp-seconds", "0", /more than 0/],
+    ["#cmp-seconds", "0", /at least 0.1/],
+    // Below the step the control itself offers: the field's min and this
+    // file's own bound have to agree, or the browser and the page disagree
+    // about a value one of them will accept.
+    ["#cmp-seconds", "0.05", /at least 0.1/],
     ["#cmp-seconds", "86401", /86400/],
     ["#cmp-seconds", "not a number", /Seconds/],
     ["#cmp-tolerance", "3601", /3600/],
@@ -4876,6 +4897,692 @@ test("hostile configuration strings stay text in the Station's block", async () 
   } });
   assert.ok(textOf(el).includes(hostile));
   assert.equal(descendants(el).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// F6: accessibility, cleanup and payload
+// ---------------------------------------------------------------------------
+
+const readWeb = (name) => fs.readFileSync(path.join(__dirname, name), "utf8");
+
+// --- payload ----------------------------------------------------------------
+
+test("the three static files stay inside the payload budget", () => {
+  // 256 KiB uncompressed, the revised limit: the plan's original 150 KiB was
+  // measured unreachable (stripping every comment and all indentation from all
+  // three files still landed at 156 KiB, before F5 had even shipped). The
+  // number is asserted here so it stops drifting, and GZipMiddleware is what
+  // actually crosses the wire.
+  const files = ["index.html", "style.css", "app.js"];
+  const bytes = files.map((name) => Buffer.byteLength(readWeb(name), "utf8"));
+  const total = bytes.reduce((a, b) => a + b, 0);
+  assert.ok(total < 262144,
+    "index.html + style.css + app.js = " + total + " B, over the 262144 B budget: " +
+    files.map((name, at) => name + " " + bytes[at]).join(", "));
+});
+
+// --- the fake document cannot drift away from index.html --------------------
+
+test("every element app.js reaches for by id exists in index.html and here", () => {
+  // buildDocument is a hand-made stand-in for index.html. A selector renamed in
+  // one and not the other makes every test using it pass while proving nothing,
+  // so both are checked against the same list.
+  const source = readWeb("app.js");
+  const html = readWeb("index.html");
+  const wanted = new Set();
+  const literal = /\$\("#([\w-]+)"\)/g;
+  let hit;
+  while ((hit = literal.exec(source))) wanted.add(hit[1]);
+  assert.ok(wanted.size > 30, "the selector sweep found " + wanted.size + " ids");
+  const inHtml = new Set((html.match(/\bid="([\w-]+)"/g) || [])
+    .map((attr) => attr.slice(4, -1)));
+  const ids = [...wanted].sort();
+  assert.deepEqual(ids.filter((id) => !inHtml.has(id)), [],
+                   "app.js reaches for an id index.html does not ship");
+  assert.deepEqual(ids.filter((id) => !document.getElementById(id)), [],
+                   "app.js reaches for an id the fake document does not have");
+});
+
+test("every option index.html offers is a value this file will accept", () => {
+  // A <select> whose options drift away from the allow-lists would silently
+  // send a filter the endpoint rejects, or hide one it accepts.
+  const html = readWeb("index.html");
+  const optionsOf = (id) => {
+    const open = html.indexOf('id="' + id + '"');
+    assert.ok(open > 0, id + " is in index.html");
+    const end = html.indexOf("</select>", open);
+    return (html.slice(open, end).match(/value="([^"]*)"/g) || [])
+      .map((attr) => attr.slice(7, -1));
+  };
+  assert.deepEqual(optionsOf("filter-state"), app.LIBRARY_STATES);
+  assert.deepEqual(optionsOf("filter-type").filter(Boolean).sort(),
+                   [...app.LIBRARY_TYPES].sort());
+  assert.deepEqual(optionsOf("page-size"), PAGE_SIZES.map(String));
+  assert.deepEqual(optionsOf("density"), LIBRARY_DENSITIES);
+  assert.deepEqual(
+    (html.match(/data-preset="(\d+)"/g) || []).map((a) => Number(a.slice(13, -1))),
+    COMPOSER_PRESETS);
+});
+
+// --- stylesheet and shell invariants ----------------------------------------
+
+test("the stylesheet keeps its focus, motion and target rules", () => {
+  const css = readWeb("style.css");
+  assert.match(css, /:focus-visible \{ outline:2px solid var\(--focus\)/,
+               "one visible focus ring for every control");
+  // Unscoped, this outranked the ring above for anyone arriving by skip link.
+  assert.match(css, /main:focus:not\(:focus-visible\) \{ outline:none/);
+  assert.doesNotMatch(css, /\bmain:focus \{ outline:none/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  // Every control the F6 measurement found under 44px, in the shared block.
+  const at = css.indexOf(".panel-retry, .pv-inspect");
+  const block = css.slice(at, css.indexOf("}", at));
+  ["#shuffle", "#inspector-close", ".linkbtn", ".cmp-presets button"]
+    .forEach((sel) => assert.ok(block.includes(sel), sel + " clears 44px"));
+  assert.match(css, /\.cmp-presets button \{ min-width:44px/);
+  assert.match(css, /\.field-check \{ min-height:44px/);
+  // A control's boundary against its panel: --border is 1.64:1 there, which is
+  // a divider's contrast rather than a control's (WCAG 1.4.11).
+  assert.match(css, /button, \.linkbtn \{[^}]*border:1px solid var\(--muted\)/);
+  assert.doesNotMatch(css, /cursor:wait/);
+  // Nothing builds these any more.
+  [".pack-summary", ".preview-err", ".pv-relax"].forEach((dead) => {
+    assert.ok(!css.includes(dead), dead + " is dead CSS");
+  });
+});
+
+test("index.html keeps its landmarks, headings and hidden decoration", () => {
+  const html = readWeb("index.html");
+  assert.equal((html.match(/<h1\b/g) || []).length, 1, "exactly one <h1>");
+  assert.equal((html.match(/<h2\b/g) || []).length, 6,
+               "five views plus the inspector, and no more");
+  // Decorative glyphs are not part of an accessible name.
+  ["▮", "⟳", "＋", "▶", "◀", "■"].forEach((glyph) => {
+    const found = html.indexOf(glyph);
+    assert.ok(found > 0 && html.slice(found - 22, found).includes('aria-hidden="true"'),
+              glyph + " is hidden from assistive technology");
+  });
+  assert.match(html, /<link rel="icon"/, "no favicon means a 404 on every load");
+  // The five action groups are structure, not styled spans.
+  assert.ok(html.includes('<h4 class="lbl">2 · Generate cards'));
+  assert.ok(html.includes('<h4 class="lbl">5 · Maintenance'));
+  assert.ok(!/<span class="lbl">\d/.test(html));
+  assert.match(html, /id="cmp-validation"[^>]*role="status"/s);
+});
+
+// --- reduced motion ----------------------------------------------------------
+
+const VIDEO_ROW = { id: "v1", type: "video", kind: "ambient", title: "harbour",
+                    media_url: "/media/a.mp4", duration: 6, enabled: 1, health: "ok" };
+
+test("hovering a card previews it, unless reduced motion was asked for", async () => {
+  const card = cardEl(VIDEO_ROW);
+  const video = descendants(card).find((n) => n.tagName === "VIDEO");
+  await card.dispatch("mouseenter");
+  assert.equal(video.paused, false, "a pointer may still preview on hover");
+  await card.dispatch("mouseleave");
+  assert.equal(video.paused, true);
+
+  reduceMotion = true;
+  const quiet = cardEl(VIDEO_ROW);
+  const still = descendants(quiet).find((n) => n.tagName === "VIDEO");
+  await quiet.dispatch("mouseenter");
+  assert.equal(still.paused, true,
+               "an endless loop started by a hover — a tap, on a touch screen — " +
+               "is exactly the motion that was opted out of");
+  assert.equal(still.controls, true, "and it can still be played deliberately");
+});
+
+test("a row whose media the pool could not read shows words, not a broken box", () => {
+  const dead = cardEl(Object.assign({}, VIDEO_ROW, { health: "dead" }));
+  assert.equal(descendants(dead).filter((n) => n.tagName === "VIDEO").length, 0,
+               "no element points at a file that answers 404");
+  assert.match(textOf(dead), /media unreadable/);
+  assert.match(badgeText(dead), /Failed.*dead/s);
+});
+
+test("a card names itself, so a grid is not a run of unnamed articles", () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=81">';
+  const card = cardEl(Object.assign({}, VIDEO_ROW, { title: hostile }));
+  assert.equal(card.getAttribute("aria-label"), hostile.slice(0, 60));
+  assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// --- the modal focus trap ----------------------------------------------------
+
+const tabInInspector = (shift) => $("#inspector").dispatch("keydown",
+  { key: "Tab", shiftKey: Boolean(shift) });
+
+test("the inspector's own preview is in the Tab cycle", async () => {
+  // The trap collected only form controls, so a keyboard operator could not
+  // reach — let alone play or scrub — the item they had just opened.
+  stubInspector({ detail: { type: "video", media_url: "/media/bumpers/a.mp4" } });
+  await openInspector("card:psa:abc");
+  await flush();
+  const seen = [];
+  for (let i = 0; i < 12; i++) {
+    await tabInInspector(false);
+    seen.push(document.activeElement);
+  }
+  assert.ok(seen.some((n) => n && n.tagName === "VIDEO"),
+            "the media preview is a stop: " +
+            [...new Set(seen.map((n) => n && n.tagName))].join(","));
+  assert.ok(seen.every((n) => $("#inspector").contains(n)),
+            "and the trap still holds");
+});
+
+test("a busy inspector locks its controls and hands every one of them back",
+     async () => {
+  stubInspector();
+  await openInspector("card:psa:abc");
+  await flush();
+  const controls = () => descendants($("#inspector-body"))
+    .filter((n) => n.tagName === "BUTTON" || n.tagName === "INPUT");
+  assert.ok(controls().length > 0);
+  const before = controls().length;
+  STATE.inspector.busy = "";
+  app.setInspectorBusy("rendering…");
+  assert.ok(controls().every((n) => n.disabled), "everything is held while it runs");
+  app.setInspectorBusy("");
+  assert.equal(controls().length, before);
+  assert.ok(controls().every((n) => !n.disabled),
+            "and nothing is left disabled — the focus list skips a disabled " +
+            "control, so handing them back cannot go through it");
+});
+
+// --- cleanup on route change -------------------------------------------------
+
+test("an action's job poll does not outlive the view that started it", async (t) => {
+  // Measured in a browser at 09015e3: four GET /api/request polls in the twelve
+  // seconds after Operations was left. doAction's watch is registered like any
+  // other now, so the shared teardown reaches it.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const urls = stubOperations([], () => jsonReply({ status: "working" }));
+  await applyHash("#/operations");
+  await flush();
+  doAction("/api/render/cards", "render cards");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.ok(jobReads(urls) >= 1, "it is polling while the view is open");
+
+  await applyHash("#/overview");
+  await flush();
+  const settled = jobReads(urls);
+  t.mock.timers.tick(30000);
+  await flush();
+  await flush();
+  assert.equal(jobReads(urls), settled,
+               "and asks nothing more once the view is gone");
+  assert.equal(STATE.route, "overview");
+});
+
+test("leaving a view clears the announcement it made", async () => {
+  stubRoutes();
+  await applyHash("#/library");
+  await flush();
+  announce("delete cancelled");
+  assert.equal($("#live-region").textContent, "delete cancelled");
+  await applyHash("#/station");
+  await flush();
+  assert.equal($("#live-region").textContent, "",
+               "a message about the library is not news about the station");
+});
+
+test("a route change that closes a dialog lands focus somewhere real", async () => {
+  stubInspector();
+  await applyHash("#/library");
+  await flush();
+  await openInspector("card:psa:abc");
+  await flush();
+  assert.equal(STATE.inspector.open, true);
+  await applyHash("#/operations");
+  await flush();
+  assert.equal(STATE.inspector.open, false);
+  assert.equal(document.activeElement, $("#main"),
+               "not <body>, which would send the next Tab back to the top");
+});
+
+test("the current view's tab is scrolled into view once per change", async () => {
+  stubRoutes();
+  await applyHash("#/operations");
+  await flush();
+  const tab = BODY.querySelectorAll("[data-view]")
+    .find((a) => a.dataset.view === "operations");
+  assert.equal(tab.getAttribute("aria-current"), "page");
+  assert.equal(tab.scrolls, 1,
+               "below 760px the tab row scrolls, and aria-current can sit off-screen");
+  assert.deepEqual(tab.scrollOptions, { block: "nearest", inline: "nearest" });
+  renderChrome();
+  renderChrome();
+  assert.equal(tab.scrolls, 1, "a refresh does not drag the row under the operator");
+});
+
+// --- hostile keys ------------------------------------------------------------
+
+test("a map keyed by a server string never answers from its prototype", async () => {
+  // The type bars: "constructor" used to answer with a Function, which CSSOM
+  // then silently rejected, losing the bar its colour.
+  STATE.status.value = Object.assign({}, OK_STATUS,
+    { by_type: { constructor: 3, toString: 1 } });
+  renderOverview();
+  const fills = descendants($("#by-type")).filter((n) => n.className === "fill");
+  assert.equal(fills.length, 2);
+  fills.forEach((fill) => assert.match(String(fill.style.background), /^var\(--/));
+
+  // The eligibility list: a reason of "constructor" used to render
+  // "function Object() { [native code] }" instead of the server's own word.
+  stubInspector({ detail: { selection: { eligible_now: false,
+    reasons: ["constructor", "toString"], factors: {} } } });
+  await openInspector("card:psa:abc");
+  await flush();
+  const text = inspectorText();
+  assert.match(text, /constructor/);
+  assert.doesNotMatch(text, /native code/);
+});
+
+test("a relaxed rule this build does not know is shown as it arrived", async () => {
+  stubFill(breakBody([BREAK_ITEM()],
+                     { composition: { relaxed_rules: ["constructor", "exit_ident"] } }));
+  await composeBreak();
+  const text = textOf($("#composer-attention"));
+  assert.match(text, /constructor/);
+  assert.doesNotMatch(text, /native code/);
+  assert.match(text, /station ident/);
+});
+
+// --- empty values ------------------------------------------------------------
+
+test("an empty list is absent, not an empty string", async () => {
+  stubInspector({ detail: { creative: { family: "psa", roles: [], energy: "calm",
+                                        audio: "bed", text_heavy: true,
+                                        template: "minimal_center",
+                                        brand_mode: "reveal" } } });
+  await openInspector("card:psa:abc");
+  await flush();
+  const roles = descendants($("#inspector-body"))
+    .filter((n) => String(n.className) === "summary-row")
+    .find((n) => textOf(n).trim().startsWith("roles"));
+  assert.match(textOf(roles), /none/,
+               'String([]) is "", which would print as nothing at all');
+});
+
+// --- copying a URL without the Clipboard API ---------------------------------
+
+test("without the Clipboard API the field is focused and the legacy copy tried",
+     async () => {
+  // Selecting an unfocused field is not what execCommand copies, and it is not
+  // what the operator's own Ctrl-C would copy either.
+  const commands = [];
+  document.execCommand = (name) => { commands.push(name); return true; };
+  stubClipboard(null);
+  stubInspector();
+  await openInspector("card:psa:abc");
+  await flush();
+  await inspectorButton("Copy").click();
+  await flush();
+  const field = descendants($("#inspector-body"))
+    .find((n) => n.tagName === "INPUT" && n.className === "url");
+  assert.equal(document.activeElement, field, "the field is focused, then selected");
+  assert.equal(field.selected, true);
+  assert.deepEqual(commands, ["copy"]);
+  assert.match(textOf($("#inspector-body")), /copied/i,
+               "on an older browser execCommand IS the copy, and it worked");
+  assert.doesNotMatch(textOf($("#inspector-body")), /keyboard/i);
+});
+
+test("a legacy copy the browser refuses still ends in a sentence", async () => {
+  document.execCommand = () => false;
+  stubClipboard(null);
+  const row = copyRow(stationBody(), "Standby HLS");
+  assert.ok(row, "the standby channel's HLS URL is offered too");
+  assert.equal(inputsIn(row)[0].value, F4_STATION.urls.standby);
+  await buttonIn(row, "Copy").click();
+  await flush();
+  assert.match(textOf(row), /Attention/, "a refusal is never reported as a success");
+  assert.match(textOf(row), /keyboard/i);
+});
+
+// --- empty and failed states -------------------------------------------------
+
+test("an empty library points at the view that can fill it", async () => {
+  stubRoutes();
+  await applyHash("#/library");
+  await flush();
+  const state = $("#browse-state");
+  assert.equal(state.dataset.state, "empty");
+  assert.match(textOf(state), /Operations view/,
+               "the generate buttons are not on this page, and never were");
+  assert.doesNotMatch(textOf(state), /above/);
+  const go = descendants(state).find((n) => n.tagName === "BUTTON");
+  assert.equal(go.textContent, "Open operations");
+  await go.click();
+  assert.equal(global.location.hash, "#/operations");
+});
+
+test("a Retry says it is working, so it cannot be mistaken for a dead button",
+     async () => {
+  const el = new FakeNode("div");
+  let asked = 0;
+  renderPanelState(el, { state: "error", message: "boom", onAction: () => { asked++; } });
+  const retry = descendants(el).find((n) => n.tagName === "BUTTON");
+  await retry.click();
+  assert.equal(asked, 1);
+  assert.equal(retry.disabled, true);
+  assert.equal(retry.textContent, "Retrying…");
+
+  // "Clear filters" is not a retry and must keep its own name.
+  const filtered = new FakeNode("div");
+  renderPanelState(filtered, { state: "empty", message: "none",
+                               actionLabel: "Clear filters", onAction: () => {} });
+  const clear = descendants(filtered).find((n) => n.tagName === "BUTTON");
+  await clear.click();
+  assert.equal(clear.textContent, "Clear filters");
+});
+
+test("Clear filters from the empty-with-filters state re-reads the listing",
+     async () => {
+  const calls = stubRoutes();
+  await applyHash("#/library?state=parked&q=nothing");
+  await flush();
+  assert.equal($("#browse-state").dataset.state, "empty");
+  const clear = descendants($("#browse-state")).find((n) => n.tagName === "BUTTON");
+  assert.equal(clear.textContent, "Clear filters");
+  const before = calls.filter((c) => c.url.startsWith("/api/bumpers")).length;
+  await clear.click();
+  await flush();
+  assert.ok(calls.filter((c) => c.url.startsWith("/api/bumpers")).length > before,
+            "clearing the filters asks the server the new question");
+  assert.equal(STATE.library.filters.state, "all");
+  assert.equal(STATE.library.filters.q, "");
+  assert.equal(libraryHash(), "#/library");
+});
+
+test("the Pool panel's Retry re-issues the status read", async () => {
+  let fail = true;
+  const calls = [];
+  global.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.startsWith("/api/status")) {
+      if (fail) throw new TypeError("Failed to fetch");
+      return jsonReply(OK_STATUS);
+    }
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    if (u.startsWith("/api/jobs")) return jsonReply({ jobs: [], count: 0 });
+    return jsonReply({ count: 0, total: 0, bumpers: [] });
+  };
+  await applyHash("#/overview");
+  await flush();
+  assert.equal($("#pool-state").dataset.state, "error");
+  fail = false;
+  const before = calls.filter((u) => u.startsWith("/api/status")).length;
+  await descendants($("#pool-state")).find((n) => n.tagName === "BUTTON").click();
+  await flush();
+  assert.ok(calls.filter((u) => u.startsWith("/api/status")).length > before);
+  assert.equal($("#pool-state").dataset.state, "populated");
+});
+
+test("a jobs read that never succeeded does not badge this page's own rows",
+     async () => {
+  recordJob("render cards");
+  stubWithJobs([], { jobsFail: true });
+  await loadJobs();
+  assert.equal($("#ops-jobs-list").children.length, 1,
+               "the job this page started is still true");
+  assert.match(textOf($("#ops-jobs-state")), /Showing only the jobs this page started/,
+               "the failure is the read's, not the row's");
+  assert.match(textOf($("#ops-jobs-state")), /could not be reached|Failed to fetch/);
+});
+
+// --- deletion -----------------------------------------------------------------
+
+const LIB_ROW = { id: "vid:a", type: "video", kind: "ambient", title: "harbour",
+                  media_url: "/media/a.mp4", duration: 6, enabled: 1, health: "ok" };
+
+async function libraryWithOneRow(reply) {
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    const method = (opts && opts.method) || "GET";
+    if (method === "DELETE") return jsonReply(reply === undefined ? {} : reply);
+    if (u.startsWith("/api/status")) return jsonReply(OK_STATUS);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    if (u.startsWith("/api/bumpers")) {
+      return jsonReply({ count: 1, total: 1, bumpers: [LIB_ROW] });
+    }
+    return jsonReply({});
+  };
+  await applyHash("#/library");
+  await flush();
+}
+
+test("deleting the last visible row leaves an empty listing that says so",
+     async () => {
+  await libraryWithOneRow({ kind: "ambient", title: "harbour", file_removed: true });
+  assert.equal($("#browse-state").dataset.state, "populated");
+  const pending = deleteBumper(LIB_ROW);
+  await flush();
+  dialogButton("Delete permanently").click();
+  await pending;
+  await flush();
+  assert.equal($("#grid").children.length, 0);
+  assert.equal($("#browse-state").dataset.state, "empty",
+               "a populated badge over an empty grid is not a state");
+  assert.equal(document.activeElement, $("#library-counts"),
+               "focus lands on the counts rather than falling to <body>");
+});
+
+test("a delete answered with an empty body is still a delete", async () => {
+  // api() parses a 200 with no body to null; reading j.kind off that used to
+  // throw inside a click handler nothing was waiting on.
+  await libraryWithOneRow(null);
+  const pending = deleteBumper(LIB_ROW);
+  await flush();
+  dialogButton("Delete permanently").click();
+  await pending;
+  await flush();
+  assert.equal(STATE.library.items.length, 0);
+  assert.match($("#live-region").textContent, /deleted/);
+});
+
+test("the bulk confirmation's prose agrees with its own checkbox", async () => {
+  STATE.status.value = Object.assign({}, OK_STATUS, { by_kind: { ambient: 3 } });
+  STATE.library.filters.kind = "ambient";
+  global.fetch = async () => jsonReply({ removed: 3, dirs_removed: 1, failed: [] });
+  const running = dropKind();
+  await flush();
+  assert.match(dialogText(), /Unless you tick the box below/,
+               "the prose used to promise deletion the checkbox could prevent");
+  // The typed gate is exact: a near miss is not consent.
+  const typed = dialogControls("INPUT").find((n) => n.type === "text");
+  const confirm = dialogButton("Delete 3 item(s)");
+  assert.equal(confirm.disabled, true);
+  typed.value = "AMBIENT";
+  await typed.dispatch("input");
+  assert.equal(confirm.disabled, true, "the kind name is matched exactly, not loosely");
+  typed.value = " ambient ";
+  await typed.dispatch("input");
+  assert.equal(confirm.disabled, false, "surrounding space is not a different kind");
+  await dialogButton("Cancel").click();
+  await running;
+});
+
+test("a hostile kind name reaches the bulk dialog as text", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=91">';
+  STATE.status.value = Object.assign({}, OK_STATUS, { by_kind: { [hostile]: 2 } });
+  STATE.library.filters.kind = hostile;
+  const running = dropKind();
+  await flush();
+  assert.ok(dialogText().includes(hostile));
+  assert.equal(descendants(topDialog()).filter((n) => n.tagName === "IMG").length, 0);
+  await dialogButton("Cancel").click();
+  await running;
+  assert.equal(globalThis.pwned, undefined);
+});
+
+// --- the composer -------------------------------------------------------------
+
+test("Previous from stopped plays the end of the break, not its end message",
+     async () => {
+  stubFill(breakBody([BREAK_ITEM(), BREAK_ITEM({ id: "b", title: "second" })]));
+  await composeBreak();
+  assert.equal(STATE.composer.playback.index, -1);
+  advanceComposer(-1);
+  assert.equal(STATE.composer.playback.index, 1,
+               "nobody who has not started a sequence has finished one");
+  assert.doesNotMatch($("#live-region").textContent, /finished/);
+});
+
+test("a staged medium that cannot be decoded moves the sequence on", async () => {
+  stubFill(breakBody([BREAK_ITEM(), BREAK_ITEM({ id: "b", title: "second" })]));
+  await composeBreak();
+  playComposerSequence();
+  assert.equal(STATE.composer.playback.index, 0);
+  await stageVideo().dispatch("error");
+  assert.equal(STATE.composer.playback.index, 1,
+               "a sequence that sits for ever on an unreadable file is not a preview");
+  assert.match($("#live-region").textContent, /previewing item 2/);
+});
+
+test("a stalled medium says so and leaves the decision to the operator", async () => {
+  stubFill(breakBody([BREAK_ITEM(), BREAK_ITEM({ id: "b" })]));
+  await composeBreak();
+  playComposerSequence();
+  await stageVideo().dispatch("stalled");
+  assert.equal(STATE.composer.playback.index, 0, "a stall usually recovers");
+  assert.match($("#live-region").textContent, /still waiting.*press Next/);
+});
+
+test("an answer that is not an object is not a break", async () => {
+  stubFill([]);
+  assert.equal(await composeBreak(), null);
+  assert.equal($("#composer-state").dataset.state, "error");
+  assert.match(textOf($("#composer-state")), /empty response/);
+});
+
+test("a library mutation marks a break that contains that row stale", async () => {
+  stubFill(breakBody([BREAK_ITEM({ id: "vid:a" })]));
+  await composeBreak();
+  assert.equal(STATE.composer.stale, false);
+  // A row the break does not contain has not changed the sequence on screen.
+  assert.equal(markComposerStale("disable", "vid:elsewhere"), null);
+  assert.equal(STATE.composer.stale, false);
+  assert.equal(markComposerStale("disable", "vid:a"), "disable");
+  assert.equal(STATE.composer.stale, true);
+});
+
+test("a card drawn by the library subscribes the composer to its mutations",
+     async () => {
+  // Without this the operator could disable a row from the Library and still
+  // play a break holding it, which is the substitution the plan forbids.
+  stubFill(breakBody([BREAK_ITEM({ id: "vid:a" })]));
+  await composeBreak();
+  assert.equal(STATE.composer.stale, false);
+  STATE.library.items = [LIB_ROW];
+  app.renderLibrary();
+  global.fetch = async () => jsonReply({ changed: true });
+  await inspectButton($("#grid").children[0]).click();
+  await flush();
+  await disableBumper(LIB_ROW);
+  await flush();
+  assert.equal(STATE.composer.stale, true,
+               "the break holding this row is marked, not quietly patched up");
+});
+
+// --- jobs: doubt, focus and bounded output -----------------------------------
+
+test("leaving Operations takes the doubt with the poll it belonged to", async (t) => {
+  // A note with neither Check now nor Retry beside it is not an escape: the
+  // watch that raised it is gone, so the note goes with it and the fresh watch
+  // raises its own the moment a read is lost again.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  let failing = true;
+  const urls = stubOperations(
+    [serverJob({ id: "n7", request: "station conform", status: "working", result: null })],
+    () => { if (failing) throw new TypeError("Failed to fetch"); return jsonReply({ status: "done", result: "ok" }); });
+  await applyHash("#/operations");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.match(textOf($("#ops-jobs-list")), /status unknown/);
+  assert.ok(buttonIn($("#ops-jobs-list"), "Check now"), "and a way to ask again");
+
+  await applyHash("#/overview");
+  await flush();
+  assert.deepEqual(STATE.ops.jobNotes, {},
+                   "the doubt belonged to a poll that no longer exists");
+  assert.equal(jobReads(urls) >= 1, true);
+  failing = false;
+});
+
+test("Check now keeps the focus that pressed it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const urls = stubOperations(
+    [serverJob({ id: "n8", request: "render cards", status: "working", result: null })],
+    () => { throw new TypeError("Failed to fetch"); });
+  await applyHash("#/operations");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  const check = buttonIn($("#ops-jobs-list"), "Check now");
+  assert.ok(check);
+  check.focus();
+  await check.click();
+  t.mock.timers.tick(10000);
+  await flush();
+  const now = document.activeElement;
+  assert.ok(now && String(now.className).includes("jobrow-check"),
+            "the row is rebuilt around the button, so its replacement is handed " +
+            "the focus rather than letting it fall to <body>");
+  assert.ok(jobReads(urls) >= 2);
+  stopJobWatches();
+});
+
+test("a long job result is bounded before it reaches the page", () => {
+  const huge = "x".repeat(5000);
+  STATE.route = "operations";
+  STATE.jobs.server = [serverJob({ id: "big", status: "error", result: huge })];
+  renderOpsJobs();
+  const pre = descendants($("#ops-jobs-list"))
+    .find((n) => n.tagName === "PRE" && String(n.className).includes("jobrow-result"));
+  assert.ok(pre, "the raw result is in an expandable block");
+  assert.equal(pre.textContent.length, 2001, "2000 characters plus the ellipsis");
+  assert.ok(pre.textContent.endsWith("…"), "and it says it was cut");
+});
+
+test("the Overview's list is the server's registry, not only this tab's", async () => {
+  const calls = stubWithJobs([serverJob({ id: "elsewhere", request: "tidy up",
+                                          status: "error", result: "no space" })]);
+  await applyHash("#/overview");
+  await flush();
+  assert.ok(calls.some((c) => c.url.startsWith("/api/jobs")));
+  assert.match(textOf($("#jobs-list")), /tidy up/,
+               "a job another tab or the schedule started is still an operator's");
+  assert.match(textOf($("#warnings")), /A job failed: tidy up/);
+});
+
+// --- hostile strings in the places F6 added or moved --------------------------
+
+test("hostile creative, payload and stage strings stay text everywhere", async () => {
+  const hostile = '<img src=x onerror="globalThis.pwned=95">';
+  const row = BREAK_ITEM({ id: "vid:h", title: hostile,
+    creative: { family: hostile, audio: hostile, roles: [hostile],
+                energy: hostile, text_heavy: false, template: hostile,
+                brand_mode: hostile },
+    payload: { lines: [hostile] } });
+  // The card's chips.
+  const card = cardEl(row);
+  assert.ok(textOf(card).includes(hostile));
+  assert.equal(descendants(card).filter((n) => n.tagName === "IMG").length, 0);
+  // The composer's stage label and its text card.
+  stubFill(breakBody([Object.assign({}, row, { type: "card", media_url: null })]));
+  await composeBreak();
+  playComposerSequence();
+  const stage = $("#composer-stage");
+  assert.ok(textOf(stage).includes(hostile), "the stage label names the item");
+  assert.equal(descendants(stage).filter((n) => n.tagName === "IMG").length, 0);
   assert.equal(globalThis.pwned, undefined);
 });
 

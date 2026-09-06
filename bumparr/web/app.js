@@ -9,9 +9,7 @@
 //   5  shared components           11  lifecycle, visibility, boot
 //   6  Overview                    12  CommonJS exports for tests
 
-// ---------------------------------------------------------------------------
-// 1. Constants and state
-// ---------------------------------------------------------------------------
+// ==== 1. Constants and state ====
 
 const PAGE = 24;                    // rows per library page (UI maximum 100)
 const API_TIMEOUT_MS = 15000;       // ordinary reads only; jobs opt out
@@ -158,6 +156,9 @@ let refreshTimer = null;
 // keeps location.replace()'s own hashchange from loading everything twice.
 let activeRoute = null;
 let activeQuery = "";
+// Which nav link has already been scrolled into view, so the 20-second refresh
+// does not drag a phone's tab row back under the operator's thumb.
+let navShown = null;
 let jobSeq = 0;
 // One counter per job surface: a superseded wait abandons its poll and stops
 // writing, so it can neither overwrite newer feedback nor poll forever.
@@ -175,12 +176,42 @@ let activeMedia = null;
 // hear about a mutation without this file knowing anything about it.
 let inspectorOnMutate = null;
 
-// ---------------------------------------------------------------------------
-// 2. Safe DOM helpers
-// ---------------------------------------------------------------------------
+// ==== 2. Safe DOM helpers ====
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+// An answer to read fields off. A 200 with an empty body parses to null, and a
+// mutation is still a mutation — but reading j.warning off null is a thrown
+// click in a handler nothing is waiting on.
+const asObject = (value) => (value && typeof value === "object" ? value : {});
+
+// A plain object read as a map: a key an inherited property would answer for
+// ("constructor", "toString", "__proto__") is not a value anyone stored, and
+// every map on this page is keyed by something the server or the DOM supplied.
+const own = (map, key) =>
+  Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+
+// An operator who asked for reduced motion asked for it everywhere, including
+// the places CSS cannot reach: a looping video started by a hover (which is a
+// tap on a touch screen) is motion nobody asked for.
+function reducedMotion() {
+  try {
+    return typeof matchMedia === "function" &&
+      Boolean(matchMedia("(prefers-reduced-motion: reduce)").matches);
+  } catch (e) { return false; }
+}
+
+// Where the Clipboard API is absent, this IS the copy on an older browser. It
+// only ever acts on the current selection, and a browser that refuses returns
+// false rather than throwing — either way the caller says what happened.
+function execCopy() {
+  try {
+    return typeof document !== "undefined" && document &&
+      typeof document.execCommand === "function" &&
+      Boolean(document.execCommand("copy"));
+  } catch (e) { return false; }
+}
 
 const makeEl = (tag, cls, text) => {
   const node = document.createElement(tag);
@@ -285,9 +316,7 @@ function releaseMedia(root) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// 3. API, error and abort helpers
-// ---------------------------------------------------------------------------
+// ==== 3. API, error and abort helpers ====
 
 // Normalized failure: `{status, message}` with a message safe to show a human.
 // name is "AbortError" only for a caller's cancellation, so a superseded search
@@ -381,18 +410,13 @@ async function api(path, options) {
   return parsed.body;
 }
 
-// ---------------------------------------------------------------------------
-// 4. Routing and shell chrome
-// ---------------------------------------------------------------------------
+// ==== 4. Routing and shell chrome ====
 // Five hash views, no server routes and no router library. The hash says which
-// view is on screen; STATE says what it shows. Nothing is ever read back out of
-// the DOM, so a deep link, a back button and a first paint all render the same
-// way — and every view can be re-rendered at any time without a reload.
-//
-// Each view registers `enter` (paint from STATE, then read what it needs) and
-// `exit` (give back what it holds). Later slices hang media, dialogs and
-// pollers off the same `exit` hook; the shared teardown below already stops the
-// 20-second clock and cancels reads that are still in flight.
+// view is on screen; STATE says what it shows, and nothing is read back out of
+// the DOM — so a deep link, a back button and a first paint render the same
+// way. Each view registers `enter` (paint from STATE, then read) and `exit`
+// (give back what it holds); the shared teardown below stops the clock, the
+// polls and the dialogs for all of them.
 
 const VIEWS = {
   overview: { enter: enterOverview, exit: exitOverview },
@@ -457,22 +481,41 @@ function enterRoute(name, params) {
   return view && view.enter ? view.enter(params || new URLSearchParams("")) : null;
 }
 
-// Shared teardown first — clock, modals, in-flight reads — then what the view
-// holds itself. Dialogs go here, not in one view's exit: the inspector belongs
-// to every surface that draws a card, and one left open would sit in the top
-// layer over a view that never opened it.
+// Shared teardown first — clock, polls, modals, in-flight reads — then what the
+// view holds itself. Dialogs and polls are here rather than in one view's exit:
+// the inspector belongs to every surface that draws a card, and a conform is
+// the same kind of job whether the Station or Operations started it.
 function exitRoute(name) {
   stopRefresh();
-  closeAllDialogs();
+  // Every job poll, whichever surface started it: a poll is a timer, and the
+  // rule for timers is that none of them outlives the view. A job still
+  // running on the server is picked up again by the background watch the next
+  // time the operator opens Operations, which is where it can be seen.
+  stopJobWatches();
+  // A dialog hands focus back to whatever opened it, which here is a control
+  // in the view about to be hidden: focus would land on <body> and the next
+  // Tab would start again at the top of the page.
+  const closed = closeAllDialogs();
   abortReads();
+  // A short result belongs to the view it happened on. Carried across, it
+  // reads as news about the view the operator has just arrived at.
+  const live = $("#live-region");
+  if (live) live.textContent = "";
   const view = VIEWS[name];
   if (view && view.exit) view.exit();
+  if (closed) landOnMain();
 }
 
-// Cancelling a read is finished the moment it is asked for, not a microtask
-// later when the rejection arrives: the next view's `enter` runs in this same
-// turn, and a `loading` flag left standing would tell it a read is still on its
-// way and stop it issuing one of its own.
+// Where focus goes when the control that held it is being taken away.
+function landOnMain() {
+  const main = $("#main");
+  if (main && main.focus) main.focus();
+  return main;
+}
+
+// Cancelling is finished the moment it is asked for, not a microtask later when
+// the rejection arrives: the next view's `enter` runs in this same turn, and a
+// `loading` flag left standing would stop it issuing a read of its own.
 function abortReads() {
   if (statusAbort) {
     statusAbort.abort();
@@ -504,9 +547,15 @@ function abortReads() {
   if (inspectorAbort) {
     inspectorAbort.abort();
     inspectorAbort = null;
-    inspectorGeneration++;
     STATE.inspector.loading = false;
   }
+  // The three job/read counters together: a surface that has been left behind
+  // writes nothing. stopJobWatches has already ended the polls themselves, and
+  // these are what stop the tail of an abandoned wait announcing its outcome
+  // into a view that never started it.
+  inspectorGeneration++;
+  askGeneration++;
+  actionGeneration++;
 }
 
 function startRefresh() {
@@ -526,9 +575,22 @@ function renderNav() {
     if (view) view.hidden = name !== STATE.route;
   });
   $$("#viewnav [data-view]").forEach((link) => {
-    if (link.dataset.view === STATE.route) link.setAttribute("aria-current", "page");
-    else link.removeAttribute("aria-current");
+    if (link.dataset.view !== STATE.route) {
+      link.removeAttribute("aria-current");
+      return;
+    }
+    link.setAttribute("aria-current", "page");
+    // Below 760px the nav is a horizontally scrolling tab row, so the tab the
+    // operator is on can sit off-screen with its aria-current invisible. Only
+    // on an actual change of view: this function runs on every refresh, and a
+    // scroll on each of those would drag the page around under the operator.
+    if (navShown !== STATE.route && link.scrollIntoView) {
+      // "nearest" in both axes, and never "smooth": a correction, not motion.
+      try { link.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+      catch (e) { /* an older signature; the tab row still scrolls by hand */ }
+    }
   });
+  navShown = STATE.route;
 }
 
 // Header and footer: true on every view, so they are rendered from STATE
@@ -550,7 +612,10 @@ function renderChrome(at) {
 function statusGap() {
   const s = STATE.status;
   if (s.value) return "";
-  if (s.error) return "not read: the last try failed";
+  // A failure that is already being retried is still a failure, but saying so
+  // without saying a retry is in flight makes a live Retry look like a dead one.
+  if (s.error) return s.loading ? "not read: the last try failed, trying again"
+                                : "not read: the last try failed";
   if (s.loading) return "reading the service…";
   return "not read yet";
 }
@@ -579,9 +644,12 @@ function renderHeaderMeta(at) {
   }
   const refreshEl = $("#header-refresh");
   if (refreshEl) {
+    // The age of the /api/status read specifically, named as such: only two
+    // views re-read it, so on the Station this climbs while the station body
+    // beneath it is seconds old, and a bare "updated" would misreport that.
     refreshEl.textContent = STATE.status.updatedAt
-      ? "updated " + formatAge(STATE.status.updatedAt, at)
-      : "not read yet";
+      ? "service read " + formatAge(STATE.status.updatedAt, at)
+      : "service not read yet";
   }
 }
 
@@ -662,12 +730,11 @@ function enterOperations() {
   return Promise.all([ensureStatus(), loadJobs()]);
 }
 
-// Every background job poll belongs to this view; none outlives it.
-function exitOperations() { return stopJobWatches(); }
+// Job polls are torn down by exitRoute for every view, not just this one: a
+// conform started on the Station is the same kind of timer as one started here.
+function exitOperations() { return null; }
 
-// ---------------------------------------------------------------------------
-// 5. Shared components: badges, panel states, notices, cards
-// ---------------------------------------------------------------------------
+// ==== 5. Shared components: badges, panel states, notices, cards ====
 
 // Icon and word first, colour last: a status must survive a monochrome screen.
 const STATUS_LEVELS = {
@@ -679,8 +746,9 @@ const STATUS_LEVELS = {
 };
 
 function statusBadge(level, detail) {
-  const spec = STATUS_LEVELS[level] || STATUS_LEVELS.attention;
-  const root = makeEl("span", "badge badge-" + (STATUS_LEVELS[level] ? level : "attention"));
+  const known = own(STATUS_LEVELS, level);
+  const spec = known || STATUS_LEVELS.attention;
+  const root = makeEl("span", "badge badge-" + (known ? level : "attention"));
   const icon = makeEl("span", "badge-icon", spec.icon);
   icon.setAttribute("aria-hidden", "true");
   root.append(icon, makeEl("span", "badge-word", spec.word));
@@ -701,7 +769,7 @@ function renderJobState(el, level, message, actions) {
     button.addEventListener("click", action.onClick);
     nodes.push(button);
   });
-  el.className = "panel-state";
+  el.className = "panel-state panel-state-" + level;
   el.dataset.state = level;
   el.hidden = false;
   setBusy(el, level === "working");
@@ -772,8 +840,16 @@ function renderPanelState(el, options) {
     if (opts.message) el.append(makeEl("p", "panel-state-msg", opts.message));
   }
   if (typeof opts.onAction === "function") {
-    const button = makeEl("button", "panel-retry", opts.actionLabel || "Retry");
-    button.addEventListener("click", opts.onAction);
+    const label = opts.actionLabel || "Retry";
+    const button = makeEl("button", "panel-retry", label);
+    // A Retry whose read lands on the same stale line looks like a dead
+    // button, so the control itself says it is working until its replacement
+    // is drawn. Only the default label: "Clear filters" is not a retry.
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      if (label === "Retry") button.textContent = "Retrying…";
+      opts.onAction();
+    });
     el.append(button);
   }
   return el;
@@ -789,19 +865,46 @@ const nativeDialog = (node) => typeof HTMLDialogElement !== "undefined" &&
   Boolean(node) && typeof node.showModal === "function";
 
 // Tab order inside a modal, in document order, skipping what the browser skips.
+// Everything the browser really puts in that order, not only the form controls:
+// a <video controls> in the inspector is the item under review, and a trap that
+// walked past it left a keyboard operator unable to play what they were
+// looking at. <summary> and an explicit non-negative tabindex are here for the
+// same reason — the inspector's own heading carries tabindex="-1" and is
+// correctly not a stop.
+const FOCUS_TAGS = ["button", "input", "select", "textarea", "summary"];
+const MEDIA_TAGS = ["video", "audio"];
+const tabIndexed = (node) => {
+  const raw = node.getAttribute ? node.getAttribute("tabindex") : null;
+  return raw !== null && raw !== undefined && raw !== "" && Number(raw) >= 0;
+};
+const hasControls = (node) => Boolean(node.controls) ||
+  (node.getAttribute ? node.getAttribute("controls") !== null : false);
+
 function focusables(root) {
   const out = [];
   const walk = (node) => {
     Array.from((node && node.children) || []).forEach((child) => {
       const tag = String(child.tagName || "").toLowerCase();
-      const focusable = tag === "button" || tag === "input" || tag === "select" ||
-        tag === "textarea" || (tag === "a" && child.href);
+      const focusable = FOCUS_TAGS.indexOf(tag) !== -1 ||
+        (tag === "a" && child.href) ||
+        (MEDIA_TAGS.indexOf(tag) !== -1 && hasControls(child)) ||
+        Boolean(child.isContentEditable) || tabIndexed(child);
       if (focusable && !child.disabled && !child.hidden) out.push(child);
       walk(child);
     });
   };
   walk(root);
   return out;
+}
+
+// Every control a modal owns, disabled or not. `focusables` skips a disabled
+// element by design, so using it to hand controls BACK would leave them
+// disabled for ever; and only these four tags have a disabled state at all —
+// setting one on a <video> would be an expando the browser ignores.
+function modalControls(root) {
+  if (!root || typeof root.querySelectorAll !== "function") return [];
+  return ["button", "input", "select", "textarea"]
+    .reduce((all, tag) => all.concat(Array.from(root.querySelectorAll(tag))), []);
 }
 
 // Trapped only while modal, and only by wrapping: nothing outside is disabled.
@@ -872,10 +975,13 @@ function closeDialog(node) {
   return entry;
 }
 
-// Innermost first, so each one hands focus back to whatever opened it.
+// Innermost first, so each one hands focus back to whatever opened it. Returns
+// how many were closed: a caller tearing a view down has to know whether focus
+// was just handed to a control it is about to hide.
 function closeAllDialogs() {
-  while (DIALOGS.length) closeDialog(DIALOGS[DIALOGS.length - 1].node);
-  return null;
+  let closed = 0;
+  while (DIALOGS.length) { closeDialog(DIALOGS[DIALOGS.length - 1].node); closed++; }
+  return closed;
 }
 
 /**
@@ -961,6 +1067,63 @@ function confirmDialog(options) {
   });
 }
 
+/**
+ * copyControls(id, label, value, store, opts) -> {input, copy, said}
+ *
+ * A read-only field, a Copy control and a visible sentence about what happened,
+ * shared by the inspector's media URL and the Station's handoff URLs so the two
+ * cannot drift apart. Placement is the caller's: the inspector puts these in a
+ * block, the Station in a row.
+ *
+ * A field rather than a link — following a link opens the media when what is
+ * wanted is the string. The Clipboard API is a permission a browser may simply
+ * refuse, and a Copy that did nothing cannot be told from one that worked, so
+ * every path ends in a badge and an announcement. Where the API is missing or
+ * refuses, the field is focused and selected and `document.execCommand("copy")`
+ * is tried, because on an older browser that IS the copy; only when that fails
+ * too is the operator asked to press the keys themselves.
+ *
+ * `store` is the caller's own record of the last copy — kept in STATE, so a
+ * redraw repeats the answer instead of losing it.
+ */
+function copyControls(id, label, value, store, opts) {
+  const options = opts || {};
+  const input = document.createElement("input");
+  input.type = "text";
+  input.readOnly = true;
+  input.className = "url";
+  input.value = String(value);
+  input.id = id;
+  const select = () => { if (input.select) input.select(); };
+  // Focus first: a selection in an unfocused field is not what execCommand
+  // copies, and it is not what the operator's own Ctrl-C would copy either.
+  const takeSelection = () => { if (input.focus) input.focus(); select(); };
+  input.addEventListener("focus", select);
+
+  const said = makeEl("p", options.saidClass || "insp-copy");
+  const show = () => {
+    const done = store.read();
+    said.replaceChildren(...(done ? [statusBadge(done.level, done.message)] : []));
+  };
+  const report = (level, message) => {
+    store.write(level, message);
+    show();
+    announce(message);
+  };
+  const done = () => report("healthy", label + " copied to the clipboard");
+  const byHand = () => {
+    takeSelection();
+    return execCopy() ? done() : report("attention", COPY_BY_HAND);
+  };
+  const copy = makeButton("Copy", options.copyClass || "insp-copy-btn mini", () => {
+    const clip = typeof navigator !== "undefined" && navigator && navigator.clipboard;
+    if (!clip || !clip.writeText) return byHand();
+    return clip.writeText(input.value).then(done, byHand);
+  }, "Copy the " + label);
+  show();
+  return { input, copy, said };
+}
+
 // One labelled fact. Used by every summary block so a missing value reads the
 // same way everywhere it appears.
 function summaryRow(label, value) {
@@ -970,8 +1133,11 @@ function summaryRow(label, value) {
 }
 
 // Whether the server actually sent something to show. `false` and `0` are
-// values a field can legitimately hold, so only absent and empty are missing.
-const present = (value) => value !== undefined && value !== null && value !== "";
+// values a field can legitimately hold, so only absent and empty are missing —
+// and an empty array is empty: String([]) is "", which would print as nothing
+// at all rather than as the caller's own word for absent.
+const present = (value) => value !== undefined && value !== null && value !== "" &&
+  !(Array.isArray(value) && value.length === 0);
 
 // A value the server sent, or the sentence that says it did not. `absent` is for
 // a field whose emptiness means something (no tags is not a missing column).
@@ -1154,29 +1320,38 @@ function streamPreview(b) {
   return box;
 }
 
+// A row the pool marked dead has media it could not read. Pointing an element
+// at it buys a console 404 and a broken box where the honest answer is words.
+const deadPreview = () => makeEl("div", "pv-stream pv-dead", "media unreadable");
+
 /**
  * One row as a card.
  *
  * `opts.onMutate(kind, id)` is forwarded to the inspector this card opens, so
- * a surface that has its own idea of staleness (the composer's pack) hears
+ * a surface that has its own idea of staleness (the composer's break) hears
  * about a disable/enable/render/delete without this file knowing about it.
  */
 function cardEl(b, opts) {
   const options = opts && typeof opts === "object" ? opts : {};
   const card = makeEl("article", "pv-card");
   card.dataset.state = poolState(b);
+  // A run of unnamed <article>s is what a screen reader announces otherwise.
+  card.setAttribute("aria-label", rowLabel(b));
   const body = makeEl("div", "pv-body");
   // A stream has no length: it runs until it stops.
   const lengthLine = (b.type === "stream" ? "LIVE" : formatDuration(b.duration)) +
     (b.type == null || b.type === "" ? "" : " · " + String(b.type));
   if (b.type === "video" || b.type === "image") {
-    if (b.type === "image") card.append(imagePreview(b));
+    if (poolState(b) === "dead") card.append(deadPreview());
+    else if (b.type === "image") card.append(imagePreview(b));
     else {
       const v = videoPreview(b);
       card.append(v);
-      // A pointer may preview on hover, claiming the one preview slot
-      // exactly as a deliberate press of Play would.
+      // A pointer may preview on hover, claiming the one preview slot as a
+      // press of Play would — unless reduced motion was asked for, because on
+      // a touch screen this fires on a tap. The controls still start it.
       card.addEventListener("mouseenter", () => {
+        if (reducedMotion()) return;
         const started = v.play();
         if (started && started.catch) started.catch(() => {});
       });
@@ -1217,9 +1392,7 @@ function imagePreview(b) {
   return img;
 }
 
-// ---------------------------------------------------------------------------
-// 6. Overview
-// ---------------------------------------------------------------------------
+// ==== 6. Overview ====
 
 const TYPE_COLOR = { video: "var(--accent)", stream: "var(--warning)",
                      card: "var(--info)", image: "var(--accent-strong)" };
@@ -1289,7 +1462,9 @@ function renderByType(s) {
   Object.entries(byType).sort((a, b) => b[1] - a[1]).forEach(([t, n]) => {
     const bar = makeEl("div", "bar"), track = makeEl("span", "track"), fill = makeEl("span", "fill");
     fill.style.width = (100 * n / max) + "%";
-    fill.style.background = TYPE_COLOR[t] || "var(--accent)";
+    // A server-supplied key read as a map: "constructor" must not answer with
+    // a Function that CSSOM then silently rejects, losing the bar's colour.
+    fill.style.background = own(TYPE_COLOR, t) || "var(--accent)";
     track.appendChild(fill);
     bar.append(makeEl("span", "name", t), track, makeEl("span", "n", n));
     typeBox.appendChild(bar);
@@ -1320,12 +1495,10 @@ function renderMemory(s) {
 // offers to change it. `source` is a server-controlled string, so it goes
 // through textContent like any other API value.
 //
-// `gap` is why there is no status body at all (see statusGap): while it is set,
-// nothing is known about these fields, which is not the same claim as the
-// server not supporting them.
-// Shared by the compact line here and the Station's full block, so the two can
-// never disagree; `fallback-after-error` is the server saying it could not read
-// what it was pointed at and is running the shipped default instead.
+// `gap` is statusGap's sentence: while it is set nothing is known about these
+// fields, which is not the claim that the server lacks them. Shared with the
+// Station's full block so the two cannot disagree. `fallback-after-error` is
+// the server saying it could not read its file and is running the default.
 const configLevel = (part) => part.valid === false ||
   part.source === "fallback-after-error" ? "attention" : "healthy";
 const configSay = (part) =>
@@ -1492,12 +1665,10 @@ function warningEl(warning) {
   return li;
 }
 
-// Warnings come before the healthy detail, and an overview with nothing wrong
-// says so rather than showing an empty box.
-// The failed-job warning is drawn from the same five rows the panel below it
-// shows, not from all twenty in the registry: a failure the operator can no
-// longer see listed is one they cannot act on, and a warning with nothing to
-// click is one they cannot clear. Refreshing the list is what clears it.
+// Warnings before the healthy detail, and an overview with nothing wrong says
+// so rather than showing an empty box. The failed-job warning is drawn from the
+// same five rows the panel below shows, not from all twenty: a failure the
+// operator cannot see listed is one they cannot act on.
 function renderWarnings() {
   const warnings = overviewWarnings(STATE.status.value, STATE.station.value,
                                     recentJobs(jobsList()));
@@ -1562,9 +1733,12 @@ async function loadStatus() {
     renderStationConfig();
     return null;
   }
+  // The same guard the catch already had: only the read that is still the
+  // current one may write, success included.
+  if (statusAbort !== controller) return null;
   STATE.status.loading = false;
   STATE.status.error = null;
-  STATE.status.value = s && typeof s === "object" ? s : {};
+  STATE.status.value = asObject(s);
   STATE.status.updatedAt = now();
   renderOverview();
   renderFilters();
@@ -1574,9 +1748,7 @@ async function loadStatus() {
   return s;
 }
 
-// ---------------------------------------------------------------------------
-// 7. Library
-// ---------------------------------------------------------------------------
+// ==== 7. Library ====
 
 const poolKinds = () => (STATE.status.value && STATE.status.value.by_kind) || {};
 const filtersActive = () => Boolean(STATE.library.filters.kind) ||
@@ -1633,6 +1805,23 @@ const libraryHash = () => {
   const query = libraryQuery();
   return "#/library" + (query ? "?" + query : "");
 };
+
+// An in-page move to another view, through the same hash the anchors use, so
+// the router handles it exactly as a click on the nav would.
+function goTo(hash) {
+  if (typeof location !== "undefined" && location) location.hash = hash;
+  return hash;
+}
+
+// The control focus would go back to has just been removed with its row, and
+// focus falling to <body> sends the next Tab to the top of the page. The counts
+// line above the grid is stable, and its text is the news the removal made.
+function landAfterRemoval() {
+  if (STATE.route !== "library") return null;
+  const el = $("#library-counts");
+  if (el && el.focus) el.focus();
+  return el;
+}
 
 // replace(), not assign(): a filter change is a correction to where you are, not
 // a stop on the way back. `activeQuery` moves first on purpose — replace() fires
@@ -1807,7 +1996,7 @@ function patchLibraryRow(id, patch) {
   const card = grid && grid.children ? grid.children[at] : null;
   if (card) {
     releaseMedia(card);
-    grid.replaceChild(cardEl(lib.items[at]), card);
+    grid.replaceChild(cardEl(lib.items[at], { onMutate: markComposerStale }), card);
   }
   return lib.items[at];
 }
@@ -1838,9 +2027,9 @@ async function dropKind() {
   const ok = await confirmDialog({
     title: "Delete every item in “" + kind + "”?",
     body: ["Removes " + how + " of kind “" + kind + "” from the registry.",
-           "Their files are deleted with them and the now-empty category " +
-             "directory is removed, because the next asset scan would " +
-             "otherwise register anything left inside it.",
+           "Unless you tick the box below, their files are deleted with them " +
+             "and the now-empty category directory is removed, because the " +
+             "next asset scan would otherwise register anything left inside it.",
            "This cannot be undone."],
     confirmLabel: "Delete " + how,
     danger: true,
@@ -1855,9 +2044,10 @@ async function dropKind() {
   try {
     j = await api(url, { method: "DELETE" });
   } catch (err) { announce("category delete failed: " + err.message); return null; }
-  const failed = Array.isArray(j.failed) ? j.failed.length : 0;
-  announce("dropped category " + kind + ": removed " + j.removed +
-           (j.dirs_removed ? ", " + j.dirs_removed + " dir(s)" : "") +
+  const body = asObject(j);
+  const failed = Array.isArray(body.failed) ? body.failed.length : 0;
+  announce("dropped category " + kind + ": removed " + body.removed +
+           (body.dirs_removed ? ", " + body.dirs_removed + " dir(s)" : "") +
            (failed ? ", " + failed + " needing manual cleanup" : ""));
   // The kind this page was filtered by no longer exists, so its filter goes
   // with it and the listing is read again for the question that is left.
@@ -1866,14 +2056,17 @@ async function dropKind() {
   renderFilters();
   syncLibraryHash();
   await loadStatus();
-  return loadGrid(true);
+  const listing = await loadGrid(true);
+  landAfterRemoval();
+  return listing;
 }
 
 /**
  * Permanent deletion. The confirmation names the item, states the file
  * consequence in the server's own terms, offers the `keep_file` the endpoint
- * documents, puts Cancel first and focused, and does not treat Escape as an
- * answer.
+ * documents, and puts Cancel first and focused. Dismissing it any way at all,
+ * Escape included, is a refusal and sends nothing: Escape may not confirm, and
+ * refusing to close is not a way to make it safer.
  */
 async function deleteBumper(b) {
   const keep = { label: KEEP_FILE_LABEL, checked: false };
@@ -1889,15 +2082,22 @@ async function deleteBumper(b) {
   if (!ok) { announce("delete cancelled"); return null; }
   const url = "/api/bumpers/" + encodeURIComponent(b.id) +
     (keep.checked ? "?keep_file=true" : "");
-  let j;
+  let answer;
   try {
-    j = await api(url, { method: "DELETE" });
+    answer = await api(url, { method: "DELETE" });
   } catch (err) { announce("delete failed: " + err.message); return null; }
+  const j = asObject(answer);
+  // Closing the inspector clears its subscriber, so whoever asked to be told
+  // is remembered before that happens rather than losing the last mutation.
+  const notify = inspectorOnMutate;
   STATE.library.items = STATE.library.items.filter((row) => row.id !== b.id);
   if (typeof STATE.library.total === "number") {
     STATE.library.total = Math.max(0, STATE.library.total - 1);
   }
   renderLibrary();
+  // Deleting the last visible row leaves an empty grid: the region has to say
+  // so rather than keep claiming it is populated.
+  renderLibraryState();
   const leftover = j.cleanup_failed
     ? "deleted, but a hidden quarantine file remains on disk for manual cleanup"
     : "";
@@ -1916,7 +2116,8 @@ async function deleteBumper(b) {
     } else closeInspector();
   }
   loadStatus();
-  if (inspectorOnMutate) inspectorOnMutate("delete", b.id);
+  if (notify) notify("delete", b.id);
+  landAfterRemoval();
   return j;
 }
 
@@ -1927,7 +2128,8 @@ async function deleteBumper(b) {
 async function enableBumper(b) {
   let j;
   try {
-    j = await api("/api/pool/enable?bumper_id=" + encodeURIComponent(b.id), { method: "POST" });
+    j = asObject(await api("/api/pool/enable?bumper_id=" +
+                           encodeURIComponent(b.id), { method: "POST" }));
   } catch (err) { announce("enable failed: " + err.message); return null; }
   announce("enabled " + rowLabel(b) +
            (j.changed ? "" : " (already on)") +
@@ -1941,7 +2143,8 @@ async function enableBumper(b) {
 async function disableBumper(b) {
   let j;
   try {
-    j = await api("/api/pool/disable?bumper_id=" + encodeURIComponent(b.id), { method: "POST" });
+    j = asObject(await api("/api/pool/disable?bumper_id=" +
+                           encodeURIComponent(b.id), { method: "POST" }));
   } catch (err) { announce("disable failed: " + err.message); return null; }
   announce("disabled " + rowLabel(b) +
            (j.changed ? "" : " (already off)") +
@@ -1970,18 +2173,30 @@ function renderLibraryState() {
         filtersActive: true, actionLabel: "Clear filters", onAction: clearFilters,
       });
     }
+    if (lib.source === "shuffle") {
+      return renderPanelState(el, {
+        state: "empty", message: "the shuffle draw came back with nothing" });
+    }
+    // Nothing is generated from this view: adding material and generating
+    // cards are on Operations, so the empty state points there rather than at
+    // controls that are not on the page it is printed on.
     return renderPanelState(el, {
       state: "empty",
-      message: lib.source === "shuffle"
-        ? "the shuffle draw came back with nothing"
-        : "nothing here yet — generate some cards above",
+      message: "Nothing in the pool yet. Adding material and generating cards " +
+        "are on the Operations view.",
+      actionLabel: "Open operations",
+      onAction: () => { goTo("#/operations"); },
     });
   }
   return renderPanelState(el, { state: "populated" });
 }
 
 function renderLibrary() {
-  fillGrid($("#grid"), STATE.library.items.map((row) => cardEl(row)));
+  // A break composed on the other view can contain any of these rows, so a
+  // mutation made from a library card marks it stale exactly as one made from
+  // the composer's own timeline does.
+  fillGrid($("#grid"), STATE.library.items.map(
+    (row) => cardEl(row, { onMutate: markComposerStale })));
   applyDensity();
   renderLibraryCounts();
   const more = $("#more");
@@ -2068,11 +2283,16 @@ async function shufflePreview() {
   if (search) search.value = "";
   renderFilters();
   const generation = ++lib.generation;
+  // A draw supersedes whatever listing was still in flight, and a superseded
+  // read is cancelled rather than left to arrive under the new answer.
+  if (libraryAbort) libraryAbort.abort();
+  libraryAbort = new AbortController();
   lib.loading = true;
   renderLibraryState();
   let d;
   try {
-    d = await api("/api/bumpers/random?count=" + PAGE);
+    d = await api("/api/bumpers/random?count=" + PAGE,
+                  { signal: libraryAbort.signal });
   } catch (err) {
     if (generation !== lib.generation) return null;
     lib.loading = false;
@@ -2096,9 +2316,7 @@ async function shufflePreview() {
   return d;
 }
 
-// ---------------------------------------------------------------------------
-// 7b. Item inspector
-// ---------------------------------------------------------------------------
+// ==== 7b. Item inspector ====
 // One modal over one row. The listing carries neither `selection` nor `uri` nor
 // the history columns, so the detail route is read on open and not before.
 
@@ -2228,7 +2446,7 @@ function zeroGate(factors) {
         const token = factors[key] === null ? "non_finite_score" : ZERO_REASON[key];
         return makeEl("p", "insp-note", key + " is " + factorText(factors, key) +
           ", so the score cannot be positive: " +
-          (token ? REASON_TEXT[token] : ZERO_UNNAMED));
+          (token ? own(REASON_TEXT, token) : ZERO_UNNAMED));
       }));
   }
   if (factors.score === null) {
@@ -2257,9 +2475,7 @@ function inspectorSelection(row) {
     reasons.forEach((reason) => {
       // Own keys only: a token named "constructor" must read as that word,
       // not as whatever Object.prototype happens to carry under it.
-      list.append(makeEl("li", "",
-        Object.prototype.hasOwnProperty.call(REASON_TEXT, reason)
-          ? REASON_TEXT[reason] : String(reason)));
+      list.append(makeEl("li", "", own(REASON_TEXT, reason) || String(reason)));
     });
     rows.push(list);
   } else {
@@ -2321,47 +2537,23 @@ function inspectorHistory(row) {
   ]));
 }
 
-// A read-only field, not a link — following a link would open the media when
-// what is wanted is the string — plus a Copy control. The Clipboard API is a
-// permission, so every path ends in a visible sentence: a silent Copy button is
-// indistinguishable from a broken one.
+// The media URL as something to copy rather than follow. The shared control
+// owns the field, the button and the sentence; the outcome lives in STATE so a
+// redraw repeats it, and it is written straight into `said` so pressing Copy
+// does not rebuild the dialog out from under the button that was just pressed.
 function inspectorMediaUrl(row) {
   if (!hasMedia(row)) {
     return inspectorBlock("Media URL", [
       makeEl("p", "insp-none", row.type === "card"
         ? "No media file yet — render the card to give it one." : NOT_AVAILABLE)]);
   }
-  const input = document.createElement("input");
-  input.type = "text";
-  input.readOnly = true;
-  input.className = "url";
-  input.value = String(row.media_url);
-  const select = () => { if (input.select) input.select(); };
-  input.addEventListener("focus", select);
-
-  // The outcome lives in STATE, so a redraw repeats it rather than losing it,
-  // and it is written straight into `said` so pressing Copy does not rebuild
-  // the dialog out from under the button that was just pressed.
-  const said = makeEl("p", "insp-copy");
-  const show = () => {
-    const done = STATE.inspector.copied;
-    said.replaceChildren(...(done ? [statusBadge(done.level, done.message)] : []));
-  };
-  const report = (level, message) => {
-    STATE.inspector.copied = { level, message };
-    show();
-    announce(message);
-  };
-  const byHand = () => { select(); report("attention", COPY_BY_HAND); };
-  const copy = makeButton("Copy", "insp-copy-btn mini", () => {
-    const clip = typeof navigator !== "undefined" && navigator && navigator.clipboard;
-    if (!clip || !clip.writeText) return byHand();
-    return clip.writeText(input.value).then(
-      () => report("healthy", "media URL copied to the clipboard"), byHand);
-  }, "Copy the media URL");
-  show();
-  return inspectorBlock("Media URL",
-    [labelledControl("inspector-media-url", "Media URL", input), copy, said]);
+  const built = copyControls("inspector-media-url", "Media URL", row.media_url, {
+    read: () => STATE.inspector.copied,
+    write: (level, message) => { STATE.inspector.copied = { level, message }; },
+  });
+  return inspectorBlock("Media URL", [
+    labelledControl("inspector-media-url", "Media URL", built.input),
+    built.copy, built.said]);
 }
 
 // The one reversible action this state deserves, plus any second control that
@@ -2445,7 +2637,9 @@ function renderInspector() {
   const held = heldFocus();
   if (title) title.textContent = row ? rowLabel(row) : "Item";
   if (!body) return null;
-  if (!row) { body.replaceChildren(); giveBackFocus(held); return body; }
+  // Emptying the dialog is exactly when a still-buffering preview has to be
+  // let go of, not only when one block is replaced by another.
+  if (!row) { releaseMedia(body); body.replaceChildren(); giveBackFocus(held); return body; }
   releaseMedia(body);
   body.replaceChildren(
     inspectorPreview(row), inspectorIdentity(row), inspectorStateBlock(row),
@@ -2464,14 +2658,18 @@ function renderInspectorState() {
   // removing. That has to be readable HERE, inside the modal the operator is in.
   if (insp.busy) return renderJobState(el, "working", insp.busy, []);
   if (insp.notice) return renderJobState(el, "attention", insp.notice, []);
-  return renderPanelState(el, readState(insp, () => { loadInspector(insp.id); }));
+  // The id this Retry belongs to, captured: reading STATE at click time would
+  // let a button left in a closed dialog ask for /api/bumpers/null.
+  const id = insp.id;
+  return renderPanelState(el, readState(insp,
+    id ? () => { loadInspector(id); } : undefined));
 }
 
 function setInspectorBusy(message) {
   STATE.inspector.busy = message || "";
   const body = $("#inspector-body");
   const held = heldFocus();
-  if (body) focusables(body).forEach((el) => { el.disabled = Boolean(message); });
+  if (body) modalControls(body).forEach((el) => { el.disabled = Boolean(message); });
   if (message) giveBackFocus(held);
   renderInspectorState();
 }
@@ -2554,6 +2752,10 @@ function openInspector(id, opts) {
         releaseMedia($("#inspector-body"));
         const body = $("#inspector-body");
         if (body) body.replaceChildren();
+        // Including the state strip: a Retry left standing in a closed dialog
+        // belongs to a row nobody is inspecting any more.
+        const state = $("#inspector-state");
+        if (state) renderPanelState(state, { state: "populated" });
       },
     });
   }
@@ -2621,9 +2823,7 @@ async function inspectorJob(options) {
   return r;
 }
 
-// ---------------------------------------------------------------------------
-// 8. Composer / playback  (read-only: never advances playout)
-// ---------------------------------------------------------------------------
+// ==== 8. Composer / playback  (read-only: never advances playout) ====
 // The server composes the break; this file asks for one, shows it in the order
 // it came back in, and plays it locally. Nothing here re-implements
 // compose_break, re-sorts it, or substitutes an item when a row is disabled: a
@@ -2634,6 +2834,7 @@ const COMPOSER_PLACEMENTS = ["any", "open", "inside", "close"];
 const COMPOSER_TYPES = ["video", "card", "image", "stream"];
 // Exactly what GET /api/bumpers/fill documents, so an out-of-range control is
 // refused here rather than by a 422 the operator has to interpret.
+const MIN_FILL_SECONDS = 0.1;   // index.html: <input id="cmp-seconds" min="0.1">
 const MAX_FILL_SECONDS = 86400;
 const MAX_FILL_TOLERANCE = 3600;
 const MAX_FILL_ITEMS = 40;
@@ -2656,7 +2857,10 @@ let composerAbort = null;
 let composerTimer = null;   // a payload-only card's own clock
 let composerTick = null;    // the elapsed/remaining readout
 let composerMedia = null;   // the element the sequence is playing, if any
-let composerEnded = null;   // its `ended` listener, so it can be taken off again
+// Its listeners as [type, fn] pairs, so every one of them comes off again when
+// the stage is released. A sequence that leaks an `ended` handler advances the
+// next item twice.
+let composerHandlers = [];
 
 const composerItems = () => {
   const d = STATE.composer.result;
@@ -2678,8 +2882,12 @@ function composerProblems(controls) {
   const c = controls || {};
   const out = {};
   const seconds = fillNumber(c.seconds);
-  if (!(seconds > 0) || seconds > MAX_FILL_SECONDS) {
-    out.seconds = "Seconds to fill must be more than 0 and at most 86400.";
+  // The endpoint accepts anything above zero; this control's step is 0.1, so
+  // 0.1 is the smallest duration it can express. Validating against the same
+  // number the field's own min attribute carries keeps the browser's verdict
+  // and this one from disagreeing about a value nobody can type anyway.
+  if (!(seconds >= MIN_FILL_SECONDS) || seconds > MAX_FILL_SECONDS) {
+    out.seconds = "Seconds to fill must be at least 0.1 and at most 86400.";
   }
   const tolerance = fillNumber(c.tolerance);
   if (!(tolerance >= 0) || tolerance > MAX_FILL_TOLERANCE) {
@@ -2791,11 +2999,19 @@ function setComposerPreset(value) {
 function renderComposerControls() {
   const c = STATE.composer;
   const problems = composerProblems(c);
+  // aria-invalid marks the field; aria-describedby points at the sentences
+  // that say why, which live in one polite live region beside the button they
+  // disable rather than in a tooltip nobody hears.
   const mark = (sel, key) => {
     const el = $(sel);
     if (!el) return;
-    if (problems[key]) el.setAttribute("aria-invalid", "true");
-    else el.removeAttribute("aria-invalid");
+    if (problems[key]) {
+      el.setAttribute("aria-invalid", "true");
+      el.setAttribute("aria-describedby", "cmp-validation");
+    } else {
+      el.removeAttribute("aria-invalid");
+      el.removeAttribute("aria-describedby");
+    }
   };
   mark("#cmp-seconds", "seconds");
   mark("#cmp-tolerance", "tolerance");
@@ -2862,7 +3078,7 @@ function renderComposerAttention() {
   if (!rules.length) { el.replaceChildren(); return el; }
   const list = makeEl("ul", "cmp-relax");
   rules.forEach((rule) => {
-    list.append(makeEl("li", "", RELAXED_TEXT[String(rule)] || String(rule)));
+    list.append(makeEl("li", "", own(RELAXED_TEXT, String(rule)) || String(rule)));
   });
   el.replaceChildren(
     statusBadge("attention", "The profile's rules were relaxed to fill this gap"),
@@ -2877,6 +3093,10 @@ function renderComposerAttention() {
 function markComposerStale(kind, id) {
   const c = STATE.composer;
   if (!c.result) return null;
+  // Any card surface can call this now, the Library's included. A mutation to
+  // a row this break does not contain has not changed the sequence on screen,
+  // and marking it stale for that would be a false alarm.
+  if (!composerItems().some((row) => row && String(row.id) === String(id))) return null;
   c.stale = true;
   stopComposerPlayback();
   // The timeline itself is left exactly as it is — nothing is substituted, and
@@ -2983,7 +3203,7 @@ async function composeBreak() {
   // for it would clear known-good content without a replacement and leave the
   // panel claiming nothing was ever composed, so it is a failure like any
   // other: the previous break stays, marked stale, and says what happened.
-  if (!d || typeof d !== "object") {
+  if (!d || typeof d !== "object" || Array.isArray(d)) {
     c.error = "The server sent an empty response instead of a break.";
     renderComposer();
     return null;
@@ -3024,11 +3244,13 @@ function stagePlayer(b) {
 function releaseComposerStage() {
   if (composerTimer !== null) { clearTimeout(composerTimer); composerTimer = null; }
   if (composerTick !== null) { clearInterval(composerTick); composerTick = null; }
-  if (composerMedia && composerEnded && composerMedia.removeEventListener) {
-    composerMedia.removeEventListener("ended", composerEnded);
+  if (composerMedia && composerMedia.removeEventListener) {
+    composerHandlers.forEach(([type, fn]) => {
+      composerMedia.removeEventListener(type, fn);
+    });
   }
   composerMedia = null;
-  composerEnded = null;
+  composerHandlers = [];
   const stage = $("#composer-stage");
   if (stage) { releaseMedia(stage); stage.replaceChildren(); }
   return null;
@@ -3138,8 +3360,25 @@ function playComposerAt(index) {
   }
   if (built.medium) {
     composerMedia = built.medium;
-    composerEnded = () => { advanceComposer(1); };
-    composerMedia.addEventListener("ended", composerEnded);
+    // `ended` is the ordinary advance. A medium that cannot be decoded would
+    // otherwise hold the sequence for ever, so `error` says so and moves on;
+    // `stalled` says the wait is the network's and leaves the decision to the
+    // operator, because a stall usually recovers and skipping it would not be
+    // showing them the break the server composed.
+    const on = (type, fn) => {
+      composerHandlers.push([type, fn]);
+      composerMedia.addEventListener(type, fn);
+    };
+    on("ended", () => { advanceComposer(1); });
+    on("error", () => {
+      announce("could not play item " + (at + 1) + " of " + items.length +
+               " (" + rowLabel(b) + ") — moving on");
+      advanceComposer(1);
+    });
+    on("stalled", () => {
+      announce("still waiting on item " + (at + 1) + " of " + items.length +
+               " — press Next to move on");
+    });
     claimMedia(composerMedia);
     if (typeof composerMedia.play === "function") {
       const started = composerMedia.play();
@@ -3165,7 +3404,10 @@ function playComposerAt(index) {
 function advanceComposer(delta) {
   const p = STATE.composer.playback;
   const step = Number(delta) < 0 ? -1 : 1;
-  const from = p.index < 0 ? (step > 0 ? -1 : 0) : p.index;
+  // From stopped, Next starts at the top and Previous at the end. Reporting
+  // "sequence finished" to someone who has not started one is not an answer.
+  const from = p.index < 0
+    ? (step > 0 ? -1 : composerItems().length) : p.index;
   return playComposerAt(from + step);
 }
 
@@ -3202,9 +3444,7 @@ function wireComposer() {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// 9. Station
-// ---------------------------------------------------------------------------
+// ==== 9. Station ====
 
 // The plan's operator sentences, verbatim. Each is reached from one explicit
 // field, never from parsing a human string the server happened to send.
@@ -3331,12 +3571,10 @@ function stationNow(s) {
   });
 }
 
-// A read-only field, a Copy button, and a visible sentence about what happened.
-// The Clipboard API is a permission a browser may simply refuse, and a Copy
-// that did nothing is indistinguishable from one that worked, so every path
-// ends in a badge and an announcement. Focusing the field still selects it.
-// A URL this build does not send is named and reported missing, not shown as
-// an empty box.
+// One handoff URL, through the same shared control the inspector uses. A URL
+// this build does not send is named and reported missing, not shown as an
+// empty box. The outcome lives in STATE so a redraw repeats it, keyed so one
+// row's answer is never shown against another's.
 function copyField(key, label, value) {
   const row = makeEl("div", "station-url");
   if (value === undefined || value === null || value === "") {
@@ -3344,38 +3582,14 @@ function copyField(key, label, value) {
     return row;
   }
   const id = "station-url-" + key;
-  const input = document.createElement("input");
-  input.type = "text";
-  input.readOnly = true;
-  input.className = "url";
-  input.value = String(value);
-  input.id = id;
-  const select = () => { if (input.select) input.select(); };
-  input.addEventListener("focus", select);
+  const built = copyControls(id, label, value, {
+    read: () => (STATE.ops.copied && STATE.ops.copied.key === key
+      ? STATE.ops.copied : null),
+    write: (level, message) => { STATE.ops.copied = { key, level, message }; },
+  }, { saidClass: "st-copy", copyClass: "st-copy-btn mini" });
   const caption = makeEl("label", "lbl", label);
   caption.setAttribute("for", id);
-  // The outcome lives in STATE so a redraw repeats it, and is written straight
-  // into `said` so pressing Copy does not rebuild the panel under the button.
-  const said = makeEl("p", "st-copy");
-  const show = () => {
-    const done = STATE.ops.copied;
-    said.replaceChildren(...(done && done.key === key
-      ? [statusBadge(done.level, done.message)] : []));
-  };
-  const report = (level, message) => {
-    STATE.ops.copied = { key, level, message };
-    show();
-    announce(message);
-  };
-  const byHand = () => { select(); report("attention", COPY_BY_HAND); };
-  const copy = makeButton("Copy", "st-copy-btn mini", () => {
-    const clip = typeof navigator !== "undefined" && navigator && navigator.clipboard;
-    if (!clip || !clip.writeText) return byHand();
-    return clip.writeText(input.value).then(
-      () => report("healthy", label + " copied to the clipboard"), byHand);
-  }, "Copy the " + label);
-  show();
-  row.append(caption, input, copy, said);
+  row.append(caption, built.input, built.copy, built.said);
   return row;
 }
 
@@ -3691,18 +3905,17 @@ async function loadStation() {
     renderStationState();
     return null;
   }
+  if (stationAbort !== controller) return null;
   STATE.station.loading = false;
   STATE.station.error = null;
-  STATE.station.value = s && typeof s === "object" ? s : {};
+  STATE.station.value = asObject(s);
   STATE.station.updatedAt = now();
   renderStation();
   renderStationState();
   return s;
 }
 
-// ---------------------------------------------------------------------------
-// 10. Operations and jobs
-// ---------------------------------------------------------------------------
+// ==== 10. Operations and jobs ====
 
 // Housekeeping actions. Both are idempotent — they only remove debris or
 // restore assets whose media is verifiably fine — so neither needs a confirm,
@@ -3742,13 +3955,13 @@ const JOB_FORGOTTEN = "status unknown: the server no longer tracks this job";
 // --- the jobs list ------------------------------------------------------------
 // Two sources, one list. `STATE.jobs.items` is what THIS page started: it knows
 // a label before the POST answers and covers the synchronous actions the
-// server's registry never sees. `STATE.jobs.server` is the last GET /api/jobs,
-// which is authoritative for status and result and includes work another tab or
-// the schedule started. The Overview shows the five newest; Operations shows
-// the lot, with the raw result in a <details> and Retry where repeating is safe.
+// registry never sees. `STATE.jobs.server` is the last GET /api/jobs, which is
+// authoritative for status and result. Overview shows the five newest;
+// Operations the lot, with the raw result foldable and Retry where it is safe.
 
 const JOB_LEVELS = { working: "working", done: "healthy", error: "failed",
                      unknown: "attention" };
+const jobLevel = (status) => own(JOB_LEVELS, status) || "attention";
 const JOB_STATUSES = ["working", "done", "error", "unknown"];
 
 // Repeating an action is offered only where a second run does the same work
@@ -3785,11 +3998,6 @@ function jobRetry(job) {
   if (gen) return { url: "/api/generate/" + gen[1] + "?n=20", label };
   return null;
 }
-
-// A plain object read as a map: a key an inherited property would answer for
-// ("constructor", "__proto__") is not a value anyone stored.
-const own = (map, key) =>
-  Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
 
 // A result is a string or the dict an action returns; either way it reaches the
 // DOM as text through a property, never as markup.
@@ -3890,7 +4098,7 @@ const jobsList = () => mergeJobs(STATE.jobs.items, STATE.jobs.server);
 function jobRowEl(job, opts) {
   const options = opts || {};
   const li = makeEl("li", "jobrow");
-  li.append(statusBadge(JOB_LEVELS[job.status] || "attention", job.label));
+  li.append(statusBadge(jobLevel(job.status), job.label));
   li.append(makeEl("span", "jobrow-age",
     "started " + formatAge(job.createdAt, options.at) +
     " · updated " + formatAge(job.updatedAt, options.at)));
@@ -3913,8 +4121,10 @@ function jobRowEl(job, opts) {
     // the one thing that would make the situation worse.
     const watch = JOB_WATCH.get(job.id);
     if (watch && watch.check) {
-      li.append(makeButton("Check now", "jobrow-check mini", () => { watch.check(); },
-                           "Check the status of " + job.label + " now"));
+      const check = makeButton("Check now", "jobrow-check mini",
+        () => { watch.check(); }, "Check the status of " + job.label + " now");
+      check.dataset.jobId = String(job.id);
+      li.append(check);
     }
   }
   // Retry is a second way to start the same action, so it is one of the buttons
@@ -3948,6 +4158,14 @@ function renderJobsState(el, count) {
   const j = STATE.jobs;
   const opts = readState({ value: j.updatedAt ? j.server : null, error: j.error,
                            updatedAt: j.updatedAt }, () => { loadJobs(); });
+  // Never read successfully, but this page started jobs of its own: those rows
+  // are still true, so the region reports the read that failed rather than
+  // hanging a Failed badge over work that is running perfectly well.
+  if (opts.state === "error" && count) {
+    return renderPanelState(el, { state: "error",
+      message: "Showing only the jobs this page started — " + String(j.error),
+      onAction: () => { loadJobs(); } });
+  }
   if (opts.state === "stale" || opts.state === "error") {
     return renderPanelState(el, opts);
   }
@@ -4018,9 +4236,35 @@ async function loadJobs() {
 
 const JOB_WATCH = new Map();
 
+// A pause a control can cut short or abandon. Both watchers use it, so "Check
+// now" and "Stop checking" cannot behave differently depending on which surface
+// started the job.
+function interruptiblePause() {
+  let wake = null;
+  return {
+    wait: (ms) => new Promise((resolve) => {
+      const timer = setTimeout(() => { wake = null; resolve(); }, ms);
+      wake = () => { clearTimeout(timer); wake = null; resolve(); };
+    }),
+    wake: () => { if (wake) wake(); },
+  };
+}
+
+// The row is rebuilt around the button that was just pressed, so focus would
+// fall to <body>. Only when the press is what moved it: this is also called
+// from a background poll nobody is looking at, and stealing focus then would
+// take the operator out of whatever they were typing.
 function noteJob(id, message) {
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  const held = Boolean(active && active.dataset &&
+    active.dataset.jobId === String(id) &&
+    String(active.className).split(" ").indexOf("jobrow-check") !== -1);
   STATE.ops.jobNotes[id] = message;
   renderJobs();
+  if (held) {
+    const next = $$(".jobrow-check").find((b) => b.dataset.jobId === String(id));
+    if (next && next.focus) next.focus();
+  }
   return null;
 }
 
@@ -4054,26 +4298,22 @@ function applyJobResult(id, final) {
 
 function watchListedJob(id) {
   if (JOB_WATCH.has(id)) return null;
-  let wake = null;
   let stopped = false;
+  const paused = interruptiblePause();
   const entry = {
-    stop: () => { stopped = true; if (wake) wake(); },
+    stop: () => { stopped = true; paused.wake(); },
     // Cuts the current pause short, so an operator who can see the server is
     // back does not sit out the ten-second backoff.
-    check: () => { if (wake) wake(); },
+    check: paused.wake,
   };
   JOB_WATCH.set(id, entry);
-  const pause = (ms) => new Promise((resolve) => {
-    const timer = setTimeout(() => { wake = null; resolve(); }, ms);
-    wake = () => { clearTimeout(timer); wake = null; resolve(); };
-  });
   const settle = (final) => {
     JOB_WATCH.delete(id);
     // An abandoned watch writes nothing: the view that owned it is gone.
     if (stopped) return null;
     return applyJobResult(id, final);
   };
-  return pollJob({ job_id: id, status: "working" }, undefined, pause, {
+  return pollJob({ job_id: id, status: "working" }, undefined, paused.wait, {
     stopped: () => stopped,
     // A background poll does not shout into the live region every ten seconds;
     // the row itself carries the doubt, and Retry is on the row.
@@ -4099,6 +4339,10 @@ function syncJobWatches() {
 function stopJobWatches() {
   JOB_WATCH.forEach((entry) => entry.stop());
   JOB_WATCH.clear();
+  // The doubt belonged to polls that no longer exist. Re-entering the view
+  // starts fresh watches, which raise their own the moment a read is lost —
+  // a note with neither Check now nor Retry beside it is not an escape.
+  STATE.ops.jobNotes = {};
   return null;
 }
 
@@ -4111,11 +4355,10 @@ function stopJobWatch(id) {
 }
 
 // --- action locking -----------------------------------------------------------
-// Only the duplicate action is held while a job runs. The server runs two
-// blocking actions at a time; freezing every unrelated button because one of
-// them is busy is a UI decision, not a server one. Every button that starts the
-// same work carries the same data-job-key, so the Station's Conform now and the
-// Operations copy of it lock together, and nothing else does.
+// Only the duplicate action is held while a job runs: freezing every unrelated
+// button because one is busy is a UI decision, not the server's. Every button
+// that starts the same work carries the same data-job-key, so the Station's
+// Conform now and the Operations copy lock together and nothing else does.
 
 // Which panel reports an action depends on where the operator started it, not
 // on what the action is: the same conform can be started from the Station's own
@@ -4151,21 +4394,22 @@ function lockAction(label, held) {
 const jobOutcome = (status) =>
   status === "error" ? "error" : (status === "unknown" ? "unknown" : "done");
 
-// A job POST returns immediately; polling owns the long wait, so no clock is
+// A job POST returns immediately and polling owns the long wait: no clock is
 // imposed on the server's own duration and no five-minute success is invented.
-//
-// A lost status read is not a lost job: the work is very likely still running
-// server-side, so a network failure keeps `status unknown`, backs off to ten
-// seconds and keeps asking rather than reporting the action as failed. Only a
-// 404 — the server itself no longer tracking the id — ends the poll, and even
-// that is reported as unknown.
-//
-// The loop always terminates: `hooks.stopped()` lets the surface abandon the
+// A lost read is not a lost job — the work is very likely still running — so a
+// network failure keeps `status unknown`, backs off to ten seconds and keeps
+// asking. Only a 404, the server no longer tracking the id, ends the poll, and
+// even that reports unknown. `hooks.stopped()` is how a surface abandons the
 // wait, so no caller can be left awaiting a poll that never returns.
 async function pollJob(job, getStatus = async (jobId) =>
   api("/api/request/" + encodeURIComponent(jobId)),
-pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-hooks = {}) {
+pause, hooks = {}) {
+  // Required, and deliberately so: a default setTimeout nothing can clear is
+  // exactly the poll that outlives its view. Every caller owns a pause its own
+  // Stop and Check now can reach.
+  if (typeof pause !== "function") {
+    throw apiError(0, "pollJob needs a pause its caller can cancel.");
+  }
   const jobId = job.job_id;
   const stopped = hooks.stopped || (() => false);
   let current = job;
@@ -4189,6 +4433,9 @@ hooks = {}) {
       if (hooks.onUnknown) hooks.onUnknown(message);
       else announce(message);
     }
+    // A stop asked for while that read was in flight is answered here, before
+    // the loop opens another timer nobody is going to wait out.
+    if (stopped()) return { status: "unknown", result: JOB_STOPPED };
   }
   return current;
 }
@@ -4199,32 +4446,41 @@ hooks = {}) {
 // moment a read is lost. Nothing here can leave a panel disabled with no way
 // out, and a superseded surface abandons its poll instead of polling forever.
 function watchJob(job, view) {
-  let wake = null;
+  const id = job && job.job_id !== undefined && job.job_id !== null
+    ? String(job.job_id) : "";
   let stopped = false;
-  const pause = (ms) => new Promise((resolve) => {
-    const timer = setTimeout(() => { wake = null; resolve(); }, ms);
-    wake = () => { clearTimeout(timer); wake = null; resolve(); };
-  });
+  const paused = interruptiblePause();
+  const entry = { stop: () => { stopped = true; paused.wake(); },
+                  check: paused.wake };
+  // Registered under the job's own id, so leaving the view stops this poll
+  // with every other one — a surface that is gone must not keep asking. The
+  // work carries on server-side and the background watch picks it up again
+  // when the operator opens the view that can show it.
+  if (id) JOB_WATCH.set(id, entry);
   const escapes = [
-    { label: "Check now", onClick: () => { if (wake) wake(); } },
-    { label: "Stop checking", onClick: () => { stopped = true; if (wake) wake(); } },
+    { label: "Check now", onClick: paused.wake },
+    { label: "Stop checking", onClick: entry.stop },
   ];
-  return pollJob(job, undefined, pause, {
+  const release = () => {
+    if (id && JOB_WATCH.get(id) === entry) JOB_WATCH.delete(id);
+  };
+  return pollJob(job, undefined, paused.wait, {
     stopped: () => stopped || (view.superseded ? view.superseded() : false),
     onWorking: (seconds) => view.working(seconds),
     onUnknown: (message) => { view.release(); view.unknown(message, escapes); },
-  });
+  }).then((final) => { release(); return final; },
+          (err) => { release(); throw err; });
 }
 
 function wireMaintenance() {
   // Routine housekeeping and its dry runs: idempotent, cheap, no modal.
   $$("[data-maint]").forEach((b) => b.addEventListener("click", () => {
-    const m = MAINT[b.dataset.maint];
+    const m = own(MAINT, b.dataset.maint);
     return m ? doAction(m.url, m.label, { say: m.say }) : null;
   }));
 
   $$("[data-prep]").forEach((b) => b.addEventListener("click", () => {
-    const p = PREP[b.dataset.prep];
+    const p = own(PREP, b.dataset.prep);
     return p ? doAction(p.url, p.label) : null;
   }));
 
@@ -4262,12 +4518,10 @@ async function doAction(url, label, opts) {
   const mine = ++actionGeneration;
   const record = recordJob(label, options.retry);
   const current = () => mine === actionGeneration;
-  // The lock is held only while the operator is actually being made to wait.
-  // The moment a status read is lost the button comes back, so the escape from
-  // a silent server is a real control, not a page reload.
-  // The lock counts holders, and a lost poll releases early, so this run's own
-  // release has to be idempotent: it took the lock once and gives it back once,
-  // however many times it is asked to.
+  // Held only while the operator is really being made to wait: the moment a
+  // status read is lost the button comes back, so the escape from a silent
+  // server is a control rather than a page reload. Because a lost poll releases
+  // early, this run's release takes the lock once and gives it back once.
   let holding = true;
   const release = () => {
     if (!holding) return null;
@@ -4389,17 +4643,14 @@ async function submitAsk() {
     : (final.status === "unknown" ? "attention" : "failed"), final.result || "done");
 }
 
-// ---------------------------------------------------------------------------
-// 11. Lifecycle, visibility, boot
-// ---------------------------------------------------------------------------
+// ==== 11. Lifecycle, visibility, boot ====
 
 const isVisible = () => typeof document === "undefined" ||
   document.visibilityState === undefined || document.visibilityState === "visible";
 
-// The 20-second refresh does nothing while the tab is hidden; coming back
-// refreshes at once rather than waiting out the rest of the interval. Only the
-// two views that show live figures have a clock at all, and each reads only
-// what it actually shows.
+// The 20-second refresh does nothing while the tab is hidden, and coming back
+// refreshes at once rather than waiting out the interval. Only the two views
+// with live figures have a clock, and each reads only what it shows.
 async function refreshTick() {
   if (!isVisible()) return null;
   if (STATE.route === "overview") {
@@ -4455,9 +4706,7 @@ function boot() {
   applyHash();
 }
 
-// ---------------------------------------------------------------------------
-// 12. CommonJS exports for tests
-// ---------------------------------------------------------------------------
+// ==== 12. CommonJS exports for tests ====
 
 const COMMONJS = typeof module !== "undefined" && module.exports;
 if (typeof document !== "undefined" && !COMMONJS) boot();
@@ -4484,7 +4733,7 @@ if (COMMONJS) {
     renderLibrary, applyLibraryQuery, libraryCounts, libraryHash, setFilter,
     setPageSize, setDensity, dropKind,
     // inspector and reversible curation
-    openInspector, closeInspector, renderInspector,
+    openInspector, closeInspector, renderInspector, setInspectorBusy,
     enableBumper, disableBumper, deleteBumper,
     // behaviour
     loadStatus, loadStation,
@@ -4516,6 +4765,7 @@ if (COMMONJS) {
       activeMedia = null;
       activeRoute = null;
       activeQuery = "";
+      navShown = null;
       jobSeq = 0;
       dialogSeq = 0;
       askGeneration = 0;

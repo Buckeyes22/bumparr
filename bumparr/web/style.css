@@ -35,10 +35,12 @@ body { background:var(--bg); color:var(--text); font:14px/1.5 var(--font-ui); }
 /* Keyboard first: one visible focus ring everywhere, and a way past the header. */
 :focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:var(--radius-sm); }
 .skip-link { position:absolute; left:var(--space-2); top:-3rem; z-index:10;
-  background:var(--surface-3); color:var(--text); border:1px solid var(--border);
+  background:var(--surface-3); color:var(--text); border:1px solid var(--muted);
   border-radius:var(--radius-sm); padding:var(--space-2) var(--space-3); }
 .skip-link:focus { top:var(--space-2); }
-main:focus { outline:none; }
+/* Clicking into the region is not an arrival worth ringing; following the
+   skip link with a keyboard is, and the rule above draws it. */
+main:focus:not(:focus-visible) { outline:none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -118,7 +120,16 @@ h4 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
 /* Every primary or destructive target clears 44x44px, in one place. */
 .panel-retry, .pv-inspect, .pv-play, .danger-btn, .libbar #clear-filters,
 #more, .dlg-actions button, .insp-primary, .insp-secondary, .insp-copy-btn,
-.search, .libbar select, .dlg input[type="text"] { min-height:44px; }
+.search, .libbar select, .dlg input[type="text"],
+#shuffle, #inspector-close, .linkbtn, .cmp-presets button { min-height:44px; }
+/* The one place a height alone is not enough: a "15s" preset is 37px wide. */
+.cmp-presets button { min-width:44px; }
+/* A 13px checkbox is not a target, and one of these sits inside a destructive
+   confirmation. The box is sized up and its label is the rest of the row, so
+   the pair clears 44px however the row wraps. */
+.field-check { min-height:44px; }
+.field-check > input[type="checkbox"] { width:24px; height:24px; }
+.field-check > label { display:flex; align-items:center; min-height:44px; }
 
 .totals { display:flex; flex-wrap:wrap; gap:var(--space-4) var(--space-6);
   margin-bottom:var(--space-4); }
@@ -176,15 +187,21 @@ h4 { font-size:.8rem; text-transform:uppercase; letter-spacing:.08em;
 
 .actions { display:flex; flex-direction:column; gap:var(--space-4); }
 .action-group { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-2); }
-.action-group .lbl { width:100%; color:var(--muted); font-size:.75rem;
-  text-transform:uppercase; letter-spacing:.08em; }
+.action-group .lbl { width:100%; margin:0; color:var(--muted); font-size:.75rem;
+  text-transform:uppercase; letter-spacing:.08em; font-weight:600; }
+/* A control's edge is a boundary, not a divider: --border is 1.64:1 on a
+   panel, which fails WCAG 1.4.11, so every interactive edge on this page is
+   drawn in --muted (7.13:1) and --border keeps the dividers it was picked for. */
 button, .linkbtn { background:var(--surface-2); color:var(--text);
-  border:1px solid var(--border); border-radius:var(--radius-sm);
+  border:1px solid var(--muted); border-radius:var(--radius-sm);
   padding:var(--space-2) var(--space-3); font:inherit; font-size:.85rem;
   cursor:pointer; text-decoration:none; transition:border-color .15s ease; }
+.linkbtn { display:inline-flex; align-items:center; }
 button:hover, .linkbtn:hover { border-color:var(--accent); }
 button em { color:var(--muted); font-style:normal; font-size:.75rem; }
-button:disabled { opacity:.55; cursor:wait; }
+/* Disabled here means "not applicable", never "busy": a wait cursor would say
+   the server is working when the answer is usually "choose a kind first". */
+button:disabled { opacity:.55; cursor:not-allowed; }
 .mini { font-size:.75rem; padding:var(--space-1) var(--space-2); }
 
 .log { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm);
@@ -208,8 +225,10 @@ button:disabled { opacity:.55; cursor:wait; }
   align-items:center; justify-content:center; text-align:center; padding:var(--space-4); }
 .pv-card.pv-textcard .tc { font-size:.85rem; white-space:pre-line; line-height:1.35; }
 .pv-stream { height:120px; display:flex; align-items:center; justify-content:center;
-  background:var(--surface-3); color:var(--warning); font-weight:700; letter-spacing:.1em; }
-.pv-factors, .pv-relax, .pv-credits, .pv-freshness {
+  background:var(--surface-3); color:var(--warning); font-weight:700; letter-spacing:.1em;
+  text-align:center; padding:0 var(--space-2); }
+.pv-dead { color:var(--danger); letter-spacing:.04em; }
+.pv-factors, .pv-credits, .pv-freshness {
   font-size:.7rem; color:var(--muted); margin-top:var(--space-1);
   padding:0 var(--space-2); font-family:var(--font-mono); overflow-wrap:anywhere; }
 
@@ -249,7 +268,7 @@ button:disabled { opacity:.55; cursor:wait; }
   background:var(--surface-2); }
 .danger-btn:hover:not(:disabled) { background:var(--danger); color:var(--bg);
   border-color:var(--danger); }
-.danger-btn:disabled { color:var(--muted); border-color:var(--border); }
+.danger-btn:disabled { color:var(--muted); border-color:var(--border); opacity:1; }
 
 footer { display:flex; flex-wrap:wrap; justify-content:center; gap:var(--space-2) var(--space-6);
   padding:var(--space-6); color:var(--muted); font-size:.8rem;
@@ -273,7 +292,7 @@ footer a { color:var(--accent); }
 .field-check > label { text-transform:none; letter-spacing:0; font-size:.85rem;
   color:var(--text); order:2; }
 .search, .libbar select, .dlg input[type="text"] {
-  background:var(--bg); border:1px solid var(--border);
+  background:var(--bg); border:1px solid var(--muted);
   border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:.85rem;
   padding:var(--space-2); min-width:140px; }
 .libcounts { color:var(--muted); font-size:.8rem; font-family:var(--font-mono);
@@ -355,7 +374,7 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
 /* Natural-language ask bar */
 .askbar { border-color:var(--accent); }
 .ask-row { display:flex; flex-wrap:wrap; gap:var(--space-2); }
-.ask { flex:1; min-width:200px; background:var(--bg); border:1px solid var(--border);
+.ask { flex:1; min-width:200px; background:var(--bg); border:1px solid var(--muted);
   border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:1rem;
   padding:var(--space-3); }
 #ask-go { background:var(--accent); color:var(--bg); border:1px solid var(--accent);
@@ -366,9 +385,6 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
 .ask-hints { margin-top:var(--space-2); color:var(--muted); font-size:.78rem; }
 .ask-hints b { color:var(--text); font-weight:600; }
 
-.pack-summary { margin-bottom:var(--space-2); font-size:.85rem; }
-.pack-summary .attn { color:var(--warning); margin-top:var(--space-1); }
-.preview-err { color:var(--danger); }
 .memory-status { font-size:.75rem; color:var(--muted); margin-top:var(--space-2);
   font-family:var(--font-mono); overflow-wrap:anywhere; }
 
@@ -378,7 +394,7 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
 .station-row .lbl, .station-url .lbl { min-width:6.5rem; color:var(--muted); }
 .station-url input.url { flex:1; min-width:0; font-family:var(--font-mono);
   font-size:.85rem; background:var(--bg); color:var(--text);
-  border:1px solid var(--border); border-radius:var(--radius-sm); padding:var(--space-1); }
+  border:1px solid var(--muted); border-radius:var(--radius-sm); padding:var(--space-1); }
 .station .muted, .station-body .muted { color:var(--muted); }
 
 /* Configuration, read-only: one group per file the server loaded at startup. */
@@ -408,6 +424,11 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
    instead of scrolling the page sideways: 320px and 200% zoom stay usable. */
 @media (max-width: 480px) {
   .viewgrid { grid-template-columns:1fr; }
+  /* Everything else stacks below 480px; the equation must not. A column of
+     labelled figures is not a product, so its terms keep label-beside-value
+     and the row wraps between terms instead. */
+  .insp-eq .summary-row { flex-direction:row; align-items:baseline; }
+  .insp-eq .summary-row .lbl { min-width:0; }
   .viewtools, .action-group { width:100%; }
   .viewtools > button, .action-group > button, .action-group > .linkbtn { flex:1; }
   .ask-row { flex-direction:column; align-items:stretch; }
@@ -436,7 +457,7 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
   color:var(--accent); background:var(--surface-3); }
 .cmpbar { display:flex; flex-wrap:wrap; align-items:flex-end;
   gap:var(--space-3); margin-bottom:var(--space-3); }
-.cmpbar input, .cmpbar select { background:var(--bg); border:1px solid var(--border);
+.cmpbar input, .cmpbar select { background:var(--bg); border:1px solid var(--muted);
   border-radius:var(--radius-sm); color:var(--text); font:inherit; font-size:.85rem;
   padding:var(--space-2); min-width:140px; min-height:44px; }
 [aria-invalid="true"] { border-color:var(--danger); }
@@ -514,7 +535,10 @@ dialog.dlg[role="dialog"] { position:fixed; z-index:20; top:50%; left:50%;
    server's order, nothing behind a swipe. */
 @media (max-width: 760px) {
   .cmp-timeline { flex-direction:column; overflow-x:visible; }
-  .cmp-item { min-width:0; }
+  /* The per-item flex-grow app.js sets is a WIDTH share. Stacked, the same
+     number would stretch a long item's HEIGHT, which says nothing. It is an
+     inline style, so only !important can take it back. */
+  .cmp-item { min-width:0; flex-grow:0 !important; }
 }
 
 @media (max-width: 480px) {

@@ -4,13 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bumparr</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/web/style.css" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to the dashboard</a>
 
   <header>
-    <h1 class="brand">▮ Bumparr</h1>
+    <h1 class="brand"><span aria-hidden="true">▮</span> Bumparr</h1>
     <p class="tag">bumper generator for the *arr stack</p>
     <div class="headmeta">
       <div id="status-pill" class="pill">…</div>
@@ -93,7 +94,7 @@
         <div class="viewhead">
           <h2 id="h-library">Library</h2>
           <div class="viewtools">
-            <button id="shuffle" class="mini">⟳ shuffle preview</button>
+            <button id="shuffle" class="mini"><span aria-hidden="true">⟳</span> shuffle preview</button>
           </div>
         </div>
         <div class="panel wide">
@@ -143,7 +144,7 @@
             </p>
             <button id="clear-filters" class="mini">Clear filters</button>
           </div>
-          <p id="library-counts" class="libcounts"></p>
+          <p id="library-counts" class="libcounts" tabindex="-1"></p>
           <div id="browse-state" class="panel-state"></div>
           <div id="grid" class="grid"></div>
           <div id="more-row"><button id="more" class="mini" hidden>Load more</button></div>
@@ -227,7 +228,8 @@
           <!-- Filled by app.js when a control is out of range; the Compose
                button is disabled for exactly as long as it has anything in it,
                so an invalid request is never sent. -->
-          <div id="cmp-validation" class="cmp-validation" hidden></div>
+          <div id="cmp-validation" class="cmp-validation" role="status"
+               aria-live="polite" hidden></div>
           <button id="cmp-go" type="button">Compose break</button>
         </section>
 
@@ -239,10 +241,10 @@
           <div id="composer-attention" class="cmp-attn" hidden></div>
           <div id="composer-stale" class="cmp-stale" hidden></div>
           <div class="cmp-playback" role="group" aria-label="Sequence playback">
-            <button id="cmp-play" type="button" disabled>▶ Play sequence</button>
-            <button id="cmp-prev" type="button" disabled>◀ Previous</button>
-            <button id="cmp-next" type="button" disabled>Next ▶</button>
-            <button id="cmp-stop" type="button" disabled>■ Stop</button>
+            <button id="cmp-play" type="button" disabled><span aria-hidden="true">▶</span> Play sequence</button>
+            <button id="cmp-prev" type="button" disabled><span aria-hidden="true">◀</span> Previous</button>
+            <button id="cmp-next" type="button" disabled>Next <span aria-hidden="true">▶</span></button>
+            <button id="cmp-stop" type="button" disabled><span aria-hidden="true">■</span> Stop</button>
           </div>
           <p id="cmp-progress" class="cmp-progress"></p>
           <div id="composer-stage" class="cmp-stage"></div>
@@ -311,12 +313,12 @@
           <div class="ask-row">
             <input id="ask" class="ask" autocomplete="off"
               placeholder="e.g. a webcam URL, 'more tech difficulties', 'I want more stoner stuff'" />
-            <button id="ask-go">＋ Add</button>
+            <button id="ask-go"><span aria-hidden="true">＋</span> Add</button>
           </div>
           <div id="ask-result" class="ask-result"></div>
           <div class="ask-hints">try: a <b>.m3u8 webcam URL</b> · a <b>YouTube live cam</b> · an <b>archive.org</b> link · "more <b>dead air</b> cards" · "<b>5</b> golf clips" · "<b>uncle sam</b> posters" · "more <b>trippy</b> stuff" &nbsp;— add a number to pull more (default 3, max 15)</div>
           <div class="action-group">
-            <span class="lbl">Starter pack <span class="req">needs network · uses your API keys</span></span>
+            <h4 class="lbl">Starter pack <span class="req">needs network · uses your API keys</span></h4>
             <button data-starter="dry" data-job-key="check starter">Preview seeds</button>
             <button data-starter="run" data-job-key="run starter">Seed the pool</button>
           </div>
@@ -327,7 +329,7 @@
           <div id="actions-state" class="panel-state"></div>
           <div class="actions">
             <div class="action-group">
-              <span class="lbl">2 · Generate cards <span class="req">20 items per run</span></span>
+              <h4 class="lbl">2 · Generate cards <span class="req">20 items per run</span></h4>
               <button data-gen="trivia" data-job-key="generate trivia">Trivia <em>(grounded)</em></button>
               <button data-gen="fun_facts" data-job-key="generate fun_facts">Fun facts <em>(grounded)</em></button>
               <button data-gen="number" data-job-key="generate number">Numbers <em>(grounded)</em></button>
@@ -340,24 +342,24 @@
               <button data-gen="tiny_games" data-job-key="generate tiny_games">Tiny games <em>(model)</em></button>
             </div>
             <div class="action-group">
-              <span class="lbl">3 · Refresh sources <span class="req">needs network</span></span>
+              <h4 class="lbl">3 · Refresh sources <span class="req">needs network</span></h4>
               <button data-src="capture-windows" data-job-key="capture-windows">Recapture live cams</button>
               <button data-src="fetch-queue" data-job-key="fetch-queue">Run fetch queue</button>
             </div>
             <div class="action-group">
-              <span class="lbl">4 · Prepare output <span class="req">needs ffmpeg</span></span>
+              <h4 class="lbl">4 · Prepare output <span class="req">needs ffmpeg</span></h4>
               <button data-prep="render" data-job-key="render cards">Render cards <em>(text cards → MP4)</em></button>
               <button data-prep="conform" data-job-key="station conform">Conform station <em>(can be slow)</em></button>
             </div>
             <div class="action-group">
-              <span class="lbl">5 · Maintenance <span class="req">local only</span></span>
+              <h4 class="lbl">5 · Maintenance <span class="req">local only</span></h4>
               <button data-maint="tidy-dry" data-job-key="preview tidy">Preview tidy</button>
               <button data-maint="tidy" data-job-key="tidy up">Tidy up <em>(empty dirs, 0-byte files)</em></button>
               <button data-maint="revive-dry" data-job-key="preview recheck">Preview recheck</button>
               <button data-maint="revive" data-job-key="recheck retired">Recheck retired <em>(restore playable)</em></button>
             </div>
             <div class="action-group">
-              <span class="lbl">Destructive work lives elsewhere</span>
+              <h4 class="lbl">Destructive work lives elsewhere</h4>
               <p class="note">Deleting every item in a kind is in the
                 <a href="#/library">Library danger zone</a>. Pruning off-shape material
                 and dropping a whole category are CLI-only and irreversible —
@@ -368,7 +370,7 @@
                 runs them.</p>
             </div>
             <div class="action-group">
-              <span class="lbl">Consume</span>
+              <h4 class="lbl">Consume</h4>
               <a class="linkbtn" href="/playlist.m3u" target="_blank">playlist.m3u</a>
               <a class="linkbtn" href="/api/bumpers/random?count=5" target="_blank">random API</a>
             </div>

@@ -704,19 +704,27 @@ once per change, never on a refresh.
   still holding. Where a *poll* has been lost the row offers **Check now**
   instead, which asks again rather than starting a second run. A list that could
   not be refreshed after a good read is marked stale, with its age and a Retry
-  for the read, and never silently shown as current. Every
-  working job in the list is polled at `GET /api/request/{id}` every three
-  seconds until `done` or `error`, whoever started it; a lost read keeps the
-  row `status unknown` and backs off to ten seconds rather than inventing a
-  failure; a `404` ends the poll as expired and is never reported as success;
-  no five-minute cap is imposed. Reaching a terminal state refreshes the pool
-  counts, the station and the library listing. A poll never outlives the view
-  that started it — every watch is registered by job id and the shared route
-  teardown ends all of them, whether the Station, Operations or the inspector
-  started the work — and a surface that starts a job takes it over from the
-  background watch rather than polling it twice. Work abandoned this way keeps
-  running on the server and is picked up again by the background watch the next
-  time Operations is opened, which is where it can be seen.
+  for the read, and never silently shown as current. A working job started
+  from any view — Station, Operations, the inspector, the ask bar — is polled
+  at `GET /api/request/{id}` every three seconds from wherever it was
+  started, until `done` or `error`. Operations additionally adopts every
+  *other* working job in the list — one this page did not itself start,
+  begun by another tab or the CLI — into that same three-second watch, but
+  only while Operations is open; elsewhere (the Overview, say) such a job is
+  not polled at three seconds, and its status is only as fresh as that view's
+  own periodic read (the Overview's own 20-second `GET /api/jobs`). Either
+  way, a lost read keeps the row `status unknown` and backs off to ten
+  seconds rather than inventing a failure; a `404` ends the poll as expired
+  and is never reported as success; no five-minute cap is imposed. Reaching a
+  terminal state always refreshes the pool counts and the station, and
+  refreshes the library listing too when the library is the view on screen. A
+  poll never outlives the view that started it — every watch is registered by
+  job id and the shared route teardown ends all of them, whether the Station,
+  Operations or the inspector started the work — and a surface that starts a
+  job takes it over from the background watch rather than polling it twice.
+  Work abandoned this way keeps running on the server and is picked up again
+  by the background watch the next time Operations is opened, which is where
+  it can be seen.
 - **Shell** — the header carries the service status pill, compact profile
   validity, the number of jobs this page is still waiting on, and how old the
   last read is; the footer carries the version (or "version not reported" — the

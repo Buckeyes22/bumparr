@@ -33,14 +33,14 @@ def _tz():
         return None
 
 
-def now_local(now=None):
+def now_local(now=None, tz=None):
     """An aware local datetime. Accepts None (now), naive (assumed local), or aware."""
-    tz = _tz()
+    zone = tz if tz is not None else _tz()
     if now is None:
-        return datetime.datetime.now(tz) if tz else datetime.datetime.now().astimezone()
-    if now.tzinfo is None:
-        return now.replace(tzinfo=tz) if tz else now.astimezone()
-    return now.astimezone(tz) if tz else now.astimezone()
+        return datetime.datetime.now(zone) if zone else datetime.datetime.now().astimezone()
+    if getattr(now, "tzinfo", None) is None:
+        return now.replace(tzinfo=zone) if zone else now.astimezone()
+    return now.astimezone(zone) if zone else now.astimezone()
 
 
 def _minute(text):
@@ -105,10 +105,10 @@ def _contains(spec, minute):
     return any(a <= minute < b for a, b in _intervals(spec["start"], spec["end"]))
 
 
-def current(now=None, parts=None):
+def current(now=None, parts=None, tz=None):
     """(name, spec) for the window containing `now`, or None."""
     parts = load_dayparts() if parts is None else parts
-    t = now_local(now)
+    t = now_local(now, tz)
     minute = t.hour * 60 + t.minute
     for name, spec in parts.items():
         if _contains(spec, minute):
@@ -116,9 +116,9 @@ def current(now=None, parts=None):
     return None
 
 
-def factors_now(now=None, parts=None):
+def factors_now(now=None, parts=None, tz=None):
     """{kind: multiplier} for right now; {} outside every window."""
-    hit = current(now, parts)
+    hit = current(now, parts, tz=tz)
     return dict(hit[1]["kinds"]) if hit else {}
 
 

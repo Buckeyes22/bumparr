@@ -174,10 +174,12 @@ content covers every kind with no model at all (CI asserts this).
 - **`jobs.py`** — in-container background loops, no host cron: window
   re-capture on `WINDOW_REFRESH_HOURS`, fetch-queue passes, volatile-card
   re-render on `VOLATILE_INTERVAL`, dated-card rotation and seasonal healing
-  hourly (so midnight rollover is caught), and channel-memory refresh on
-  `CHANNEL_MEMORY_REFRESH` (`0` disables). Memory cards are built from
-  `station:live` `play_history` plus local operator YAML, never from
-  preview/status/simulation.
+  hourly (so midnight rollover is caught), channel-memory refresh on
+  `CHANNEL_MEMORY_REFRESH` (`0` disables), and `generation_loop` for durable
+  MiniMax/OpenRouter jobs (off unless `GENERATION_ENABLED=1`; accepted jobs
+  still poll). Memory cards are built from `station:live` `play_history` plus
+  local operator YAML, never from preview/status/simulation. Playback paths
+  never call a generation provider.
 - **`stream_proxy.py`** — same-origin HLS relay for live feeds without CORS.
 
 ### 6. Station
@@ -246,7 +248,8 @@ preview reads never extend a timeline or write history.
 | `bumparr/review.py` | read-only ten-minute plan and 15/30/60/90 review packs |
 | `bumparr/seasons.py` | seasonal factors + weight healing |
 | `bumparr/prune.py` | remove off-shape / orphaned material |
-| `bumparr/jobs.py` | background loops (capture, queue, volatile, dated, channel memory) |
+| `bumparr/jobs.py` | background loops (capture, queue, volatile, dated, channel memory, generation) |
+| `bumparr/generation/` | durable review-gated video generation (MiniMax H3, OpenRouter); off by default |
 | `bumparr/stream_proxy.py` | same-origin HLS relay |
 | `bumparr/station/conform.py` | pre-conform registry items into splice-safe HLS segments |
 | `bumparr/station/playout.py` | virtual channel clocks, selection, playlists, and play history |

@@ -10,10 +10,69 @@
   <header>
     <div class="brand">▮ Bumparr</div>
     <div class="tag">bumper generator for the *arr stack</div>
+    <nav class="nav" aria-label="Operator views">
+      <a href="#/overview" data-view="overview">Overview</a>
+      <a href="#/generation" data-view="generation">Generation</a>
+    </nav>
     <div id="status-pill" class="pill">…</div>
   </header>
 
-  <main>
+  <section id="generation-view" class="generation-view" hidden>
+    <div class="panel wide">
+      <h2>Generation</h2>
+      <p id="gen-banner" class="gen-banner"></p>
+      <p id="gen-privacy" class="gen-privacy"></p>
+      <div id="gen-status" class="gen-status"></div>
+      <p id="gen-message" role="status" aria-live="polite"></p>
+    </div>
+    <div class="panel">
+      <h2>Create</h2>
+      <label class="lbl" for="gen-model">Model</label>
+      <select id="gen-model"></select>
+      <label class="lbl" for="gen-brief">Creative brief</label>
+      <textarea id="gen-brief" rows="6" maxlength="8000"
+        placeholder="Subject, setting, action, camera, rhythm, palette, sound. Do not name Adult Swim, artists, or living people."></textarea>
+      <div class="gen-row">
+        <label>Duration <select id="gen-duration"></select></label>
+        <label>Resolution <select id="gen-resolution"></select></label>
+        <label>Energy
+          <select id="gen-energy">
+            <option value="quiet">quiet</option>
+            <option value="neutral">neutral</option>
+            <option value="loud">loud</option>
+          </select>
+        </label>
+      </div>
+      <p class="lbl">Exact submitted prompt</p>
+      <pre id="gen-prompt" class="log"></pre>
+      <p id="gen-estimate" class="gen-estimate"></p>
+      <div class="action-group">
+        <button id="gen-preflight" type="button">Preflight</button>
+        <button id="gen-submit" type="button" disabled>Create paid job</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Queue</h2>
+      <div id="gen-jobs"></div>
+      <div class="action-group">
+        <button id="gen-jobs-prev">Newer jobs</button><button id="gen-jobs-next">Older jobs</button>
+      </div>
+    </div>
+    <div class="panel wide">
+      <h2>Review</h2>
+      <label>Review state <select id="gen-review-state">
+        <option value="pending">Pending / processing failed</option>
+        <option value="approved">Approved</option><option value="rejected">Rejected</option>
+        <option value="deleted">Deleted</option>
+      </select></label>
+      <div id="gen-review"></div>
+      <div class="action-group">
+        <button id="gen-review-prev">Newer outputs</button><button id="gen-review-next">Older outputs</button>
+      </div>
+    </div>
+  </section>
+
+  <main id="overview-view">
     <!-- natural-language ingest: type what you want, Bumparr pulls it in -->
     <section class="panel wide askbar">
       <div class="ask-row">

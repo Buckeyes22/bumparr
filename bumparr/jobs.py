@@ -285,3 +285,13 @@ async def channel_memory_loop():
             raise
         except Exception as e:
             print("[bumparr] channel memory loop error: %s" % e)
+
+
+async def generation_loop():
+    """Poll and ingest accepted generation jobs. Off by default.
+
+    Disabling GENERATION_ENABLED stops new submissions; already accepted
+    provider jobs are still polled so a restart cannot abandon paid work.
+    """
+    from bumparr.generation.worker import generation_loop as _loop
+    await _loop()

@@ -74,6 +74,9 @@ def seed_from_assets():
             rel = str(path.relative_to(root))
             if Path(rel).parts[0] in SKIP_DIRS:
                 continue
+            from bumparr.generation import models as gen_models
+            if gen_models.is_generation_output_path(path):
+                continue
             if "vid:" + rel in registered:
                 continue
             if path.parent == root:

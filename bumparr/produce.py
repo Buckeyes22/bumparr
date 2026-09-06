@@ -422,10 +422,12 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
     for i, (start, length) in enumerate(windows):
         vol = mean_volume(src, start, length)
         has_native = vol is not None and vol > SILENCE_DB
+        policy = music.audio_policy()
+        use_native = bool(has_native and "native" in policy["allowed"])
         bed = None
         bed_rec = None
         excerpt = None
-        if not has_native and sounds:
+        if not use_native and sounds:
             if rng.random() < rng.uniform(ADD_SOUND_MIN, ADD_SOUND_MAX):
                 bed_rec = music.pick_bed(
                     inferred.get("family"), inferred.get("energy"), rng,
@@ -465,7 +467,7 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
         try:
             try:
                 cut_clip(src, dest, start, length, config.BRAND, spec, static,
-                         bed=bed, native=has_native, credit=credit)
+                         bed=bed, native=use_native, credit=credit)
             except Exception:
                 if bed is None:
                     raise
@@ -477,7 +479,7 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
                 bed_rec = None
                 credit = ""
                 cut_clip(src, dest, start, length, config.BRAND, spec, static,
-                         bed=None, native=has_native, credit="")
+                         bed=None, native=use_native, credit="")
         except Exception as e:
             try:
                 dest.unlink()
@@ -496,7 +498,7 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
                 except OSError:
                     pass
         actual = duration_of(dest)
-        audio = ("native" if has_native else
+        audio = ("native" if use_native else
                  ("bed:" + bed_rec.id[:18] if bed_rec else "silent"))
         pid = "clip:%s:%d" % (stem, int(time.time()))
         payload = with_presentation(
@@ -518,7 +520,7 @@ def produce_from_source(src, kind, rng, pool, sounds, weights, delete_source=Fal
              # compounding whatever was current at mint time.
              "base_weight": weight},
             {"id": pid, "type": "video", "kind": kind, "source": "produced"})
-        if has_native:
+        if use_native:
             payload = music.apply_playable_audio(payload, None, preserve_non_music=True)
             payload = creative.merge_creative(payload, {"audio": "native", "music_id": None})
         else:
@@ -584,6 +586,9 @@ def run(category=None, limit=None, delete_source=False, seed=None, per_source=No
             continue           # live captures expire; see EPHEMERAL_DIRS
         if cat in OUTPUT_DIRS or any(part in OUTPUT_DIRS for part in f.parts[:-1]):
             continue           # our own finished output; see OUTPUT_DIRS
+        from bumparr.generation import models as gen_models
+        if gen_models.is_generation_output_path(f):
+            continue
         if category and cat != category:
             continue
         sources.append((f, cat))

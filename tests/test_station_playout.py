@@ -106,6 +106,13 @@ class Timeline(Base):
         self.assertTrue(hasattr(entry, "template"))
         self.assertTrue(hasattr(entry, "music_id"))
 
+    def test_pick_scores_the_scheduled_instant_not_wall_clock(self):
+        ch = self.channel()
+        with mock.patch("bumparr.selection.factors_at",
+                        wraps=playout.selection.factors_at) as factors:
+            ch._pick(5000.0, None)
+        factors.assert_called_with(5000.0)
+
     def test_live_is_not_narrowed_by_specialized_roles(self):
         with db.conn() as c:
             c.execute("UPDATE playables SET payload=? WHERE id='b'",

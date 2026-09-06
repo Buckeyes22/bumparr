@@ -334,6 +334,39 @@ class OperatorMessages(MemoryHarness):
         self.assertEqual(parked[0]["id"], pid)
         self.assertEqual(parked[0]["enabled"], 0)
 
+    def test_missing_yaml_parks_expired_but_keeps_unexpired(self):
+        yaml_text = """\
+version: 1
+messages:
+  - id: keep-note
+    lines: ["Still good."]
+    enabled: true
+    starts_at: null
+    ends_at: null
+    roles: [any]
+  - id: dated-note
+    lines: ["This window closed."]
+    enabled: true
+    starts_at: "2020-01-01T00:00:00Z"
+    ends_at: "2020-01-02T00:00:00Z"
+    roles: [any]
+"""
+        self.messages.write_text(yaml_text, encoding="utf-8")
+        mem.reset_runtime_state()
+        mem.refresh(now=1_577_880_000.0, render=False)  # 2020-01-01 12:00 UTC
+        by_id = {row["id"]: row for row in self._rows("operator_message")}
+        self.assertEqual(len(by_id), 2)
+        keep_id = mem.operator_message_id("keep-note")
+        dated_id = mem.operator_message_id("dated-note")
+        self.assertEqual(by_id[keep_id]["enabled"], 1)
+        self.assertEqual(by_id[dated_id]["enabled"], 1)
+        self.messages.unlink()
+        mem.reset_runtime_state()
+        mem.refresh(now=1_577_966_400.0, render=False)  # 2020-01-02 12:00 UTC
+        after = {row["id"]: row for row in self._rows("operator_message")}
+        self.assertEqual(after[keep_id]["enabled"], 1)
+        self.assertEqual(after[dated_id]["enabled"], 0)
+
     def test_expiry_parks_the_row(self):
         yaml_text = """\
 version: 1

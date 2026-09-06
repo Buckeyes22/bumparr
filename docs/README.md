@@ -12,6 +12,9 @@ Phase 0 docs/catalog slice.
 | [PRODUCT_VISION.md](PRODUCT_VISION.md) | What Bumparr is trying to make, its three product modes, creative principles, and non-goals. |
 | [CREATIVE_REFERENCE.md](CREATIVE_REFERENCE.md) | The sourced Adult Swim bumper reference, portable design lessons, and originality/rights boundary. |
 | [ALIGNMENT_PLAN.md](ALIGNMENT_PLAN.md) | Self-contained execution specification for closing the product and creative gaps. |
+| [GENERATION_PLAN.md](GENERATION_PLAN.md) | First-class, review-gated generative content system: direct MiniMax H3, OpenRouter multi-model media, and later image/card convergence. Proposed spec; not a claim that the integration is already shipped. |
+| [GENERATION_IMPLEMENTATION_STATUS.md](GENERATION_IMPLEMENTATION_STATUS.md) | G0–G5 coverage, live-doc re-check notes, tests actually run, and operator-controlled paid next steps. |
+| [FRONTEND_PLAN.md](FRONTEND_PLAN.md) | Operator-console information architecture and frontend enhancement plan. |
 | [INTEGRATION.md](INTEGRATION.md) | Wiring Bumparr into your channel: ErsatzTV, Tunarr, Dispatcharr, anything else. |
 | [CARDS.md](CARDS.md) | Making the cards yours: the shapes per kind, the model prompts, adding a whole new kind. |
 | [API.md](API.md) | The full HTTP API: status, the output contract (random/fill/m3u), management actions, stream proxy, dashboard. |
@@ -28,5 +31,6 @@ Read order for a first deploy: the main [README](../README.md), then
 [INTEGRATION.md](INTEGRATION.md). Read order for contributors:
 [PRODUCT_VISION.md](PRODUCT_VISION.md), [CREATIVE_REFERENCE.md](CREATIVE_REFERENCE.md),
 and [ARCHITECTURE.md](ARCHITECTURE.md), then [ALIGNMENT_PLAN.md](ALIGNMENT_PLAN.md),
+[GENERATION_PLAN.md](GENERATION_PLAN.md), [FRONTEND_PLAN.md](FRONTEND_PLAN.md),
 [ROTATION.md](ROTATION.md), [STATION.md](STATION.md), and [SCHEMA.md](SCHEMA.md),
 then the module docstrings (they carry the "why").

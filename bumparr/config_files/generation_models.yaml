@@ -1,0 +1,49 @@
+# Operator allow-list of generation models. An empty list is valid and is the
+# shipped default: a fresh install cannot spend. This file is not a provider
+# catalog. It cannot enlarge a model's live capabilities.
+#
+# Enable spending only with GENERATION_ENABLED=1 and the matching provider key.
+# Review current MiniMax / OpenRouter terms, pricing, and privacy before
+# uncommenting. Direct MiniMax and OpenRouter are distinct routes — never treat
+# them as fallbacks for each other.
+#
+# G0–G5 implemented modes: text-to-video only. Frame/reference, H3-Max, image,
+# and text-card aliases are rejected until those phases land.
+#
+# Example (comment only):
+#
+# models:
+#   - id: h3-direct
+#     provider: minimax
+#     model: MiniMax-H3
+#     output: video
+#     enabled: true
+#     allowed_modes: [text]
+#     default_duration: 8
+#     default_resolution: 768P
+#     default_aspect_ratio: "16:9"
+#     cost_ceiling:
+#       unit: video_second
+#       max_usd_per_unit: "0.20"   # operator-reviewed conservative ceiling, not a quote
+#
+#   - id: or-hailuo
+#     provider: openrouter
+#     model: minimax/hailuo-3
+#     output: video
+#     enabled: true
+#     allowed_modes: [text]
+#     default_duration: 8
+#     default_resolution: 2K
+#     default_aspect_ratio: "16:9"
+#
+#   - id: or-veo
+#     provider: openrouter
+#     model: google/veo-3.1
+#     output: video
+#     enabled: true
+#     allowed_modes: [text]
+#     default_duration: 8
+#     default_resolution: 720p
+#     default_aspect_ratio: "16:9"
+
+models: []

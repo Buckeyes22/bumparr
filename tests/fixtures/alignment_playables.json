@@ -2,6 +2,7 @@
   "version": 1,
   "seed": 7,
   "start": 1700000000.0,
+  "timezone": "UTC",
   "tolerance": 1.5,
   "station_seconds": 600,
   "break_seconds": [15, 30, 60, 90],

@@ -1131,14 +1131,8 @@ def stamp_presentation(row, rel_uri=None, bed=_SKIP_MUSIC):
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
-    resolved = creative.resolve_creative(row)
-    template = creative.resolve_template(
-        row.get("kind"), resolved["family"], resolved.get("template"), strict=False)
-    payload = creative.merge_creative(payload, {
-        "template": template,
-        "render_seed": int(resolved["render_seed"]),
-        "brand_mode": resolved["brand_mode"],
-    })
+    assigned = creative.assign_presentation(row)
+    payload = creative.merge_creative(payload, assigned)
     if bed is not _SKIP_MUSIC:
         payload = music.apply_playable_audio(payload, bed, preserve_non_music=True)
     payload["brand"] = config.BRAND
@@ -1163,10 +1157,10 @@ def render_one(row, card_font, brand_font, brand, force=False):
         payload = {}
     row_view = {**dict(row), "payload": payload}
     resolved = creative.resolve_creative(row_view)
-    template = creative.resolve_template(
-        kind, resolved["family"], resolved.get("template"), strict=False)
-    brand_mode = resolved["brand_mode"]
-    render_seed = resolved["render_seed"]
+    assigned = creative.assign_presentation(row_view)
+    template = assigned["template"]
+    brand_mode = assigned["brand_mode"]
+    render_seed = assigned["render_seed"]
 
     duration = float(row["duration"] or config.CARD_DEFAULT_DURATION)
     rel = "%s/%s.mp4" % (OUT_SUBDIR, str(row["id"]).replace(":", "_").replace("/", "_"))

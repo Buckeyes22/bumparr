@@ -7,6 +7,7 @@ not know a human watched. Factual cards say "this channel has aired," never
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 import time
@@ -695,11 +696,36 @@ def _refresh_achievements(c, history, now):
     return keep
 
 
+def _park_expired_operator_messages(c, now):
+    """Park stored messages whose recorded valid_until has elapsed.
+
+    Used when YAML is missing/unreadable so last-known-good unexpired rows
+    stay, but a deadline that already passed cannot keep a card on air.
+    """
+    rows = c.execute(
+        "SELECT id, payload FROM playables WHERE source=? AND kind=? AND enabled!=0",
+        (PLAYABLE_SOURCE, "operator_message")).fetchall()
+    for row in rows:
+        payload = _parse_payload(row["payload"])
+        until = payload.get("valid_until")
+        ts = None
+        if until is not None:
+            try:
+                ts = float(until)
+            except (TypeError, ValueError):
+                ts = None
+        if ts is None or not math.isfinite(ts):
+            continue
+        if ts <= float(now):
+            c.execute("UPDATE playables SET enabled=0 WHERE id=?", (row["id"],))
+
+
 def _refresh_operator_messages(c, now):
     messages, status = load_operator_messages(strict=False)
     global _messages, _status
     _messages, _status = messages, status
     if not status.get("applied", True):
+        _park_expired_operator_messages(c, now)
         return None
     keep = []
     for message in messages:

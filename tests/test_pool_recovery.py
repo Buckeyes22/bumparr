@@ -89,6 +89,23 @@ class PoolRecovery(unittest.TestCase):
             webapp.revive()
         self.assertEqual(self._state()["v"], (0, "dead"))
 
+    def test_pending_generated_candidate_is_not_revived(self):
+        """Unreviewed generated media must not ride the generic revive sweep."""
+        rel = self._file("generated/cand.mp4")
+        payload = json.dumps({
+            "generation": {"ai_generated": True, "review": {"status": "pending"}},
+        })
+        with db.conn() as c:
+            c.execute(
+                "INSERT INTO playables (id,type,kind,source,uri,duration,enabled,health,payload) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("gen:cand", "video", "generated_short", "generated:minimax",
+                 rel, 4, 0, "dead", payload))
+        with mock.patch.object(webapp.subprocess, "run", _probe_ok):
+            out = webapp.revive()
+        self.assertEqual(out["restored"], 0)
+        self.assertEqual(self._state()["gen:cand"], (0, "dead"))
+
     def test_on_this_day_cards_are_never_revived(self):
         """The calendar parks these by date; reviving them would break rotation."""
         self._seed(("c", "card", "on_this_day", self._file("bumpers/otd.mp4"), 3, 0, "ok", "{}"))

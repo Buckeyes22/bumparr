@@ -10,6 +10,16 @@ const makeEl = (tag, cls, text) => {
 
 let STATE = { kind: null, search: "", parked: false, offset: 0, kinds: {} };
 const PAGE = 24;
+const GEN_TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
+let GEN_TIMER = null;
+let GEN_PREFLIGHT = null;
+let GEN_MODELS = [];
+let GEN_CREATING = false;
+let GEN_JOBS_OFFSET = 0;
+let GEN_REVIEW_OFFSET = 0;
+let GEN_DEFAULT_MODEL = "";
+let GEN_LOAD_VERSION = 0;
+const GEN_RENDERED = {};
 
 async function loadStatus() {
   let s;
@@ -524,8 +534,320 @@ async function submitAsk() {
   };
   setTimeout(poll, 2000);
 }
+function currentView() {
+  const hash = (location.hash || "#/overview").replace(/^#/, "");
+  return hash === "/generation" ? "generation" : "overview";
+}
+
+function applyView() {
+  const view = currentView();
+  const gen = $("#generation-view");
+  const overview = $("#overview-view");
+  if (gen) gen.hidden = view !== "generation";
+  if (overview) overview.hidden = view === "generation";
+  document.querySelectorAll(".nav a").forEach((a) => {
+    if (a.dataset.view === view) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+  if (view === "generation") loadGeneration();
+  else stopGenerationPoll();
+}
+
+function stopGenerationPoll() {
+  if (GEN_TIMER) { clearTimeout(GEN_TIMER); GEN_TIMER = null; }
+}
+
+function genBody() {
+  const model = $("#gen-model") && $("#gen-model").value;
+  return {
+    model,
+    output: "video",
+    mode: "text",
+    prompt: ($("#gen-brief") && $("#gen-brief").value) || "",
+    duration: Number($("#gen-duration") && $("#gen-duration").value),
+    resolution: ($("#gen-resolution") && $("#gen-resolution").value) || undefined,
+    ratio: "16:9",
+    creative: { roles: ["inside"], energy: ($("#gen-energy") && $("#gen-energy").value) || "quiet" }
+  };
+}
+
+function fillModels(models) {
+  const before = JSON.stringify(genBody());
+  GEN_MODELS = models || [];
+  const sel = $("#gen-model");
+  if (!sel) return;
+  const previous = sel.value;
+  sel.replaceChildren();
+  (models || []).forEach((m) => {
+    const opt = makeEl("option", "", (m.id || "") + " · " + (m.provider || "") + " / " + (m.model || ""));
+    opt.value = m.id;
+    opt.disabled = !m.available;
+    sel.appendChild(opt);
+  });
+  const chosen = GEN_MODELS.find((m) => m.id === previous && m.available)
+    || GEN_MODELS.find((m) => m.id === GEN_DEFAULT_MODEL && m.available)
+    || GEN_MODELS.find((m) => m.available);
+  sel.value = chosen ? chosen.id : "";
+  fillGenerationOptions();
+  if (before !== JSON.stringify(genBody()) || (GEN_PREFLIGHT &&
+      (!chosen || chosen.capabilities.hash !== GEN_PREFLIGHT.data.capability_hash))) invalidatePreflight();
+}
+
+function fillGenerationOptions() {
+  const chosen = GEN_MODELS.find((m) => m.id === $("#gen-model").value);
+  const caps = (chosen && chosen.capabilities) || {};
+  [["#gen-resolution", caps.resolutions, "resolution"], ["#gen-duration", caps.durations, "duration"]].forEach(([id, values, key]) => {
+    const sel = $(id);
+    const old = sel.value;
+    sel.replaceChildren();
+    (values || []).forEach((name) => {
+      const opt = makeEl("option", "", name);
+      opt.value = String(name);
+      sel.appendChild(opt);
+    });
+    const options = (values || []).map(String);
+    sel.value = options.includes(String(old)) ? String(old)
+      : String((chosen && chosen.defaults[key]) || options[0] || "");
+  });
+}
+
+function invalidatePreflight() {
+  GEN_PREFLIGHT = null;
+  $("#gen-submit").disabled = true;
+  $("#gen-estimate").textContent = "Run preflight before creating a paid job.";
+}
+
+function genMessage(message) { $("#gen-message").textContent = message; }
+
+function genButton(parent, label, action) {
+  const button = makeEl("button", "", label);
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try { await action(); }
+    catch (e) { genMessage(e.message); }
+    finally { button.disabled = false; }
+  });
+  parent.appendChild(button);
+}
+
+function renderGenerationStatus(data) {
+  const banner = $("#gen-banner");
+  const privacy = $("#gen-privacy");
+  const status = $("#gen-status");
+  if (banner) banner.textContent = data.enabled
+    ? "Generation is enabled. This uses a paid external API on a trusted network only."
+    : "Generation is off. GENERATION_ENABLED=1, a model alias, and a provider key are required. Keys never spend by themselves.";
+  if (privacy) {
+    const notes = (data.warnings || []).join(" ");
+    privacy.textContent = notes;
+  }
+  if (status) {
+    const b = data.budget || {};
+    status.textContent = "jobs " + ((b.jobs && b.jobs.remaining) || 0)
+      + " remaining · video-seconds " + ((b.video_seconds && b.video_seconds.remaining) || 0)
+      + " remaining · USD remaining " + ((b.usd && b.usd.remaining_microusd) || 0) + " µ$";
+  }
+}
+
+function renderJobs(jobs) {
+  const box = $("#gen-jobs");
+  if (!box) return;
+  box.replaceChildren();
+  (jobs || []).forEach((job) => {
+    const el = makeEl("div", "gen-job");
+    el.appendChild(makeEl("div", "", job.title || job.id));
+    el.appendChild(makeEl("div", "", (job.provider || "") + " · " + (job.status || "") + " · " + (job.next_step || "")));
+    el.appendChild(makeEl("div", "", job.error_message || ""));
+    const url = "/api/generation/jobs/" + encodeURIComponent(job.id);
+    if (job.status === "queued") genButton(el, "Cancel queued job", () => genAct("POST", url + "/cancel"));
+    if (job.status === "submission_unknown") {
+      genButton(el, "Attach provider job ID", async () => {
+        const id = prompt("Provider job ID verified in the provider dashboard:");
+        if (id && id.trim()) await genAct("POST", url + "/reconcile", { provider_job_id: id.trim() });
+      });
+      genButton(el, "Confirm not accepted", async () => {
+        if (confirm("Have you verified in the provider dashboard that this request was NOT accepted? This releases its reservation."))
+          await genAct("POST", url + "/reconcile", { not_accepted: true });
+      });
+    }
+    if (GEN_TERMINAL[job.status]) genButton(el, "Regenerate (paid)", () => regenerateJob(job));
+    box.appendChild(el);
+  });
+}
+
+function renderReview(jobs) {
+  const box = $("#gen-review");
+  if (!box) return;
+  box.replaceChildren();
+  (jobs || []).forEach((job) => {
+    (job.outputs || []).forEach((out) => {
+      const card = makeEl("div", "gen-card");
+      if (out.uri && out.processing_status === "ready" && out.review_status !== "deleted") {
+        const video = document.createElement("video");
+        video.controls = true;
+        video.preload = "metadata";
+        video.src = "/media/" + out.uri;
+        card.appendChild(video);
+      }
+      card.appendChild(makeEl("div", "", job.title || ""));
+      card.appendChild(makeEl("div", "", job.operator_brief || ""));
+      card.appendChild(makeEl("div", "", job.submitted_prompt || ""));
+      card.appendChild(makeEl("div", "", (job.provider_model || "") + " · " + (job.routing || "") + (job.zdr ? "" : " · not ZDR")));
+      card.appendChild(makeEl("div", "", out.processing_status + " · " + out.review_status + " · " + (out.error_message || "")));
+      const url = "/api/generation/outputs/" + encodeURIComponent(out.id);
+      if (out.processing_status === "ready" && out.review_status === "pending") {
+        genButton(card, "Approve", () => genAct("POST", url + "/approve"));
+        genButton(card, "Reject", () => genAct("POST", url + "/reject", { reason: "rejected" }));
+      }
+      if (out.processing_status === "failed" && out.review_status !== "deleted")
+        genButton(card, "Retry processing (no new charge)", () => genAct("POST", url + "/retry-processing"));
+      if (out.review_status !== "deleted" && GEN_TERMINAL[job.status])
+        genButton(card, "Delete output", async () => {
+          if (confirm("Delete this output and its playable file? This cannot refund provider charges."))
+            await genAct("DELETE", url);
+        });
+      box.appendChild(card);
+    });
+  });
+}
+
+function jobsNeedPoll(jobs) {
+  return (jobs || []).some((job) => !GEN_TERMINAL[job.status]);
+}
+
+async function genAct(method, url, body) {
+  const result = await genRequest(method, url, body);
+  invalidatePreflight();
+  genMessage("Action completed.");
+  await loadGeneration();
+  return result;
+}
+
+async function genRequest(method, url, body) {
+  const opts = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.message || (typeof data.detail === "string" && data.detail) || "Generation request failed (" + r.status + ")");
+  return data;
+}
+
+async function loadGeneration() {
+  const version = ++GEN_LOAD_VERSION;
+  stopGenerationPoll();
+  const reviewState = $("#gen-review-state").value || "pending";
+  const [status, models, jobs, outputs] = await Promise.all([
+    genRequest("GET", "/api/generation"), genRequest("GET", "/api/generation/models"),
+    genRequest("GET", "/api/generation/jobs?limit=50&offset=" + GEN_JOBS_OFFSET),
+    genRequest("GET", "/api/generation/outputs?limit=50&offset=" + GEN_REVIEW_OFFSET + "&review_status=" + reviewState)
+  ]);
+  if (version !== GEN_LOAD_VERSION) return;
+  renderGenerationStatus(status);
+  GEN_DEFAULT_MODEL = status.default_model || "";
+  renderIfChanged("models", models.models || [], fillModels);
+  renderIfChanged("jobs", jobs.jobs || [], renderJobs);
+  const byId = new Map((jobs.jobs || []).map((job) => [job.id, job]));
+  const ids = [...new Set((outputs.outputs || []).map((out) => out.job_id))];
+  await Promise.all(ids.filter((id) => !byId.has(id)).map(async (id) => {
+    byId.set(id, await genRequest("GET", "/api/generation/jobs/" + encodeURIComponent(id)));
+  }));
+  if (version !== GEN_LOAD_VERSION) return;
+  renderIfChanged("review", ids.map((id) => ({ ...byId.get(id), outputs: outputs.outputs.filter((out) => out.job_id === id) })), renderReview);
+  $("#gen-jobs-prev").disabled = GEN_JOBS_OFFSET === 0;
+  $("#gen-jobs-next").disabled = (jobs.jobs || []).length < 50;
+  $("#gen-review-prev").disabled = GEN_REVIEW_OFFSET === 0;
+  $("#gen-review-next").disabled = (outputs.outputs || []).length < 50;
+  stopGenerationPoll();
+  if (currentView() === "generation") {
+    GEN_TIMER = setTimeout(() => loadGeneration().catch((e) => genMessage(e.message)), 5000);
+  }
+}
+
+function renderIfChanged(key, data, render) {
+  const signature = JSON.stringify(data);
+  if (GEN_RENDERED[key] === signature) return;
+  GEN_RENDERED[key] = signature;
+  render(data);
+}
+
+async function runPreflight() {
+  invalidatePreflight();
+  const body = genBody();
+  const data = await genRequest("POST", "/api/generation/preflight", body);
+  if (JSON.stringify(body) !== JSON.stringify(genBody())) return;
+  GEN_PREFLIGHT = { body: JSON.stringify(body), data };
+  $("#gen-submit").disabled = false;
+  const prompt = $("#gen-prompt");
+  const estimate = $("#gen-estimate");
+  if (prompt) prompt.textContent = data.submitted_prompt || data.message || "";
+  if (estimate) estimate.textContent = data.estimate
+    ? ("estimate " + data.estimate.usd + " USD · " + data.estimate.video_seconds + "s · " + (data.privacy || ""))
+    : (data.message || "preflight failed");
+}
+
+async function runCreate() {
+  if (GEN_CREATING) return;
+  if (!GEN_PREFLIGHT || GEN_PREFLIGHT.body !== JSON.stringify(genBody())) {
+    invalidatePreflight();
+    genMessage("Run a successful preflight for the current inputs first.");
+    return;
+  }
+  const prepared = GEN_PREFLIGHT;
+  if (!confirm(paidConfirmation(prepared.data))) return;
+  GEN_CREATING = true;
+  invalidatePreflight();
+  try {
+    await genAct("POST", "/api/generation/jobs", {
+      ...JSON.parse(prepared.body), preflight_token: prepared.data.preflight_token
+    });
+  } finally { GEN_CREATING = false; }
+}
+
+function paidConfirmation(data) {
+  return "Create one paid job? " + data.provider_model + " · " + data.duration + "s · "
+    + data.resolution + " · " + data.estimate.usd + " USD\nNo references.\n"
+    + data.submitted_prompt + "\n" + data.privacy;
+}
+
+async function regenerateJob(job) {
+  const body = { model: job.model_alias, prompt: job.operator_brief, title: job.title, kind: job.kind,
+    mode: job.mode, output: "video", duration: job.request.duration, resolution: job.request.resolution,
+    ratio: "16:9", creative: { roles: job.creative.roles, energy: job.creative.energy } };
+  const pre = await genRequest("POST", "/api/generation/preflight", body);
+  if (confirm(paidConfirmation(pre))) await genAct("POST", "/api/generation/jobs/" + encodeURIComponent(job.id)
+    + "/regenerate", { preflight_token: pre.preflight_token });
+}
+
+function wireGeneration() {
+  const pre = $("#gen-preflight");
+  const sub = $("#gen-submit");
+  if (pre) pre.addEventListener("click", () => runPreflight().catch((e) => genMessage(e.message)));
+  if (sub) sub.addEventListener("click", () => runCreate().catch((e) => genMessage(e.message)));
+  ["#gen-model", "#gen-brief", "#gen-duration", "#gen-resolution", "#gen-energy"].forEach((id) => {
+    $(id).addEventListener("input", invalidatePreflight);
+    $(id).addEventListener("change", () => { if (id === "#gen-model") fillGenerationOptions(); invalidatePreflight(); });
+  });
+  ["jobs", "review"].forEach((kind) => ["prev", "next"].forEach((direction) => {
+    $("#gen-" + kind + "-" + direction).addEventListener("click", () => {
+      const delta = direction === "next" ? 50 : -50;
+      if (kind === "jobs") GEN_JOBS_OFFSET = Math.max(0, GEN_JOBS_OFFSET + delta);
+      else GEN_REVIEW_OFFSET = Math.max(0, GEN_REVIEW_OFFSET + delta);
+      loadGeneration().catch((e) => genMessage(e.message));
+    });
+  }));
+  $("#gen-review-state").addEventListener("change", () => {
+    GEN_REVIEW_OFFSET = 0;
+    loadGeneration().catch((e) => genMessage(e.message));
+  });
+  window.addEventListener("hashchange", applyView);
+}
+
 function boot() {
   wireMaintenance();
+  wireGeneration();
+  applyView();
   $("#ask-go").addEventListener("click", submitAsk);
   $("#ask").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAsk(); });
 
@@ -554,5 +876,7 @@ const COMMONJS = typeof module !== "undefined" && module.exports;
 if (typeof document !== "undefined" && !COMMONJS) boot();
 if (COMMONJS) {
   module.exports = { makeEl, cardEl, stationEl, pollJob, enableBumper,
-    previewPack, previewOne, packSummaryEl, renderPackPreview, freshnessLine };
+    previewPack, previewOne, packSummaryEl, renderPackPreview, freshnessLine,
+    renderJobs, renderReview, jobsNeedPoll, fillModels, renderGenerationStatus,
+    GEN_TERMINAL, runPreflight, runCreate, genRequest, regenerateJob, invalidatePreflight, renderIfChanged };
 }

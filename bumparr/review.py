@@ -7,9 +7,15 @@ Distribution metrics stay diagnostic. There is no subjective similarity score.
 import argparse
 import json
 import math
+import os
+import re
+import stat
 from pathlib import Path
 
-from bumparr import creative, db, music, simulate
+from bumparr import config, creative, music, paths, simulate
+
+_URI_SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
+_PLAYABLE_SCHEMES = frozenset({"http", "https"})
 
 STANDARD_BREAKS = simulate.STANDARD_BREAKS
 BREAK_TOLERANCE = simulate.BREAK_TOLERANCE
@@ -22,7 +28,49 @@ def _m3u_attr(value):
     return s.replace('"', "'").replace("\n", " ").replace("\r", " ").strip()
 
 
-def plan_item(row, resolved, *, now, relaxed=None):
+def playable_media_uri(row):
+    """Absolute local path or http(s) URL a player can open, else empty.
+
+    Local files must be readable regular files inside ASSET_ROOT/OUTPUT_DIR.
+    Traversal, missing files, directories, and non-http schemes are rejected.
+    """
+    uri = str((row or {}).get("uri") or "").strip()
+    if not uri:
+        return ""
+    match = _URI_SCHEME.match(uri)
+    if match:
+        if match.group(1).lower() in _PLAYABLE_SCHEMES:
+            return uri
+        return ""
+    path = paths.resolve_media(uri)
+    if path is None:
+        return ""
+    try:
+        resolved = Path(path).resolve()
+        st = resolved.stat()
+    except OSError:
+        return ""
+    if not stat.S_ISREG(st.st_mode) or not resolved.is_file():
+        return ""
+    if not os.access(resolved, os.R_OK):
+        return ""
+    return str(resolved)
+
+
+def playable_rows(rows):
+    """Live-review pool: only rows with verified playable media."""
+    out = []
+    for row in rows or []:
+        media = playable_media_uri(row)
+        if not media:
+            continue
+        item = dict(row)
+        item["_media"] = media
+        out.append(item)
+    return out
+
+
+def plan_item(row, resolved, *, now, relaxed=None, plan_only=False):
     """One sidecar item: ids, metadata, credits, provenance. No media bytes."""
     payload = simulate.payload_obj(row)
     resolved = resolved or creative.resolve_creative(row)
@@ -50,24 +98,39 @@ def plan_item(row, resolved, *, now, relaxed=None):
     credits = music.credits_from_payload(payload)
     if credits:
         item["music_credits"] = credits
+    if not plan_only:
+        media = row.get("_media") or playable_media_uri(row)
+        if media:
+            item["media"] = media
     return item
 
 
-def render_m3u(items, title):
-    """Timed M3U that points at existing URIs. Does not rewrite media."""
+def render_m3u(items, title, *, plan_only=False):
+    """Timed M3U. Live entries use only validated media; fixtures are plan-only."""
     lines = ["#EXTM3U", "#PLAYLIST:%s" % _m3u_attr(title)]
+    if plan_only:
+        lines.append("#EXT-X-Bumparr-Plan-Only:1")
+        lines.append("# Fixture URIs are synthetic; the playable plan is review.json.")
+        for item in items:
+            duration = item.get("duration") or 0
+            name = _m3u_attr(item.get("title") or item.get("id"))
+            lines.append("#EXTINF:%.3f,%s" % (float(duration), name))
+            lines.append("# bumparr-plan:%s" % _m3u_attr(item.get("id")))
+        return "\n".join(lines) + "\n"
     for item in items:
+        uri = item.get("media") or ""
+        if not uri:
+            continue
         duration = item.get("duration") or 0
         name = _m3u_attr(item.get("title") or item.get("id"))
-        uri = item.get("uri") or ""
         lines.append("#EXTINF:%.3f,%s" % (float(duration), name))
         lines.append(uri)
     return "\n".join(lines) + "\n"
 
 
-def _break_sidecar(composed, requested, tolerance, placement, now):
+def _break_sidecar(composed, requested, tolerance, placement, now, plan_only=False):
     items = [plan_item(cand.row, cand.creative, now=now,
-                       relaxed=list(composed.relaxed_rules))
+                       relaxed=list(composed.relaxed_rules), plan_only=plan_only)
              for cand in composed.candidates]
     role_violations = sum(
         1 for cand in composed.candidates
@@ -103,22 +166,27 @@ def math_finite_positive(value):
 
 def build_review(rows, *, seed, start, seconds=STATION_REVIEW_SECONDS,
                  tolerance=BREAK_TOLERANCE, pool="live", fixture=None,
-                 commit=None):
+                 commit=None, tz=None, tz_name=None):
     """Assemble the station plan, four break packs, and mix diagnostics."""
+    plan_only = bool(fixture)
+    if not plan_only:
+        rows = playable_rows(rows)
     events = simulate.station_events(
-        rows, seed=seed, start=start, seconds=seconds)
+        rows, seed=seed, start=start, seconds=seconds, tz=tz)
     mix = simulate.report_from_events(
-        events, attempts=len(events), seed=seed, start=start, rows=rows)
+        events, attempts=len(events), seed=seed, start=start, rows=rows,
+        tz=tz, tz_name=tz_name)
     station_items = [
         plan_item(event["row"], event["creative"], now=start,
-                  relaxed=event.get("relaxed"))
+                  relaxed=event.get("relaxed"), plan_only=plan_only)
         for event in events if event.get("kind") == "pick"
     ]
     packs, _profile, tolerance = simulate.compose_standard_breaks(
-        rows, seed=seed, start=start, tolerance=tolerance)
+        rows, seed=seed, start=start, tolerance=tolerance, tz=tz)
     mix["break_duration_error"] = simulate.summarize_break_error(packs, tolerance)
     breaks = {
-        str(requested): _break_sidecar(composed, requested, tolerance, "any", start)
+        str(requested): _break_sidecar(
+            composed, requested, tolerance, "any", start, plan_only=plan_only)
         for requested, composed in packs.items()
     }
     meta = {
@@ -128,6 +196,8 @@ def build_review(rows, *, seed, start, seconds=STATION_REVIEW_SECONDS,
         "tolerance": float(tolerance),
         "pool": pool,
         "fixture": fixture,
+        "plan_only": plan_only,
+        "timezone": tz_name or mix.get("timezone") or "local",
         "profile": mix.get("profile") or simulate.profile_fingerprint(),
         "checklist": CHECKLIST_DOC,
     }
@@ -246,15 +316,18 @@ def write_artifacts(review, out_dir):
     """Write station M3U, four break M3Us, review.json, and review.md."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    plan_only = bool((review.get("meta") or {}).get("plan_only"))
     station_items = (review.get("station") or {}).get("items") or []
     (out / "station.m3u").write_text(
-        render_m3u(station_items, "Bumparr ten-minute station plan"),
+        render_m3u(station_items, "Bumparr ten-minute station plan",
+                   plan_only=plan_only),
         encoding="utf-8")
     for seconds in STANDARD_BREAKS:
         pack = (review.get("breaks") or {}).get(str(seconds)) or {}
         (out / ("break-%s.m3u" % seconds)).write_text(
             render_m3u(pack.get("items") or [],
-                       "Bumparr %ss break pack" % seconds),
+                       "Bumparr %ss break pack" % seconds,
+                       plan_only=plan_only),
             encoding="utf-8")
     (out / "review.json").write_text(
         json.dumps(review, sort_keys=True, indent=2) + "\n", encoding="utf-8")
@@ -273,16 +346,20 @@ def _load_rows(args):
         seconds = meta["station_seconds"] if args.seconds is None else args.seconds
         tolerance = meta["tolerance"] if args.tolerance is None else args.tolerance
         fixture_label = str(Path(args.fixture))
-        return rows, seed, start, seconds, tolerance, pool, fixture_label
-    db.init_db()
-    rows = simulate.snapshot_pool()
+        tz_name = meta["timezone"]
+        return (rows, seed, start, seconds, tolerance, pool, fixture_label,
+                tz_name, simulate.load_tz(tz_name))
+    if args.start is None:
+        raise SystemExit("pass --start UNIX when reviewing the live pool")
+    try:
+        rows = playable_rows(simulate.snapshot_pool())
+    except FileNotFoundError:
+        raise SystemExit("database does not exist: %s" % config.DB_PATH)
     seed = 7 if args.seed is None else args.seed
     start = args.start
-    if start is None:
-        raise SystemExit("pass --start UNIX when reviewing the live pool")
     seconds = STATION_REVIEW_SECONDS if args.seconds is None else args.seconds
     tolerance = BREAK_TOLERANCE if args.tolerance is None else args.tolerance
-    return rows, seed, start, seconds, tolerance, "live", None
+    return rows, seed, start, seconds, tolerance, "live", None, None, None
 
 
 def main(argv=None):
@@ -308,10 +385,12 @@ def main(argv=None):
     ap.add_argument("--commit", default=None,
                     help="optional git commit recorded in the sidecar")
     args = ap.parse_args(argv)
-    rows, seed, start, seconds, tolerance, pool, fixture = _load_rows(args)
+    (rows, seed, start, seconds, tolerance, pool, fixture,
+     tz_name, tz) = _load_rows(args)
     review = build_review(
         rows, seed=seed, start=start, seconds=seconds, tolerance=tolerance,
-        pool=pool, fixture=fixture, commit=args.commit)
+        pool=pool, fixture=fixture, commit=args.commit,
+        tz=tz, tz_name=tz_name)
     if args.out:
         write_artifacts(review, args.out)
     if args.json:

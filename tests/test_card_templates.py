@@ -99,7 +99,7 @@ class TemplateCompatibility(unittest.TestCase):
 
     def test_resolve_creative_infers_compatible_default_without_persisting(self):
         psa = resolve_creative(_row())
-        self.assertEqual(psa["template"], "minimal_center")
+        self.assertIn(psa["template"], compatible_templates("psa", "text"))
         ident = resolve_creative(_row(id="station_id:1", kind="station_id", type="video"))
         self.assertEqual(ident["template"], "ident")
         self.assertEqual(ident["brand_mode"], "none")
@@ -205,6 +205,21 @@ class PersistOnlyOnRender(unittest.TestCase):
         self.assertIn(cr["template"], compatible_templates("psa", "text"))
         self.assertGreaterEqual(cr["render_seed"], 0)
         self.assertIn(cr["brand_mode"], ("reveal", "static", "none"))
+
+    def test_legacy_rerender_uses_active_profile_defaults(self):
+        with db.conn() as c:
+            row = dict(c.execute("SELECT * FROM playables").fetchone())
+        profile = default_profile()
+        profile["presentation"]["default_template"] = "minimal_corner"
+        profile["presentation"]["default_brand_mode"] = "static"
+        with mock.patch("bumparr.channel_profile.current", return_value=profile):
+            assigned = assign_presentation(row, profile)
+            stamped = render_cards.stamp_presentation(row, "cards/x.mp4")
+        self.assertEqual(stamped["creative"]["template"], assigned["template"])
+        self.assertEqual(stamped["creative"]["brand_mode"], assigned["brand_mode"])
+        self.assertEqual(stamped["creative"]["brand_mode"], "static")
+        self.assertIn(stamped["creative"]["template"],
+                      compatible_templates("psa", "text"))
 
 
 class SafeAreaLayout(unittest.TestCase):

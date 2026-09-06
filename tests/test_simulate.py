@@ -71,7 +71,8 @@ class SimulateReport(unittest.TestCase):
                     "family_repeats", "template_repeats", "max_text_run",
                     "text_run_limit", "gated_selections",
                     "invalid_media_metadata", "provenance",
-                    "branded_unbranded", "break_duration_error"):
+                    "branded_unbranded", "break_duration_error",
+                    "timezone", "factors_at_start"):
             self.assertIn(key, a)
         self.assertEqual(a["chosen"] + a["zero_score_picks"], 40)
         self.assertGreater(a["chosen"], 0)
@@ -170,6 +171,41 @@ class SimulateCli(unittest.TestCase):
         self.assertEqual(report["seed"], 7)
         self.assertEqual(report["start"], 1_700_000_000.0)
         self.assertEqual(report["gated_selections"], 0)
+        self.assertEqual(report["timezone"], "UTC")
+        self.assertEqual(report["factors_at_start"]["timezone"], "UTC")
+
+    def test_fixture_json_is_stable_across_host_timezones(self):
+        import hashlib
+        fixture = str(Path(REPO) / "tests" / "fixtures" / "alignment_playables.json")
+        hashes = []
+        for zone in ("UTC", "America/New_York"):
+            env = dict(os.environ, TZ=zone,
+                       PYTHONPATH=REPO + os.pathsep + os.environ.get("PYTHONPATH", ""))
+            run = subprocess.run(
+                [sys.executable, "-m", "bumparr.simulate", "--fixture", fixture,
+                 "--pool", "capable", "--picks", "40", "--json"],
+                capture_output=True, text=True, env=env, cwd=REPO, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            hashes.append(hashlib.sha256(run.stdout.encode("utf-8")).hexdigest())
+            payload = json.loads(run.stdout)
+            self.assertEqual(payload["timezone"], "UTC")
+            self.assertEqual(payload["factors_at_start"]["daypart_name"], "evening")
+        self.assertEqual(hashes[0], hashes[1])
+
+    def test_live_cli_does_not_create_a_missing_database(self):
+        with tempfile.TemporaryDirectory(prefix="bumparr-sim-missing-") as tmp:
+            db_path = os.path.join(tmp, "new.db")
+            env = dict(os.environ, DB_PATH=db_path,
+                       ASSET_ROOT=os.path.join(tmp, "assets"),
+                       DATA_DIR=os.path.join(tmp, "data"),
+                       PYTHONPATH=REPO + os.pathsep + os.environ.get("PYTHONPATH", ""))
+            Path(env["ASSET_ROOT"]).mkdir()
+            run = subprocess.run(
+                [sys.executable, "-m", "bumparr.simulate", "--picks", "1",
+                 "--start", "1000", "--json"],
+                capture_output=True, text=True, env=env, cwd=REPO, timeout=60)
+            self.assertNotEqual(run.returncode, 0)
+            self.assertFalse(os.path.exists(db_path))
 
 
 if __name__ == "__main__":

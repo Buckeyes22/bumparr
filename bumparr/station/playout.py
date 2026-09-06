@@ -89,7 +89,7 @@ class Channel:
         # the last five in-memory entries (family/energy/text/music).
         index = conform.load_index()
         pool = self._pool(index)
-        season, daypart = selection.live_factors()
+        season, daypart = selection.factors_at(now)
         positive, _ = selection.scored_candidates(
             pool, season_factors=season, daypart_factors=daypart, now=now)
         candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))

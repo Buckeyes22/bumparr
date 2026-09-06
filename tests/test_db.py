@@ -42,6 +42,18 @@ class DatabaseContext(unittest.TestCase):
         with db.conn() as connection:
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
 
+    def test_readonly_refuses_writes_and_missing_files(self):
+        with db.conn(readonly=True) as connection:
+            with self.assertRaises(sqlite3.OperationalError):
+                connection.execute(
+                    "INSERT INTO playables (id,type,duration) VALUES ('ro','video',1)")
+        missing = Path(self.tmp.name) / "nope.db"
+        config.DB_PATH = str(missing)
+        with self.assertRaises(FileNotFoundError):
+            with db.conn(readonly=True):
+                pass
+        self.assertFalse(missing.exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

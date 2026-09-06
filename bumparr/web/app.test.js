@@ -11,11 +11,12 @@ class FakeNode {
     this.dataset = {};
     this.style = {};
     this.textContent = "";
+    this.listeners = {};
   }
   append(...nodes) { this.children.push(...nodes); }
   appendChild(node) { this.children.push(node); return node; }
   replaceChildren(...nodes) { this.children = nodes; }
-  addEventListener() {}
+  addEventListener(name, fn) { this.listeners[name] = fn; }
 }
 
 const NODES = new Map();
@@ -33,7 +34,9 @@ global.document = {
 };
 
 const { cardEl, pollJob, enableBumper, stationEl, previewPack, previewOne,
-        packSummaryEl, freshnessLine } = require("./app.js");
+        packSummaryEl, freshnessLine, renderReview, jobsNeedPoll,
+        renderGenerationStatus, renderJobs, runPreflight, runCreate,
+        invalidatePreflight, genRequest, fillModels, renderIfChanged } = require("./app.js");
 
 function descendants(node) {
   return [node, ...node.children.flatMap(descendants)];
@@ -332,4 +335,158 @@ test("failed pack preview reports the error as text", async () => {
   await previewPack(30);
   assert.match(document.querySelector("#preview-summary").children[0].textContent,
                /preview failed: Error: network down/);
+});
+
+test("generation review keeps hostile provider strings as text", () => {
+  renderReview([{
+    title: "<img src=x onerror=alert(1)>",
+    operator_brief: "<script>pwned=1</script>",
+    submitted_prompt: "prompt <b>bold</b>",
+    provider_model: "MiniMax-H3\" onload=alert(2)",
+    routing: "direct",
+    zdr: false,
+    outputs: [{
+      id: "genout:1",
+      processing_status: "ready",
+      review_status: "pending",
+      uri: "generated/x.mp4\" onerror=alert(3)",
+      playable_id: "gen:1",
+    }],
+  }]);
+  const box = document.querySelector("#gen-review");
+  const nodes = descendants(box);
+  assert.equal(nodes.filter((n) => n.tagName === "SCRIPT").length, 0);
+  assert.equal(nodes.filter((n) => n.tagName === "IMG").length, 0);
+  assert.ok(nodes.some((n) => n.textContent === "<img src=x onerror=alert(1)>"));
+  assert.ok(nodes.some((n) => n.textContent === "<script>pwned=1</script>"));
+  const video = nodes.find((n) => n.tagName === "VIDEO");
+  assert.equal(video.src, "/media/generated/x.mp4\" onerror=alert(3)");
+  assert.equal(globalThis.pwned, undefined);
+});
+
+test("generation polling stops on terminal job pages", () => {
+  assert.equal(jobsNeedPoll([{ status: "completed" }, { status: "failed" }]), false);
+  assert.equal(jobsNeedPoll([{ status: "running" }]), true);
+  assert.equal(jobsNeedPoll([{ status: "submission_unknown" }]), true);
+});
+
+test("generation status copy stays text", () => {
+  renderGenerationStatus({
+    enabled: true,
+    warnings: ["<script>alert(1)</script>"],
+    budget: { jobs: { remaining: 3 }, video_seconds: { remaining: 20 }, usd: { remaining_microusd: 1 } },
+  });
+  assert.equal(document.querySelector("#gen-privacy").textContent, "<script>alert(1)</script>");
+});
+
+function generationForm() {
+  invalidatePreflight();
+  const values = { "#gen-model": "h3", "#gen-brief": "Original landscape", "#gen-duration": "4",
+                   "#gen-resolution": "768P", "#gen-energy": "quiet" };
+  for (const [id, value] of Object.entries(values)) document.querySelector(id).value = value;
+  global.location = { hash: "#/overview" };
+}
+
+const preview = { preflight_token: "a".repeat(64), capability_hash: "hash", submitted_prompt: "Original landscape 16:9",
+  provider_model: "MiniMax-H3", duration: 4, resolution: "768P", privacy: "Paid API", estimate: { usd: "0.40" } };
+
+test("paid create without preflight never contacts server", async () => {
+  generationForm();
+  let calls = 0;
+  global.fetch = async () => { calls++; throw Error("should not fetch"); };
+  await runCreate();
+  assert.equal(calls, 0);
+  assert.equal(document.querySelector("#gen-submit").disabled, true);
+});
+
+test("failed preflight cannot enable paid creation", async () => {
+  generationForm();
+  global.fetch = async () => ({ ok: false, status: 409, json: async () => ({ message: "cap exhausted" }) });
+  await assert.rejects(runPreflight(), /cap exhausted/);
+  assert.equal(document.querySelector("#gen-submit").disabled, true);
+});
+
+test("edited inputs invalidate successful preflight before spending", async () => {
+  generationForm();
+  let calls = 0;
+  global.fetch = async () => { calls++; return { ok: true, json: async () => preview }; };
+  await runPreflight();
+  assert.equal(document.querySelector("#gen-submit").disabled, false);
+  document.querySelector("#gen-brief").value = "Changed after preflight";
+  await runCreate();
+  assert.equal(calls, 1);
+});
+
+test("paid submission forwards current preflight and prevents duplicate clicks", async () => {
+  generationForm();
+  const calls = [];
+  let release;
+  let confirmation;
+  global.confirm = (message) => { confirmation = message; return true; };
+  global.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    if (url.endsWith("/preflight")) return { ok: true, json: async () => preview };
+    if (url === "/api/generation/jobs") {
+      await new Promise((resolve) => { release = resolve; });
+      return { ok: true, json: async () => ({ status: "queued" }) };
+    }
+    return { ok: true, json: async () => ({ models: [], jobs: [], outputs: [] }) };
+  };
+  await runPreflight();
+  const submitting = runCreate();
+  await runCreate();
+  release();
+  await submitting;
+  const creates = calls.filter((c) => c.url === "/api/generation/jobs");
+  assert.equal(creates.length, 1);
+  assert.equal(JSON.parse(creates[0].opts.body).preflight_token, preview.preflight_token);
+  assert.match(confirmation, /MiniMax-H3.*4s.*768P.*0.40/);
+  assert.ok(confirmation.includes(preview.submitted_prompt));
+  delete global.confirm;
+});
+
+test("generation errors are reported instead of marking actions successful", async () => {
+  global.fetch = async () => ({ ok: false, status: 409, json: async () => ({ message: "checksum mismatch" }) });
+  await assert.rejects(genRequest("POST", "/api/generation/outputs/x/approve"), /checksum mismatch/);
+});
+
+test("queue exposes cancellation, reconciliation and paid regeneration", () => {
+  renderJobs([{ id: "one", status: "queued" }, { id: "two", status: "submission_unknown" },
+              { id: "three", status: "completed" }]);
+  const labels = descendants(document.querySelector("#gen-jobs")).filter((n) => n.tagName === "BUTTON").map((n) => n.textContent);
+  for (const label of ["Cancel queued job", "Attach provider job ID", "Confirm not accepted", "Regenerate (paid)"])
+    assert.ok(labels.includes(label), label);
+});
+
+test("failed outputs expose local retry and deletion without approval", () => {
+  renderReview([{ id: "job", status: "completed", outputs: [{ id: "out", processing_status: "failed", review_status: "pending" }] }]);
+  const labels = descendants(document.querySelector("#gen-review")).filter((n) => n.tagName === "BUTTON").map((n) => n.textContent);
+  assert.ok(labels.includes("Retry processing (no new charge)"));
+  assert.ok(labels.includes("Delete output"));
+  assert.ok(!labels.includes("Approve"));
+});
+
+test("model capability controls retain selection across polling and update on model change", () => {
+  generationForm();
+  const models = [
+    { id: "h3", available: true, defaults: { duration: 4, resolution: "768P" }, capabilities: { durations: [4, 8], resolutions: ["768P", "2K"] } },
+    { id: "veo", available: true, defaults: { duration: 6, resolution: "1080p" }, capabilities: { durations: [4, 6, 8], resolutions: ["720p", "1080p"] } }
+  ];
+  document.querySelector("#gen-resolution").value = "2K";
+  fillModels(models);
+  assert.equal(document.querySelector("#gen-resolution").value, "2K");
+  document.querySelector("#gen-model").value = "veo";
+  fillModels(models);
+  assert.equal(document.querySelector("#gen-resolution").value, "1080p");
+  assert.deepEqual(document.querySelector("#gen-duration").children.map((n) => n.value), ["4", "6", "8"]);
+});
+
+test("unchanged polling preserves review video and focused controls", () => {
+  let renders = 0;
+  const data = [{ id: "stable", status: "completed" }];
+  renderIfChanged("test-review", data, () => renders++);
+  renderIfChanged("test-review", JSON.parse(JSON.stringify(data)), () => renders++);
+  assert.equal(renders, 1);
+  renderIfChanged("test-review", [{ id: "stable", status: "failed" }], () => renders++);
+  assert.equal(renders, 2);
 });

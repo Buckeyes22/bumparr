@@ -21,20 +21,37 @@ def live_factors():
     return factors_at(None)
 
 
-def factors_at(now=None):
+def instant(now, tz=None):
+    """Aware datetime for a unix timestamp.
+
+    `tz` pins the conversion (fixtures). When omitted, use config TIMEZONE
+    or the process local zone. Never treat a naive fromtimestamp() as if it
+    already lived in a different zone.
+    """
+    if now is None:
+        return None
+    now = float(now)
+    zone = tz if tz is not None else dayparts._tz()
+    if zone is not None:
+        return datetime.datetime.fromtimestamp(now, tz=zone)
+    return datetime.datetime.fromtimestamp(now).astimezone()
+
+
+def factors_at(now=None, tz=None):
     """Season/daypart maps for a unix timestamp (or wall clock when now is None)."""
+    aware = instant(now, tz) if now is not None else None
     try:
-        if now is None:
+        if aware is None:
             season = seasons.factors_now()
         else:
-            season = seasons.factors_now(datetime.date.fromtimestamp(now))
+            season = seasons.factors_now(aware.date())
     except Exception:
         season = {}
     try:
-        if now is None:
+        if aware is None:
             daypart = dayparts.factors_now()
         else:
-            daypart = dayparts.factors_now(datetime.datetime.fromtimestamp(now))
+            daypart = dayparts.factors_now(aware, tz=tz)
     except Exception:
         daypart = {}
     return season, daypart

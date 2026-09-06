@@ -160,7 +160,10 @@ class Sweep(Base):
         calls = {"n": 0}
         def fake(cmd, **_):
             calls["n"] += 1
-            return _Proc(Path(cmd[-1]).parent, returncode=1 if "bad" in " ".join(cmd) else 0)
+            # Cache hashes and temporary directory names can randomly contain
+            # "bad" too. Fail only the intentionally broken source fixture.
+            source = Path(cmd[cmd.index("-i") + 1])
+            return _Proc(Path(cmd[-1]).parent, returncode=1 if source.name == "bad.mp4" else 0)
         with mock.patch.object(subprocess, "Popen", side_effect=fake), \
                 mock.patch.object(conform, "has_audio", return_value=False), \
                 mock.patch.object(conform, "ffmpeg_path", return_value="/usr/bin/ffmpeg"):

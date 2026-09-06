@@ -371,15 +371,21 @@ def resolve_creative(row):
     else:
         text_heavy = family in TEXT_HEAVY_FAMILIES
     kind = _kind(row)
-    if _valid_template(explicit.get("template")):
-        template = resolve_template(kind, family, explicit["template"], strict=False)
-    else:
-        template = default_template(kind, family)
     render_seed = explicit["render_seed"] if _valid_seed(explicit.get("render_seed")) else _render_seed(row)
+    try:
+        from bumparr import channel_profile as _profile_mod
+        profile = _profile_mod.current()
+    except Exception:
+        profile = None
+    if _valid_template(explicit.get("template")):
+        template = resolve_template(kind, family, explicit["template"],
+                                    strict=False, profile=profile)
+    else:
+        template = _pick_template(kind, family, render_seed, profile)
     if _valid_brand(explicit.get("brand_mode")):
         brand_mode = explicit["brand_mode"].strip()
     else:
-        brand_mode = "none" if family in ("ident", "failure") else "reveal"
+        brand_mode = _pick_brand(kind, family, render_seed, profile)
     if _valid_music_id(explicit.get("music_id")):
         music_id = None if explicit.get("music_id") is None else explicit["music_id"].strip()
     else:

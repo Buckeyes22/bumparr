@@ -5,6 +5,29 @@ body { background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,-apple-sys
 
 header { display:flex; align-items:center; gap:1rem; padding:1rem 1.5rem;
   background:var(--panel); border-bottom:2px solid var(--accent); }
+.nav { display:flex; gap:.4rem; }
+.nav a { color:var(--dim); text-decoration:none; border:1px solid var(--edge);
+  border-radius:999px; padding:.2rem .7rem; font-size:.8rem; }
+.nav a[aria-current="page"] { color:var(--accent); border-color:var(--accent); }
+.generation-view { display:grid; grid-template-columns:1fr 1fr; gap:1rem;
+  padding:1.5rem; max-width:1200px; margin:0 auto; }
+.generation-view[hidden] { display:none; }
+#overview-view[hidden] { display:none; }
+.gen-job, .gen-card { overflow-wrap:anywhere; margin-bottom:1rem; }
+.gen-card video { max-width:100%; }
+.generation-view select, .generation-view textarea { max-width:100%; }
+@media (max-width:700px) {
+  header { flex-wrap:wrap; }
+  .generation-view { grid-template-columns:minmax(0, 1fr); }
+  .generation-view .wide { grid-column:1 / -1; }
+}
+.gen-banner, .gen-privacy, .gen-estimate { color:var(--accent2); font-size:.85rem; margin:.4rem 0; }
+.gen-status { color:var(--dim); font-size:.85rem; }
+.gen-row { display:flex; flex-wrap:wrap; gap:1rem; margin:.6rem 0; }
+textarea#gen-brief, select#gen-model { width:100%; background:#0f1216; color:var(--fg);
+  border:1px solid var(--edge); border-radius:5px; padding:.5rem; font:inherit; margin:.3rem 0 .8rem; }
+.gen-job, .gen-card { border:1px solid var(--edge); border-radius:6px; padding:.7rem; margin:.4rem 0; }
+.gen-job video, .gen-card video { width:100%; max-height:280px; background:#000; }
 .brand { font-size:1.4rem; font-weight:800; letter-spacing:.02em; color:var(--accent); }
 .tag { color:var(--dim); font-size:.85rem; }
 .pill { margin-left:auto; background:#0f1216; border:1px solid var(--edge); border-radius:999px;

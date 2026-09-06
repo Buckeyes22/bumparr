@@ -16,6 +16,15 @@ Anything that needs the network or ffmpeg needs the container's environment
 
 ## Content production
 
+### `bumparr.generation.models` — validate the generation allow-list
+
+```bash
+python -m bumparr.generation.models --check
+```
+
+Rejects unknown providers/fields and duplicate aliases. The shipped file is
+`models: []`.
+
 ### `bumparr.produce` — quarry source video into branded clips
 
 Cuts scene-aligned, overlapping, length-banded windows out of everything under

@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+**Review-gated MiniMax H3 and OpenRouter video generation (G0–G5)**
+- Off unless `GENERATION_ENABLED` is exactly `1`. API keys never spend by
+  themselves. Direct MiniMax H3 text-to-video and OpenRouter `/api/v1/videos`
+  share one durable core (jobs, budgets, review). Frame/reference, H3-Max,
+  images, and invented-card migration stay unavailable.
+- Candidates register `enabled=0` `weight=0`. Approval restores proposed
+  weight `1.0`. Generic enable/revive/seed/produce cannot promote unreviewed
+  generated output. OpenRouter video is labeled non-ZDR.
+- Status: [docs/GENERATION_IMPLEMENTATION_STATUS.md](docs/GENERATION_IMPLEMENTATION_STATUS.md).
+  Tests use fake transports only.
+- Generation review remediation: atomic budget reservations and current-policy
+  submission gates; resolution-aware OpenRouter costs; fixed-origin JSON and
+  pinned-public-IP downloads; secret-safe errors; recoverable deletion and
+  durable no-charge processing retries; preflight-bound paid actions, complete
+  recovery/review controls, bounded request bodies, and Compose configuration.
+  Evidence: [docs/GENERATION_REMEDIATION.md](docs/GENERATION_REMEDIATION.md).
+
+**Review-finding remediation**
+- Fixture review M3Us are plan-only; live M3Us emit only validated http(s)
+  URLs or readable regular files inside the asset trees. Missing, empty,
+  traversal, and non-http URIs are dropped before composition. `--start` is
+  validated before opening storage; simulate and review use a read-only
+  SQLite connection and never create a missing DB.
+- Channel-profile `audio.allowed` / `fallback` / `target_lufs` /
+  `true_peak_db` drive bed selection, silence fallback, and loudness.
+  `fallback` must be listed in `allowed`. Native source audio is encoded
+  and recorded only when `native` is allowed; unavailable fallbacks become
+  silence instead of false music/native metadata.
+  Strict validation rejects unknown `presentation.default_template` values.
+- Explicit render/refresh of legacy rows assigns presentation from the
+  active profile and stable seed. Station lookahead scores the scheduled
+  instant, not wall clock. Fixture conversion is pinned to UTC.
+- Missing/unreadable operator-message YAML still parks stored messages
+  whose `valid_until` has elapsed.
+
 **Experience reports and objective release review gates**
 - `python -m bumparr.simulate` reports item/kind/family/template/brand-mode
   shares; exact/family/template/music repeats; max text run; energy/audio

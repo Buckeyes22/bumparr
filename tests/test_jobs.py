@@ -55,6 +55,15 @@ class RefreshOnce(unittest.TestCase):
             fetch.assert_not_called()
 
 
+class GenerationLoop(unittest.TestCase):
+    def test_cancelled_error_exits(self):
+        async def boom():
+            raise asyncio.CancelledError
+        with mock.patch("bumparr.generation.worker.generation_loop", boom):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(jobs.generation_loop())
+
+
 class DatedOnce(unittest.TestCase):
     """A failing rotation must not prevent the seasonal pass in the same cycle."""
 

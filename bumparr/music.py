@@ -6,6 +6,7 @@ unreadable beds become explicit silence. Never follow an escaping symlink.
 """
 import argparse
 import json
+import math
 import os
 import re
 import stat
@@ -425,6 +426,48 @@ def _ensure():
     return _current
 
 
+def audio_policy(profile=None):
+    """Active validated audio policy: allowed, fallback, loudness targets."""
+    audio = profile.get("audio") if isinstance(profile, dict) else None
+    if audio is None:
+        try:
+            from bumparr import channel_profile
+            audio = (channel_profile.current() or {}).get("audio") or {}
+        except Exception:
+            audio = {}
+    allowed = [item for item in (audio.get("allowed") or [])
+               if item in creative.AUDIOS]
+    if not allowed:
+        allowed = list(creative.AUDIOS)
+    fallback = audio.get("fallback")
+    if fallback not in allowed:
+        fallback = "silence"
+    try:
+        lufs = float(audio.get("target_lufs"))
+    except (TypeError, ValueError):
+        lufs = TARGET_LUFS
+    try:
+        peak = float(audio.get("true_peak_db"))
+    except (TypeError, ValueError):
+        peak = TRUE_PEAK_DB
+    if not math.isfinite(lufs):
+        lufs = TARGET_LUFS
+    if not math.isfinite(peak):
+        peak = TRUE_PEAK_DB
+    return {
+        "allowed": allowed,
+        "fallback": fallback,
+        "target_lufs": lufs,
+        "true_peak_db": peak,
+    }
+
+
+def loudness_targets(profile=None):
+    """(LUFS, true-peak dB) from the active profile, else shipped constants."""
+    policy = audio_policy(profile)
+    return policy["target_lufs"], policy["true_peak_db"]
+
+
 def selectable_beds():
     """Enabled manifested beds, plus unmanifested files in compatibility mode."""
     return [bed for bed in _ensure() if bed.enabled]
@@ -437,8 +480,10 @@ def _energy_compatible(bed, energy):
     return bed.energy == energy
 
 
-def pick_bed(family, energy, rng, recent_ids=None, pool=None):
+def pick_bed(family, energy, rng, recent_ids=None, pool=None, profile=None):
     """Choose an enabled family/energy-compatible bed, avoiding recent ids."""
+    if "music" not in audio_policy(profile)["allowed"]:
+        return None
     recent = set(recent_ids or ())
     pool = list(pool if pool is not None else selectable_beds())
     compatible = [bed for bed in pool
@@ -465,12 +510,14 @@ def _legacy_payload_bed(payload):
     return _uncredited_bed(rel.strip(), contained)
 
 
-def resolve_playable(payload, row=None):
+def resolve_playable(payload, row=None, profile=None):
     """Bed for this payload, or None (explicit silence).
 
     New rows use creative.music_id. Legacy payload.music is honoured only when
     ALLOW_UNMANIFESTED_MUSIC=1. Missing, disabled, or unreadable → None.
     """
+    if "music" not in audio_policy(profile)["allowed"]:
+        return None
     payload = payload if isinstance(payload, dict) else {}
     music_id = None
     creative_obj = payload.get("creative")
@@ -525,19 +572,46 @@ def credits_from_payload(payload):
     return public_credits(payload.get("music_credits"))
 
 
-def apply_playable_audio(payload, bed, *, preserve_non_music=False):
-    """Merge music_id/audio/credits. Preserves unrelated payload keys."""
+def _realized_fallback(policy, *, bed, have_native, have_designed):
+    """Fallback only if that treatment actually exists; otherwise silence."""
+    allowed = set(policy.get("allowed") or ())
+    fallback = policy.get("fallback")
+    if fallback == "music" and bed is not None and "music" in allowed:
+        return "music"
+    if fallback == "native" and have_native and "native" in allowed:
+        return "native"
+    if fallback == "designed" and have_designed and "designed" in allowed:
+        return "designed"
+    if fallback == "silence" and (not allowed or "silence" in allowed):
+        return "silence"
+    return "silence"
+
+
+def apply_playable_audio(payload, bed, *, preserve_non_music=False, profile=None):
+    """Merge music_id/audio/credits. Preserves unrelated payload keys.
+
+    Never records music/native/designed unless that source is actually present.
+    """
+    policy = audio_policy(profile)
+    allowed = set(policy["allowed"])
     base = dict(payload) if isinstance(payload, dict) else {}
-    if bed is None:
-        current = base.get("creative") if isinstance(base.get("creative"), dict) else {}
-        audio = current.get("audio")
-        if preserve_non_music and audio in ("native", "designed"):
-            return base
-        base.pop("music_credits", None)
-        return creative.merge_creative(base, {"audio": "silence", "music_id": None})
-    base = creative.merge_creative(base, {"audio": "music", "music_id": bed.id})
-    base["music_credits"] = snapshot_credits(bed)
-    return base
+    if bed is not None and "music" not in allowed:
+        bed = None
+    current = base.get("creative") if isinstance(base.get("creative"), dict) else {}
+    have_native = (preserve_non_music and current.get("audio") == "native"
+                   and "native" in allowed)
+    have_designed = (preserve_non_music and current.get("audio") == "designed"
+                     and "designed" in allowed)
+    if bed is not None:
+        base = creative.merge_creative(base, {"audio": "music", "music_id": bed.id})
+        base["music_credits"] = snapshot_credits(bed)
+        return base
+    if have_native or have_designed:
+        return base
+    treatment = _realized_fallback(
+        policy, bed=None, have_native=False, have_designed=False)
+    base.pop("music_credits", None)
+    return creative.merge_creative(base, {"audio": treatment, "music_id": None})
 
 
 def attribution_required(license_name):
@@ -563,8 +637,9 @@ def onscreen_attribution(credits):
     return (title or creator)[:200]
 
 
-def audio_filter(duration, offset=0.0):
-    """One offline ffmpeg filter: bounded excerpt, fades, -16 LUFS, -1.5 dBTP."""
+def audio_filter(duration, offset=0.0, profile=None):
+    """One offline ffmpeg filter: bounded excerpt, fades, profile loudness."""
+    lufs, peak = loudness_targets(profile)
     duration, fade_in, fade_out = _clip_fades(duration)
     fade_out_at = max(0.0, duration - fade_out)
     parts = []
@@ -576,7 +651,7 @@ def audio_filter(duration, offset=0.0):
         parts.append("asetpts=PTS-STARTPTS")
     parts.append("afade=t=in:st=0:d=%.3f" % fade_in)
     parts.append("afade=t=out:st=%.3f:d=%.3f" % (fade_out_at, fade_out))
-    parts.append("loudnorm=I=%.1f:TP=%.1f:LRA=11" % (TARGET_LUFS, TRUE_PEAK_DB))
+    parts.append("loudnorm=I=%.1f:TP=%.1f:LRA=11" % (lufs, peak))
     parts.append("aformat=sample_fmts=fltp:sample_rates=%d:channel_layouts=stereo"
                  % SAMPLE_RATE)
     return ",".join(parts)
@@ -601,18 +676,19 @@ def _loudnorm_stats(stderr):
     return data if isinstance(data, dict) else None
 
 
-def normalize_excerpt(src, dest, duration, offset=0.0):
-    """Write AAC 48 kHz stereo at the offline loudness policy, or raise.
+def normalize_excerpt(src, dest, duration, offset=0.0, profile=None):
+    """Write AAC 48 kHz stereo at the active loudness policy, or raise.
 
     Failure unlinks `dest` so a partial file cannot be muxed.
     """
+    lufs, peak = loudness_targets(profile)
     dest = Path(dest)
     duration, fade_in, fade_out = _clip_fades(duration)
     offset = max(0.0, float(offset or 0.0))
     measure = (
         "atrim=start=%.3f:duration=%.3f,asetpts=PTS-STARTPTS,"
         "loudnorm=I=%.1f:TP=%.1f:LRA=11:print_format=json"
-        % (offset, duration, TARGET_LUFS, TRUE_PEAK_DB)
+        % (offset, duration, lufs, peak)
     )
     try:
         first = subprocess.run(
@@ -622,12 +698,12 @@ def normalize_excerpt(src, dest, duration, offset=0.0):
             capture_output=True, text=True, timeout=120)
         stats = _loudnorm_stats(first.stderr)
         fade_out_at = max(0.0, duration - fade_out)
-        loud = "loudnorm=I=%.1f:TP=%.1f:LRA=11" % (TARGET_LUFS, TRUE_PEAK_DB)
+        loud = "loudnorm=I=%.1f:TP=%.1f:LRA=11" % (lufs, peak)
         if stats and stats.get("input_i") is not None:
             loud = (
                 "loudnorm=I=%.1f:TP=%.1f:LRA=11:measured_I=%s:measured_LRA=%s:"
                 "measured_TP=%s:measured_thresh=%s:offset=%s:linear=true"
-                % (TARGET_LUFS, TRUE_PEAK_DB,
+                % (lufs, peak,
                    stats.get("input_i"), stats.get("input_lra"),
                    stats.get("input_tp"), stats.get("input_thresh"),
                    stats.get("target_offset"))
@@ -653,12 +729,13 @@ def normalize_excerpt(src, dest, duration, offset=0.0):
         raise
 
 
-def measure_loudness(path):
+def measure_loudness(path, profile=None):
     """Return loudnorm JSON for an existing file, or None."""
+    lufs, peak = loudness_targets(profile)
     try:
         run = subprocess.run(
             ["ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
-             "-af", "loudnorm=I=%.1f:TP=%.1f:print_format=json" % (TARGET_LUFS, TRUE_PEAK_DB),
+             "-af", "loudnorm=I=%.1f:TP=%.1f:print_format=json" % (lufs, peak),
              "-f", "null", "-"],
             capture_output=True, text=True, timeout=120)
     except (subprocess.SubprocessError, OSError):

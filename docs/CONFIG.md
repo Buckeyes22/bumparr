@@ -64,6 +64,65 @@ with none of these set; the model only diversifies the model-generated kinds.
 | `LLM_BASE` | empty | Any OpenAI-compatible chat endpoint (`http://host:port/v1`). Empty = model features off. |
 | `LLM_MODEL` | empty | Model name/id to pass in the request. |
 | `LLM_DISABLE_THINKING` | empty | `1`/`true`/`yes` for reasoning models (Qwen etc.): sends `chat_template_kwargs.enable_thinking=false`, otherwise they burn the whole token budget "thinking" and return empty content. Opt-in because some providers reject unknown fields. |
+| `LLM_API_KEY` | empty | Optional bearer for a hosted OpenAI-compatible text endpoint. Unused by the G0–G5 video adapters. |
+
+## Paid video generation (off by default)
+
+This is the durable MiniMax H3 / OpenRouter video system. It is **not** the
+legacy `LLM_BASE` invented-card path and it does **not** download local H3
+weights. Status and remaining work: [GENERATION_IMPLEMENTATION_STATUS.md](GENERATION_IMPLEMENTATION_STATUS.md).
+A key with `GENERATION_ENABLED` anything other than exact `1` never spends.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GENERATION_ENABLED` | `0` | Exact `1` enables new paid submissions. Every other value is off. Already accepted jobs may still be polled. |
+| `GENERATION_MODELS` | shipped `config_files/generation_models.yaml` (`models: []`) | Operator allow-list. Invalid custom files enable no remote models. `python -m bumparr.generation.models --check`. |
+| `GENERATION_DEFAULT_MODEL` | empty | Manifest alias; empty requires an explicit choice. |
+| `MINIMAX_API_KEY` | empty | Bearer for `https://api.minimax.io`. Presence does not enable spending. |
+| `OPENROUTER_API_KEY` | empty | Bearer for `https://openrouter.ai`. Presence does not enable spending. |
+| `GENERATION_POLL_SECONDS` | `10` | Base poll interval, clamped 5–60. |
+| `GENERATION_MAX_ACTIVE` | `1` | Concurrent submitted/running provider jobs, clamped 1–3. `submission_unknown` occupies a slot. |
+| `GENERATION_DAILY_JOBS` | `10` | Max provider-accepted jobs per UTC day. Invalid/non-positive falls back to 10. Zero is not unlimited. |
+| `GENERATION_DAILY_VIDEO_SECONDS` | `60` | Max requested video seconds per UTC day. |
+| `GENERATION_DAILY_USD` | `5.00` | Estimated local daily ceiling (Decimal). Not a financial guarantee. |
+| `GENERATION_DOWNLOAD_MAX_MB` | `250` | Streamed-byte cap for one result. |
+| `GENERATION_STAGING_DIR` | `DATA_DIR/generation-staging` | Private raw downloads. Must be a proper descendant of `DATA_DIR` and outside `ASSET_ROOT`/`OUTPUT`. |
+| `GENERATION_OUTPUT_DIR` | `ASSET_ROOT/generated` | Normalized candidates. Must be a proper contained descendant of `ASSET_ROOT`, never equal to it. Skipped by seed and produce. |
+
+### Compose setup
+
+The default Compose file explicitly forwards every generation variable above,
+including `MINIMAX_API_KEY` and `OPENROUTER_API_KEY`, from the shell or project
+`.env`. Leave `GENERATION_ENABLED=0` while configuring. Keys alone do not enable
+generation. Do not publish `docker compose config` output: it can contain keys.
+
+`GENERATION_MODELS` is a **container path**. The existing code bind mount makes
+`bumparr/config_files/generation_models.yaml` available at
+`/app/bumparr/config_files/generation_models.yaml`. Its shipped allow-list is
+empty. For a separate operator-owned manifest, create the source file first
+and add a `compose.override.yaml`:
+
+```yaml
+services:
+  bumparr:
+    environment:
+      GENERATION_MODELS: /run/bumparr/generation_models.yaml
+    volumes:
+      - type: bind
+        source: ./operator/generation_models.yaml
+        target: /run/bumparr/generation_models.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+```
+
+The manifest must be readable by UID 10001. Keep keys in `.env`, not in the
+manifest or source control. Validate with
+`docker compose run --rm --no-deps bumparr python -m bumparr.generation.models --check`
+before opting in and recreating the service. Keep default private staging under
+`/data`, never under served `/assets`. An OpenRouter alias becomes available
+after the background worker obtains a fresh catalog; status/preflight requests
+never perform discovery themselves. Unknown pricing dimensions fail closed.
 
 ## Stock-footage keys (for starter seeds and "more X" requests)
 

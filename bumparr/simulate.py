@@ -15,7 +15,7 @@ import random
 import time
 from pathlib import Path
 
-from bumparr import channel_profile, creative, dayparts, db, selection, sequence
+from bumparr import channel_profile, config, creative, dayparts, db, selection, sequence
 
 STANDARD_BREAKS = (15, 30, 60, 90)
 BREAK_TOLERANCE = 1.5
@@ -67,7 +67,7 @@ def payload_obj(row):
 
 def snapshot_pool():
     """Enabled, healthy rows as detached dicts. Does not touch files or history."""
-    with db.conn() as c:
+    with db.conn(readonly=True) as c:
         return [dict(r) for r in c.execute(
             "SELECT * FROM playables WHERE enabled=1 AND health='ok'").fetchall()]
 
@@ -96,6 +96,23 @@ def fixture_rows(doc, pool="capable"):
     return [dict(row) for row in rows]
 
 
+def fixture_timezone(doc):
+    """Pinned IANA/UTC name for fixture conversion. Default UTC."""
+    name = str((doc or {}).get("timezone") or "UTC").strip() or "UTC"
+    return name
+
+
+def load_tz(name):
+    """tzinfo for a fixture/operator zone name, or None for process local."""
+    if not name or str(name).strip().lower() in ("local", "host"):
+        return None
+    token = str(name).strip()
+    if token.upper() == "UTC":
+        return datetime.timezone.utc
+    from zoneinfo import ZoneInfo
+    return ZoneInfo(token)
+
+
 def fixture_meta(doc):
     """Canonical seed/start/tolerance from the fixture document."""
     seed = int((doc or {}).get("seed") or 7)
@@ -111,6 +128,7 @@ def fixture_meta(doc):
         "start": start,
         "tolerance": tolerance,
         "station_seconds": station_seconds,
+        "timezone": fixture_timezone(doc),
         "break_seconds": list((doc or {}).get("break_seconds") or STANDARD_BREAKS),
         "gates": dict((doc or {}).get("gates") or {}),
     }
@@ -237,9 +255,9 @@ def _season_bucket(kind, season_factors):
     return "default"
 
 
-def _daypart_name(now):
+def _daypart_name(now, tz=None):
     try:
-        hit = dayparts.current(datetime.datetime.fromtimestamp(now))
+        hit = dayparts.current(selection.instant(now, tz), tz=tz)
     except Exception:
         return "none"
     return hit[0] if hit else "none"
@@ -251,7 +269,7 @@ def _shares(counts, picks):
             for key, n in sorted(counts.items(), key=lambda kv: kv[0])}
 
 
-def station_events(rows, *, seed, start, picks=None, seconds=None):
+def station_events(rows, *, seed, start, picks=None, seconds=None, tz=None):
     """Seeded choose_next loop. Mutates only copies. Never writes history."""
     pool = [dict(r) for r in rows]
     rng = random.Random(seed)
@@ -267,7 +285,7 @@ def station_events(rows, *, seed, start, picks=None, seconds=None):
         if target is not None and elapsed >= target:
             break
         attempts += 1
-        season, daypart = selection.factors_at(now)
+        season, daypart = selection.factors_at(now, tz=tz)
         scored, _ = selection.scored_candidates(
             pool, season_factors=season, daypart_factors=daypart, now=now)
         candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))
@@ -299,10 +317,10 @@ def station_events(rows, *, seed, start, picks=None, seconds=None):
 
 
 def compose_standard_breaks(rows, *, seed, start, tolerance=BREAK_TOLERANCE,
-                            placement="any"):
+                            placement="any", tz=None):
     """Four documented fill durations from the unscored-then-scored start pool."""
     profile = channel_profile.current()
-    season, daypart = selection.factors_at(start)
+    season, daypart = selection.factors_at(start, tz=tz)
     scored, _ = selection.scored_candidates(
         rows, season_factors=season, daypart_factors=daypart, now=start)
     candidates = [sequence.Candidate(row, score, creative.resolve_creative(row))
@@ -339,14 +357,15 @@ def summarize_break_error(packs, tolerance=BREAK_TOLERANCE):
     return {"tolerance": tolerance, "seconds": seconds}
 
 
-def break_duration_error(rows, *, seed, start, tolerance=BREAK_TOLERANCE):
+def break_duration_error(rows, *, seed, start, tolerance=BREAK_TOLERANCE, tz=None):
     """Diagnostic duration error for 15/30/60/90. Not a subjective score."""
     packs, _profile, tolerance = compose_standard_breaks(
-        rows, seed=seed, start=start, tolerance=tolerance)
+        rows, seed=seed, start=start, tolerance=tolerance, tz=tz)
     return summarize_break_error(packs, tolerance)
 
 
-def report_from_events(events, *, attempts, seed, start, rows=None):
+def report_from_events(events, *, attempts, seed, start, rows=None, tz=None,
+                       tz_name=None):
     """Summarize station events. Shares are diagnostic, not CI gates."""
     profile = channel_profile.current()
     status = channel_profile.profile_status()
@@ -379,9 +398,9 @@ def report_from_events(events, *, attempts, seed, start, rows=None):
         brand_counts[brand] = brand_counts.get(brand, 0) + 1
         energy = resolved.get("energy") or ""
         energy_counts[energy] = energy_counts.get(energy, 0) + 1
-        bucket = _season_bucket(kind, selection.factors_at(event["at"])[0])
+        bucket = _season_bucket(kind, selection.factors_at(event["at"], tz=tz)[0])
         seasonal[bucket] = seasonal.get(bucket, 0) + 1
-        name = _daypart_name(event["at"])
+        name = _daypart_name(event["at"], tz)
         daypart_counts[name] = daypart_counts.get(name, 0) + 1
         audio = resolved.get("audio") or infer_audio(pick)
         audio_counts[audio] = audio_counts.get(audio, 0) + 1
@@ -476,6 +495,13 @@ def report_from_events(events, *, attempts, seed, start, rows=None):
         "role_violations": role_violations,
         "relaxations": dict(relaxation_counts),
         "profile": profile_fingerprint(profile, status),
+        "timezone": tz_name or "local",
+        "factors_at_start": {
+            "timezone": tz_name or "local",
+            "season": dict(sorted(selection.factors_at(start, tz=tz)[0].items())),
+            "daypart": dict(sorted(selection.factors_at(start, tz=tz)[1].items())),
+            "daypart_name": _daypart_name(start, tz),
+        },
         "seasonal": dict(sorted(seasonal.items())),
         "daypart": dict(sorted(daypart_counts.items())),
         "audio": dict(sorted(audio_counts.items())),
@@ -492,12 +518,14 @@ def report_from_events(events, *, attempts, seed, start, rows=None):
     }
 
 
-def run(rows, *, picks, seed, start):
+def run(rows, *, picks, seed, start, tz=None, tz_name=None):
     """Simulate `picks` selections against in-memory copies of `rows`."""
-    events = station_events(rows, seed=seed, start=start, picks=picks)
-    report = report_from_events(events, attempts=picks, seed=seed, start=start, rows=rows)
+    events = station_events(rows, seed=seed, start=start, picks=picks, tz=tz)
+    report = report_from_events(
+        events, attempts=picks, seed=seed, start=start, rows=rows,
+        tz=tz, tz_name=tz_name)
     report["break_duration_error"] = break_duration_error(
-        rows, seed=seed, start=start)
+        rows, seed=seed, start=start, tz=tz)
     return report
 
 
@@ -559,12 +587,19 @@ def main(argv=None):
         meta = fixture_meta(doc)
         start = meta["start"] if args.start is None else args.start
         seed = meta["seed"] if args.seed is None else args.seed
+        tz_name = meta["timezone"]
+        tz = load_tz(tz_name)
     else:
         start = time.time() if args.start is None else args.start
         seed = 1 if args.seed is None else args.seed
-        db.init_db()
-        rows = snapshot_pool()
-    report = run(rows, picks=args.picks, seed=seed, start=start)
+        tz_name = None
+        tz = None
+        try:
+            rows = snapshot_pool()
+        except FileNotFoundError:
+            raise SystemExit("database does not exist: %s" % config.DB_PATH)
+    report = run(rows, picks=args.picks, seed=seed, start=start,
+                 tz=tz, tz_name=tz_name)
     if args.json:
         print(json.dumps(report, sort_keys=True))
     else:

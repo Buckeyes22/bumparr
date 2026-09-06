@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from bumparr import channel_profile, config, creative, db, music, seed, live_cams, stream_proxy, ingest, paths, rotation, selection, sequence
 from bumparr.urls import absolutize as _absolutize
 from bumparr.station import routes as station_routes
+from bumparr.generation import routes as generation_routes
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 log = logging.getLogger(__name__)
@@ -86,7 +87,8 @@ async def lifespan(app: FastAPI):
              asyncio.create_task(jobs.window_refresh_loop()),
              asyncio.create_task(jobs.dated_card_loop()),
              asyncio.create_task(jobs.station_conform_loop()),
-             asyncio.create_task(jobs.channel_memory_loop())]
+             asyncio.create_task(jobs.channel_memory_loop()),
+             asyncio.create_task(jobs.generation_loop())]
     try:
         yield
     finally:
@@ -100,8 +102,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bumparr", lifespan=lifespan)
+app.add_middleware(generation_routes.GenerationBodyLimit)
 app.include_router(stream_proxy.router)
 app.include_router(station_routes.router)
+app.include_router(generation_routes.router)
 
 
 class _StationSegmentFiles(StaticFiles):
@@ -134,11 +138,17 @@ def status():
         total += r["n"]
         live += r["live"]
     from bumparr.generators import channel_memory
+    from bumparr.generation import models as gen_models
+    gen = gen_models.runtime_settings()
     return {"brand": config.BRAND, "total": total, "playable_now": live,
             "by_type": by_type, "by_kind": by_kind,
             "profile": channel_profile.profile_status(),
             "music": music.manifest_status(),
-            "memory": channel_memory.memory_status()}
+            "memory": channel_memory.memory_status(),
+            "generation": {
+                "enabled": bool(gen["enabled"]),
+                "configured": bool(gen["minimax_key"] or gen["openrouter_key"]),
+            }}
 
 
 @app.get("/api/bumpers")
@@ -186,6 +196,9 @@ def list_bumpers(request: Request, type: str = None, kind: str = None,
                 "tags": r["tags"], "enabled": r["enabled"], "health": r["health"],
                 "media_url": _media_url(r, request), "payload": payload,
                 "creative": creative.resolve_creative(r)}
+        review = ((payload.get("generation") or {}).get("review") or {}).get("status")
+        if review:
+            item["generation_review"] = review
         out.append(_attach_credits(item, payload))
     return {"count": len(out), "bumpers": out}
 
@@ -378,7 +391,11 @@ def get_bumper(bumper_id: str, request: Request = None, explain: bool = False):
     d = dict(r)
     d["media_url"] = _media_url(r, request)
     d["creative"] = creative.resolve_creative(d)
-    _attach_credits(d, _payload_obj(d))
+    payload = _payload_obj(d)
+    review = ((payload.get("generation") or {}).get("review") or {}).get("status")
+    if review:
+        d["generation_review"] = review
+    _attach_credits(d, payload)
     if explain:
         # Context comes from the statically eligible pool so median and
         # affinity match what /random and the station would have used.
@@ -492,6 +509,11 @@ def delete_bumper(bumper_id: str, keep_file: bool = False):
         cleanup_failed = True
         log.error("quarantine cleanup failed for %s: %s", bumper_id, exc)
     file_removed = staged is not None and not cleanup_failed
+    try:
+        from bumparr.generation import service as gen_service
+        gen_service.mark_output_deleted(bumper_id)
+    except Exception:
+        pass
     # Deleting the last item in a category leaves an empty directory behind. It
     # is harmless to playback but it keeps a dead category visible to anything
     # that scans the tree, so tidy it up here rather than leaving a stray.
@@ -643,11 +665,15 @@ def revive(dry_run: bool = False):
     restored, still_dead, skipped = [], [], []
     with db.conn() as c:
         rows = [dict(r) for r in c.execute(
-            "SELECT id, type, uri FROM playables "
+            "SELECT id, type, uri, source, payload FROM playables "
             "WHERE (health='dead' OR enabled=0) "
             "AND (kind IS NULL OR kind != 'on_this_day')").fetchall()]
     for r in rows:
         uri = r["uri"] or ""
+        from bumparr.generation import service as gen_service
+        if gen_service.blocks_generic_enable(r["id"], r.get("payload"), r.get("source")):
+            skipped.append(r["id"])
+            continue
         if r["type"] == "stream" or uri.startswith(("http://", "https://")):
             skipped.append(r["id"])
             continue
@@ -750,12 +776,19 @@ def enable_playable(bumper_id: str):
     unchanged and always present; `warning` is added only when there is one.
     """
     with db.conn() as c:
-        row = c.execute("SELECT id, enabled, kind, payload FROM playables WHERE id=?",
+        row = c.execute("SELECT id, enabled, kind, payload, source FROM playables WHERE id=?",
                         (bumper_id,)).fetchone()
         if row is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         changed = not row["enabled"]
         if changed:
+            from bumparr.generation import service as gen_service
+            if gen_service.blocks_generic_enable(
+                    bumper_id, row["payload"], row["source"]):
+                return JSONResponse({
+                    "error": "generation_review_required",
+                    "message": "This generated candidate must be approved at /api/generation/outputs/{id}/approve",
+                }, status_code=409)
             c.execute("UPDATE playables SET enabled=1 WHERE id=?", (bumper_id,))
     out = {"id": bumper_id, "enabled": True, "changed": changed}
     warning = _calendar_park_warning(row["kind"], row["payload"])

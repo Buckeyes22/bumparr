@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bumparr.creative import (
     FAMILIES,
     PERSIST_FIELDS,
+    compatible_templates,
     merge_creative,
     resolve_creative,
     role_compatible,
@@ -170,11 +171,11 @@ class RoleEnergyAudio(unittest.TestCase):
             {"family", "roles", "energy", "audio", "text_heavy",
              "template", "render_seed", "brand_mode", "music_id"})
         self.assertIn(got["family"], FAMILIES)
-        self.assertEqual(got["template"], "image_caption")
+        self.assertIn(got["template"], compatible_templates("ambient", got["family"]))
         self.assertIsNone(got["music_id"])
         self.assertIsInstance(got["render_seed"], int)
         self.assertGreaterEqual(got["render_seed"], 0)
-        self.assertEqual(got["brand_mode"], "reveal")
+        self.assertIn(got["brand_mode"], ("reveal", "static", "none"))
         ident = resolve_creative(_row(kind="station_id"))
         self.assertEqual(ident["brand_mode"], "none")
 

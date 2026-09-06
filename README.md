@@ -59,8 +59,18 @@ endpoint — via `.env` and `config_files/`. No code changes to adopt.
 **A local model is optional.** Grounded cards (trivia, fun-facts, numbers) come
 from real sources, and the procedural kinds plus every other kind ship with a
 small built-in starter set, so a fresh install with no model still has content in
-every kind. Point Bumparr at any OpenAI-compatible endpoint to generate far more,
-in your own voice — the model diversifies the pool, it is not required to run.
+every kind. Point Bumparr at any OpenAI-compatible endpoint (`LLM_BASE`) to
+generate far more invented text cards — that path is not MiniMax H3 and does
+not download model weights.
+
+**Paid video generation is also optional and off by default.** Set
+`GENERATION_ENABLED=1`, allow-list a model in `generation_models.yaml`, and
+provide `MINIMAX_API_KEY` and/or `OPENROUTER_API_KEY` to create review-gated
+bumper videos through the dashboard `#/generation` view. Keys alone never
+spend. This uses MiniMax's hosted H3 API and/or OpenRouter's video API; it
+does not fetch or serve local H3-Base weights. See
+[docs/GENERATION_PLAN.md](docs/GENERATION_PLAN.md) and
+[docs/GENERATION_IMPLEMENTATION_STATUS.md](docs/GENERATION_IMPLEMENTATION_STATUS.md).
 
 ## Render cards to video first
 
@@ -126,6 +136,8 @@ schedule episodes or films.
 | [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md) | what Bumparr is trying to make and the experience it should deliver |
 | [docs/CREATIVE_REFERENCE.md](docs/CREATIVE_REFERENCE.md) | the Adult Swim bumper reference and what to preserve without copying |
 | [docs/ALIGNMENT_PLAN.md](docs/ALIGNMENT_PLAN.md) | self-contained execution specification for closing the product and creative gaps |
+| [docs/GENERATION_PLAN.md](docs/GENERATION_PLAN.md) | first-class generative content plan for direct MiniMax H3, OpenRouter, media review, and provenance |
+| [docs/FRONTEND_PLAN.md](docs/FRONTEND_PLAN.md) | operator-console frontend enhancement plan |
 | [docs/INTEGRATION.md](docs/INTEGRATION.md) | wiring Bumparr into ErsatzTV, Tunarr, Dispatcharr |
 | [docs/CARDS.md](docs/CARDS.md) | making the cards yours: shapes per kind, model prompts, new kinds |
 | [docs/API.md](docs/API.md) | the full endpoint reference, incl. the dashboard |

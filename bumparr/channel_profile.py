@@ -241,6 +241,9 @@ def validate_profile(doc):
     template = presentation["default_template"]
     if not isinstance(template, str) or not template.strip():
         raise ProfileError("presentation.default_template must be a non-empty string")
+    from bumparr.creative import TEMPLATES as CREATIVE_TEMPLATES
+    if template.strip() not in CREATIVE_TEMPLATES:
+        raise ProfileError("unknown presentation.default_template")
     brand = presentation["default_brand_mode"]
     if not isinstance(brand, str) or brand.strip() not in BRAND_MODES:
         raise ProfileError("unknown presentation.default_brand_mode")
@@ -265,6 +268,8 @@ def validate_profile(doc):
     if not allowed:
         raise ProfileError("audio.allowed must not be empty")
     fallback = _audio_treatment(audio["fallback"], "audio.fallback")
+    if fallback not in allowed:
+        raise ProfileError("audio.fallback must be listed in audio.allowed")
 
     return {
         "version": 1,

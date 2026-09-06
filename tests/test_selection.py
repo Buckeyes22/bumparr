@@ -1,9 +1,11 @@
 """Shared computed-eligibility helper (bumparr/selection.py)."""
+import datetime
 import math
 import os
 import sys
 import unittest
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -114,6 +116,24 @@ class ExplainRow(unittest.TestCase):
                          {"base", "season", "daypart", "recency",
                           "affinity", "fatigue", "score"})
         self.assertGreater(view["factors"]["score"], 0)
+
+
+class TimezoneConversion(unittest.TestCase):
+    def test_unix_timestamp_uses_named_zone_not_host_local(self):
+        ts = 1_700_000_000.0  # 2023-11-14 22:13:20 UTC / 17:13 America/New_York
+        utc = selection.instant(ts, datetime.timezone.utc)
+        self.assertEqual(utc.hour, 22)
+        ny = selection.instant(ts, ZoneInfo("America/New_York"))
+        self.assertEqual(ny.hour, 17)
+
+    def test_factors_at_pins_daypart_hour_to_named_zone(self):
+        ts = 1_700_000_000.0
+        utc_season, utc_day = selection.factors_at(ts, tz=datetime.timezone.utc)
+        ny_season, ny_day = selection.factors_at(ts, tz=ZoneInfo("America/New_York"))
+        # 22:13 UTC is evening; 17:13 Eastern is daytime. Trivia is boosted
+        # only in the evening window of the shipped dayparts file.
+        self.assertNotEqual(utc_day.get("trivia", 1.0), ny_day.get("trivia", 1.0))
+        self.assertEqual(utc_season, ny_season)
 
 
 if __name__ == "__main__":

@@ -175,3 +175,25 @@ CHANNEL_MEMORY_KINDS = env(
 # bumparr/config_files/operator_messages.yaml. Config `enabled` plus
 # starts_at/ends_at own eligibility; the refresh job parks ineligible rows.
 OPERATOR_MESSAGES = env("OPERATOR_MESSAGES", "").strip()
+
+# Working state (fetch queue, generation staging). Distinct from ASSET_ROOT so
+# raw provider bytes are never served under /media.
+DATA_DIR = Path(env("DATA_DIR", "/data"))
+
+# Durable paid generation (MiniMax H3 / OpenRouter video). Off unless the
+# enable flag is the exact string "1". A key with generation off never spends.
+# Full contract: docs/GENERATION_PLAN.md and docs/CONFIG.md.
+GENERATION_ENABLED = env("GENERATION_ENABLED", "0")
+GENERATION_MODELS = env("GENERATION_MODELS", "").strip()
+GENERATION_DEFAULT_MODEL = env("GENERATION_DEFAULT_MODEL", "").strip()
+MINIMAX_API_KEY = env("MINIMAX_API_KEY", "")
+OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", "")
+LLM_API_KEY = env("LLM_API_KEY", "")
+GENERATION_POLL_SECONDS = env("GENERATION_POLL_SECONDS", "10")
+GENERATION_MAX_ACTIVE = env("GENERATION_MAX_ACTIVE", "1")
+GENERATION_DAILY_JOBS = env("GENERATION_DAILY_JOBS", "10")
+GENERATION_DAILY_VIDEO_SECONDS = env("GENERATION_DAILY_VIDEO_SECONDS", "60")
+GENERATION_DAILY_USD = env("GENERATION_DAILY_USD", "5.00")
+GENERATION_DOWNLOAD_MAX_MB = env("GENERATION_DOWNLOAD_MAX_MB", "250")
+GENERATION_STAGING_DIR = env("GENERATION_STAGING_DIR", "").strip()
+GENERATION_OUTPUT_DIR = env("GENERATION_OUTPUT_DIR", "").strip()

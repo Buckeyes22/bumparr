@@ -5,6 +5,12 @@ CI gate and not an automatic taste score. There is **no Adult Swim similarity**
 metric. Distribution shares (family, template, brand, energy, audio) stay
 diagnostic until real operation justifies gates.
 
+Generated MiniMax/OpenRouter candidates are a separate audiovisual review:
+watch with sound, inspect prompt/provenance/checksum, then approve or reject
+in `#/generation`. Pending generated rows must not be enabled through
+`/api/pool/enable`. Paid acceptance steps are in
+[GENERATION_IMPLEMENTATION_STATUS.md](GENERATION_IMPLEMENTATION_STATUS.md).
+
 CI already asserts only objective contracts: no gated or hard-role
 selection, deterministic JSON, satisfiable run limits on a capable pool,
 valid media metadata, and the documented **1.5 second** tolerance on
@@ -22,10 +28,11 @@ python -m bumparr.review \
   --out /tmp/bumparr-review
 ```
 
-That writes a ten-minute station-style `station.m3u`, four standard break
-packs (`break-15.m3u` … `break-90.m3u`), and JSON/Markdown sidecars with
-ids, metadata, credits, gaps, and relaxations. Media URIs are reused; the
-command does not concatenate or re-encode.
+That writes JSON/Markdown sidecars plus `station.m3u` and
+`break-15.m3u` … `break-90.m3u`. Fixture M3Us are **plan-only**: the
+fixture URIs are synthetic filenames, not files on disk. Watch live media
+from a live-pool review instead. The command does not concatenate or
+re-encode.
 
 `--pool constrained` is the intentionally poor pool: use it to see honest
 gaps, relaxations, and missing/stale provenance, not as a release sample.
@@ -36,6 +43,10 @@ seconds) so the plan is not silently wall-clocked:
 ```bash
 python -m bumparr.review --start 1700000000 --out /tmp/bumparr-review-live
 ```
+
+Live M3Us use absolute local paths (or stream URLs). `--start` is required
+and is validated before the database is opened; a missing database is an
+error, not a reason to create one. Fixture conversion is pinned to `UTC`.
 
 `python -m bumparr.simulate --fixture tests/fixtures/alignment_playables.json --json`
 prints the same mix diagnostics without writing files.

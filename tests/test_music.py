@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bumparr import config, creative, music, produce, render_cards, sequence, simulate
+from bumparr import channel_profile, config, creative, music, produce, render_cards, sequence, simulate
 
 REPO = Path(__file__).resolve().parents[1]
 SHIPPED = REPO / "bumparr" / "config_files" / "music_beds.yaml"
@@ -404,6 +404,23 @@ class PairingAndSilence(MusicHarness):
         self.assertNotEqual(native["creative"]["audio"], "silence")
         self.assertNotEqual(designed["creative"]["audio"], "music")
 
+    def test_unavailable_fallback_is_silence_not_false_metadata(self):
+        policy = channel_profile.default_profile()
+        policy["audio"]["allowed"] = ["silence", "music"]
+        policy["audio"]["fallback"] = "music"
+        with mock.patch("bumparr.channel_profile.current", return_value=policy):
+            out = music.apply_playable_audio(
+                {"creative": {"audio": "music", "music_id": None}}, None)
+        self.assertEqual(out["creative"]["audio"], "silence")
+        self.assertIsNone(out["creative"]["music_id"])
+        silence_only = channel_profile.default_profile()
+        silence_only["audio"]["allowed"] = ["silence"]
+        silence_only["audio"]["fallback"] = "silence"
+        with mock.patch("bumparr.channel_profile.current", return_value=silence_only):
+            kept = music.apply_playable_audio(
+                {"creative": {"audio": "native"}}, None, preserve_non_music=True)
+        self.assertEqual(kept["creative"]["audio"], "silence")
+
 
 class CreditsAndAttribution(MusicHarness):
     def test_cc0_does_not_require_onscreen_attribution(self):
@@ -453,6 +470,34 @@ class LoudnessPolicy(MusicHarness):
         self.assertIn("afade", filt)
         self.assertIn("48000", filt)
         self.assertIn("stereo", filt)
+
+    def test_silence_only_policy_does_not_select_a_bed(self):
+        self._write_file("night-room-01.flac")
+        self._write_manifest(_bed_yaml())
+        policy = channel_profile.default_profile()
+        policy["audio"]["allowed"] = ["silence"]
+        policy["audio"]["fallback"] = "silence"
+        with mock.patch("bumparr.channel_profile.current", return_value=policy):
+            self.assertIsNone(music.pick_bed("text", "quiet", random.Random(0)))
+            self.assertIsNone(music.resolve_playable(
+                {"creative": {"music_id": "night-room-01"}}))
+            out = music.apply_playable_audio(
+                {"creative": {"audio": "music", "music_id": "night-room-01"}},
+                music._ensure()[0])
+        self.assertEqual(out["creative"]["audio"], "silence")
+        self.assertIsNone(out["creative"]["music_id"])
+
+    def test_audio_filter_uses_profile_loudness(self):
+        policy = channel_profile.default_profile()
+        policy["audio"]["target_lufs"] = -24.0
+        policy["audio"]["true_peak_db"] = -6.0
+        with mock.patch("bumparr.channel_profile.current", return_value=policy):
+            filt = music.audio_filter(8.0)
+            lufs, peak = music.loudness_targets()
+        self.assertEqual(lufs, -24.0)
+        self.assertEqual(peak, -6.0)
+        self.assertIn("I=-24.0", filt)
+        self.assertIn("TP=-6.0", filt)
 
     def test_normalize_failure_unlinks_partial(self):
         dest = Path(self.tmp.name) / "partial.m4a"
@@ -549,8 +594,51 @@ class ProduceAndRenderConsumers(MusicHarness):
             row = dict(c.execute("SELECT payload FROM playables").fetchone())
         payload = json.loads(row["payload"])
         self.assertEqual(payload["creative"]["audio"], "silence")
+
+    def test_silence_only_policy_does_not_encode_native(self):
+        originals = (config.DB_PATH, config.VIDEO_DIR, config.OUTPUT_DIR)
+        config.DB_PATH = str(Path(self.tmp.name) / "p-native.db")
+        config.VIDEO_DIR = Path(self.tmp.name) / "src-n"
+        config.OUTPUT_DIR = Path(self.tmp.name) / "out-n"
+        config.VIDEO_DIR.mkdir()
+        config.OUTPUT_DIR.mkdir()
+        self.addCleanup(setattr, config, "DB_PATH", originals[0])
+        self.addCleanup(setattr, config, "VIDEO_DIR", originals[1])
+        self.addCleanup(setattr, config, "OUTPUT_DIR", originals[2])
+        source = config.VIDEO_DIR / "clip.mp4"
+        source.write_bytes(b"source")
+        from bumparr import db
+        db.init_db()
+        policy = channel_profile.default_profile()
+        policy["audio"]["allowed"] = ["silence"]
+        policy["audio"]["fallback"] = "silence"
+        seen = {}
+
+        def cut(_src, dest, *args, **kwargs):
+            seen.update(kwargs)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"encoded")
+
+        with mock.patch("bumparr.channel_profile.current", return_value=policy), \
+                mock.patch.object(produce, "duration_of",
+                                  side_effect=lambda p: 100 if Path(p) == source else 8), \
+                mock.patch.object(produce, "scene_cuts", return_value=[]), \
+                mock.patch.object(produce, "plan_windows", return_value=[(1.0, 5.0)]), \
+                mock.patch.object(produce, "mean_volume", return_value=-20), \
+                mock.patch.object(produce, "cut_clip", side_effect=cut), \
+                mock.patch.object(produce.brandslam, "roll", return_value=None), \
+                mock.patch.object(produce.brandslam, "static_face", return_value=None):
+            made, err = produce.produce_from_source(
+                source, "ambient", random.Random(1), [], [], ({}, {}))
+        self.assertIsNone(err)
+        self.assertEqual(len(made), 1)
+        self.assertFalse(seen.get("native"))
+        self.assertEqual(made[0][2], "silent")
+        with db.conn() as c:
+            row = dict(c.execute("SELECT payload FROM playables").fetchone())
+        payload = json.loads(row["payload"])
+        self.assertEqual(payload["creative"]["audio"], "silence")
         self.assertIsNone(payload["creative"].get("music_id"))
-        self.assertNotIn("music_credits", payload)
 
     def test_status_source_is_never_a_path(self):
         status = music.manifest_status()

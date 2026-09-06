@@ -9,6 +9,7 @@
 - [Stream proxy](#stream-proxy)
 - [Media and static](#media-and-static)
 - [Dashboard](#dashboard)
+- [Generation](#generation)
 
 Bumparr is a FastAPI service on port `8780`. Everything below is the full
 surface; the dashboard (see [Dashboard](#dashboard)) only uses part of it.
@@ -380,3 +381,56 @@ here when the cam isn't CORS-direct.
 
 The dashboard has no state of its own; it is a thin client over the endpoints
 in this file, so anything the UI can do, curl can do.
+
+`#/generation` is a separate view for paid MiniMax/OpenRouter video. It is
+off unless `GENERATION_ENABLED=1`. Provider strings and briefs are assigned
+with `textContent` only.
+
+## Generation
+
+Off by default. Credentials never enable spending. Status/preview/playlist
+reads do not call a provider. Create returns **202**. Exhausted budget is
+**409**. Validation is **422**. Disabled/unconfigured is **503**.
+
+| Method/path | Purpose |
+|---|---|
+| `GET /api/generation` | Enabled/configured, budgets, queue counts. No keys, prompts, or signed URLs. |
+| `GET /api/generation/models` | Allow-listed aliases and effective capabilities. |
+| `POST /api/generation/preflight` | Validate with no provider call; returns exact submitted prompt, estimate, and `preflight_token`. |
+| `GET /api/generation/jobs` | Paginated jobs. |
+| `POST /api/generation/jobs` | Reserve and enqueue one job; requires the matching `preflight_token`. |
+| `GET /api/generation/jobs/{id}` | Safe detail plus outputs. |
+| `POST /api/generation/jobs/{id}/cancel` | Cancel queued work (after submit, provider cancel is not implemented). |
+| `POST /api/generation/jobs/{id}/regenerate` | New queued job from optional edited prompt/title; requires a fresh matching `preflight_token`. |
+| `POST /api/generation/jobs/{id}/reconcile` | Resolve `submission_unknown`. |
+| `GET /api/generation/outputs` | Review queue. |
+| `POST /api/generation/outputs/{id}/approve` | Enable exactly that candidate at proposed weight 1.0. |
+| `POST /api/generation/outputs/{id}/reject` | Keep disabled. |
+| `POST /api/generation/outputs/{id}/retry-processing` | Local ingest retry; never a new provider create. |
+| `DELETE /api/generation/outputs/{id}` | Delete candidate; keep job audit. |
+
+`POST /api/pool/enable` returns 409 for unreviewed generated candidates.
+`/api/status` includes `{generation: {enabled, configured}}` without secrets.
+
+Preflight accepts the ordinary generation fields (`model`, `prompt`, optional
+`title`, `kind`, `duration`, `resolution`, `creative`, and fixed video/text/16:9
+options). Submit the same fields plus the returned `preflight_token` to create.
+The server recomputes normalized inputs, capability/price, UTC day, budget
+usage and caps inside the reservation transaction. Missing or mismatched tokens
+return **409 `preflight_changed`** without enqueueing. Tokens are consistency
+fingerprints, not authentication credentials; never expose this unauthenticated
+application publicly without proxy authentication. Repeated creation with an
+already-used preview is rejected after its reservation changes the budget.
+
+For regeneration, preflight the original job's model/options/kind and creative
+`roles`/`energy`, with the desired prompt/title. Pass that token and optional
+prompt/title to `/regenerate`. The new job retains `parent_job_id`.
+
+Every generation write route enforces **128 KiB of actual body bytes before
+JSON parsing**, including chunked requests. Accepted jobs with missing keys or
+transient query failures retain their provider IDs and resume with backoff.
+Provider success with failed local processing appears as a completed job with
+a processing-failed output; use `retry-processing`, not a paid regeneration.
+Failed database registration retains the stable landed file for worker recovery.
+Queue and review lists have independent `limit` (1–100) and `offset` pagination;
+the output list also accepts `review_status` (pending/approved/rejected/deleted).

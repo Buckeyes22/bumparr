@@ -30,6 +30,27 @@ a row does not play, and a row is only playable when `enabled=1` and
 | `last_played` | REAL | Unix ts of last air — the station playout writer updates it when an entry starts; it is the recency factor's input. |
 | `play_count` | INTEGER | Lifetime plays — station playout increments it when an entry starts; it is the fatigue factor's input (relative to the pool median). |
 | `created_at` | REAL | Unix ts. |
+| (generated rows) | | Generated candidates use `id` `gen:<output-uuid>`, `source` `generated:<provider>`, `enabled=0`, `weight=0` until approval. `payload.generation` holds provider/model/prompt/cost/review snapshots. Generic `/api/pool/enable` cannot approve them. |
+
+## `generation_jobs` — durable paid generation
+
+Additive. Remote workflow state does not live in `playables`.
+
+Job execution status is separate from per-output `review_status`. Ambiguous
+create (`submitting` without a stored provider job id) becomes
+`submission_unknown` and never automatically creates another paid job.
+
+Columns match `bumparr/db.py`: local id, provider/model aliases, briefs,
+secret-free request/capability/usage JSON, provider job id, UTC `budget_day`,
+integer micro-USD reservations, and timestamps. Money is never stored as
+binary float.
+
+## `generation_outputs` — one candidate per artifact
+
+`processing_status` (`pending`/`processing`/`ready`/`failed`) is independent of
+`review_status` (`pending`/`approved`/`rejected`/`deleted`). Approval is the
+only writer that enables the linked playable and restores proposed weight
+`1.0`.
 
 Station timeline entries also keep in-memory `family`, `text_heavy`,
 `energy`, `audio`, `template`, and `music_id` for adjacency. Those are not

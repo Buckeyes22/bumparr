@@ -136,6 +136,15 @@ class ChannelProfileLoader(unittest.TestCase):
             channel_profile.load_profile(path, strict=True)
         self.assertRegex(str(ctx.exception).lower(), r"treatment|audio|fallback")
 
+        mismatch = VALID.replace(
+            "allowed: [native, music, designed, silence, unknown]",
+            "allowed: [silence]",
+        ).replace("fallback: silence", "fallback: music")
+        path = _write(self.tmp.name, mismatch, name="fallback-not-allowed.yaml")
+        with self.assertRaises(channel_profile.ProfileError) as ctx:
+            channel_profile.load_profile(path, strict=True)
+        self.assertIn("fallback", str(ctx.exception).lower())
+
         allowed = VALID.replace("unknown]", "unknown, tape]")
         path = _write(self.tmp.name, allowed, name="allowed.yaml")
         with self.assertRaises(channel_profile.ProfileError):
@@ -145,6 +154,13 @@ class ChannelProfileLoader(unittest.TestCase):
         path = _write(self.tmp.name, brand, name="brand.yaml")
         with self.assertRaises(channel_profile.ProfileError):
             channel_profile.load_profile(path, strict=True)
+
+        template = VALID.replace("default_template: minimal_center",
+                                 "default_template: neon_board")
+        path = _write(self.tmp.name, template, name="template.yaml")
+        with self.assertRaises(channel_profile.ProfileError) as ctx:
+            channel_profile.load_profile(path, strict=True)
+        self.assertIn("template", str(ctx.exception).lower())
 
     def test_negative_and_nan_weights_are_rejected(self):
         neg = VALID.replace("failure: 0.2", "failure: -0.1")

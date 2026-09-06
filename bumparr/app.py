@@ -1195,9 +1195,12 @@ def _bound_result(result, limit=2000):
     A string is clipped outright; a dict keeps its shape but clips string
     values at the top level and one level into any nested dict (batch/render
     jobs report `{ok, stdout, stderr}`-shaped results, occasionally nesting
-    once more); anything else (list, number, exception text, ...) becomes its
-    `str()`, clipped the same way. `None` (a job still `working`) stays `None`
-    rather than becoming the misleading string ``"None"``.
+    once more) — a dict value that is itself a list, number or other
+    non-string, non-dict type passes through unclipped rather than being
+    stringified. At the top level, anything that is not a string and not a
+    dict (list, number, exception text, ...) becomes its `str()`, clipped the
+    same way. `None` (a job still `working`) stays `None` rather than
+    becoming the misleading string ``"None"``.
     """
     if result is None:
         return None

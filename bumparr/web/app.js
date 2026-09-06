@@ -1477,7 +1477,7 @@ function renderMemory(s) {
   memEl.replaceChildren();
   const mem = s.memory;
   if (!mem || typeof mem !== "object") {
-    memEl.appendChild(makeEl("div", "", "memory · Not available in this version."));
+    memEl.appendChild(makeEl("div", "", "memory · " + NOT_AVAILABLE));
     return;
   }
   const kinds = Array.isArray(mem.enabled_kinds) ? mem.enabled_kinds : [];
@@ -2618,11 +2618,13 @@ function inspectorDanger(row) {
 }
 
 // Replacing or disabling the focused control drops focus to <body>, outside the
-// modal, so everything that does either hands it back.
-function heldFocus() {
-  const body = $("#inspector-body");
+// modal (or the station preview region), so everything that does either hands
+// it back. Shared by the inspector and the station preview: same question,
+// different root.
+function focusInside(rootSelector) {
+  const root = $(rootSelector);
   const active = typeof document !== "undefined" ? document.activeElement : null;
-  return Boolean(body && active && body.contains && body.contains(active));
+  return Boolean(root && active && root.contains && root.contains(active));
 }
 
 function giveBackFocus(held) {
@@ -2634,7 +2636,7 @@ function renderInspector() {
   const title = $("#inspector-title");
   const body = $("#inspector-body");
   const row = STATE.inspector.value;
-  const held = heldFocus();
+  const held = focusInside("#inspector-body");
   if (title) title.textContent = row ? rowLabel(row) : "Item";
   if (!body) return null;
   // Emptying the dialog is exactly when a still-buffering preview has to be
@@ -2668,7 +2670,7 @@ function renderInspectorState() {
 function setInspectorBusy(message) {
   STATE.inspector.busy = message || "";
   const body = $("#inspector-body");
-  const held = heldFocus();
+  const held = focusInside("#inspector-body");
   if (body) modalControls(body).forEach((el) => { el.disabled = Boolean(message); });
   if (message) giveBackFocus(held);
   renderInspectorState();
@@ -3728,12 +3730,6 @@ function keepPreviewFocus(held, label) {
   return next;
 }
 
-const previewFocusHeld = () => {
-  const root = $("#station");
-  const active = typeof document !== "undefined" ? document.activeElement : null;
-  return Boolean(root && active && root.contains && root.contains(active));
-};
-
 // The preview lives in its own container, which a redraw never touches: the
 // summary refreshes every 20 seconds, and rebuilding an open <video> would
 // reopen the stream each time. Never autoplayed — the element is built muted,
@@ -3741,7 +3737,7 @@ const previewFocusHeld = () => {
 function openStationPreview(name, url) {
   const box = $("#station-preview");
   if (!box) return null;
-  const held = previewFocusHeld();
+  const held = focusInside("#station");
   const video = mediaVideo(url, name + " channel preview", "none");
   const wrap = makeEl("div", "st-preview");
   wrap.append(makeEl("h4", "station-ch-name", name + " preview"),
@@ -3759,7 +3755,7 @@ function openStationPreview(name, url) {
 function closeStationPreview() {
   const box = $("#station-preview");
   const had = STATE.ops.preview;
-  const held = previewFocusHeld();
+  const held = focusInside("#station");
   STATE.ops.preview = null;
   if (box) { releaseMedia(box); box.replaceChildren(); }
   if (had) { renderStation(); keepPreviewFocus(held, "Open preview"); }
@@ -4270,7 +4266,9 @@ function noteJob(id, message) {
 
 function refreshAfterJob() {
   loadStatus();
-  loadGrid(true);
+  // The library listing is only worth a re-read when it is the view showing
+  // it — the counts above already come from loadStatus(), whatever the route.
+  if (STATE.route === "library") loadGrid(true);
   loadStation();
   return null;
 }
@@ -4673,9 +4671,12 @@ async function handleVisibilityChange() {
 }
 
 function boot() {
+  // Every wiring site owns one control and nothing else; a renamed id in
+  // index.html degrades the page instead of throwing before applyHash() runs.
+  const on = (sel, type, fn) => { const el = $(sel); if (el) el.addEventListener(type, fn); };
   wireMaintenance();
-  $("#ask-go").addEventListener("click", submitAsk);
-  $("#ask").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAsk(); });
+  on("#ask-go", "click", submitAsk);
+  on("#ask", "keydown", (e) => { if (e.key === "Enter") submitAsk(); });
 
   $$("[data-gen]").forEach((b) =>
     b.addEventListener("click", () => doAction("/api/generate/" + b.dataset.gen + "?n=20", "generate " + b.dataset.gen)));
@@ -4685,11 +4686,9 @@ function boot() {
   // decided by the view the operator is on, not hard-coded here.
   $$("[data-station]").forEach((b) =>
     b.addEventListener("click", () => doAction(PREP.conform.url, PREP.conform.label)));
-  $("#shuffle").addEventListener("click", shufflePreview);
-  $("#more").addEventListener("click", () => loadGrid(false));
-  $("#search").addEventListener("input", (e) => scheduleSearch(e.target.value));
-  // Every filter is a labelled control that owns one filter and nothing else.
-  const on = (sel, type, fn) => { const el = $(sel); if (el) el.addEventListener(type, fn); };
+  on("#shuffle", "click", shufflePreview);
+  on("#more", "click", () => loadGrid(false));
+  on("#search", "input", (e) => scheduleSearch(e.target.value));
   on("#filter-type", "change", (e) => { setFilter("type", e.target.value); });
   on("#filter-kind", "change", (e) => { setFilter("kind", e.target.value); });
   on("#filter-state", "change", (e) => { setFilter("state", e.target.value); });

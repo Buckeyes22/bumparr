@@ -606,6 +606,41 @@ class HttpValidation(unittest.TestCase):
         self.assertEqual(result["count"], len(result["jobs"]))
         self.assertLessEqual(len(result["jobs"]), 20)
 
+    def _headers(self, path, headers=None):
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d%s" % (self.port, path), headers=headers or {})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status, dict(response.headers), response.read()
+
+    def test_dashboard_assets_are_gzipped_when_the_client_asks(self):
+        """The dashboard ships uncompressed sources; the wire carries them small.
+
+        There is no build step, so app.js is a readable 190 KB file on disk.
+        GZipMiddleware is what keeps that off the network, and this asserts the
+        header rather than trusting the middleware is still installed.
+        """
+        status, headers, body = self._headers(
+            "/web/app.js", {"Accept-Encoding": "gzip"})
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("content-encoding"), "gzip")
+        # urllib does not decode for us, so this is the compressed length.
+        raw = len(body)
+        plain_status, plain_headers, plain_body = self._headers(
+            "/web/app.js", {"Accept-Encoding": "identity"})
+        self.assertEqual(plain_status, 200)
+        self.assertIsNone(plain_headers.get("content-encoding"),
+                          "a client that did not ask gets the file as it is")
+        self.assertLess(raw, len(plain_body) // 2,
+                        "gzip is worth having: %d compressed vs %d plain"
+                        % (raw, len(plain_body)))
+        self.assertIn(b'"use strict"', plain_body[:64])
+
+    def test_small_answers_are_left_uncompressed(self):
+        """minimum_size=1000: below that the header costs more than it saves."""
+        _, headers, body = self._headers("/healthz", {"Accept-Encoding": "gzip"})
+        self.assertLess(len(body), 1000)
+        self.assertIsNone(headers.get("content-encoding"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

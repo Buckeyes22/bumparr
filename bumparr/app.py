@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Query, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -100,6 +101,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Bumparr", lifespan=lifespan)
+# The dashboard is one HTML file, one stylesheet and one script, with no build
+# step to minify them -- so the bytes that cross the wire are compressed here
+# instead. app.js gzips to roughly a quarter of its size; JSON listings benefit
+# the same way. `minimum_size` leaves small answers alone, where the header
+# costs more than the compression saves, and already-compressed media (MP4,
+# MPEG-TS segments) is skipped by the middleware's own content negotiation.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(stream_proxy.router)
 app.include_router(station_routes.router)
 

@@ -4628,6 +4628,17 @@ test("every eligibility reason the API documents has a plain reading", async () 
     "the inspector never leaves " + token + " as a bare token"));
 });
 
+test("a reason token borrowed from Object.prototype reads as that word", async () => {
+  withFactors({ base: 1, season: 1, daypart: 1, recency: 1, affinity: 1,
+                fatigue: 1, score: 1 }, ["constructor", "toString"]);
+  await openInspector("card:psa:abc");
+  const list = descendants($("#inspector-body"))
+    .find((n) => n.className === "insp-reasons");
+  assert.deepEqual(list.children.map((n) => n.textContent),
+                   ["constructor", "toString"]);
+  assert.doesNotMatch(inspectorText(), /native code/);
+});
+
 test("a factor this build does not send is named, never shown as a zero", async () => {
   withFactors({ base: 1, score: 1 });
   await openInspector("card:psa:abc");
@@ -4755,19 +4766,59 @@ async function stationConfig(over) {
   return $("#station-config");
 }
 
+const writeControls = (node) => descendants(node)
+  .filter((n) => ["INPUT", "SELECT", "TEXTAREA", "FORM"].includes(n.tagName));
+
 test("the station configuration block holds no control that could write a file",
      async () => {
   const el = await stationConfig();
   const panel = $("#panel-station-config");
   assert.ok(panel && el, "the Station view carries a Configuration block");
-  assert.deepEqual(descendants(panel).filter((n) =>
-    ["INPUT", "SELECT", "TEXTAREA", "FORM"].includes(n.tagName)), [],
+  assert.deepEqual(writeControls(panel), [],
     "configuration is read-only: no field, no picker, no form");
-  assert.deepEqual(descendants(panel).filter((n) => n.tagName === "BUTTON"), []);
+  // The content region carries facts and badges only. The panel's state strip
+  // is a separate region and may offer Retry; that is asserted below.
+  assert.deepEqual(descendants(el).filter((n) => n.tagName === "BUTTON"), []);
   const text = textOf(panel);
   assert.match(text, /file-owned/);
   assert.match(text, /edited in their files on the server/);
   assert.match(text, /Nothing on this page writes them/);
+});
+
+test("a failed configuration read offers Retry, and Retry only re-reads status",
+     async () => {
+  const calls = [];
+  global.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.startsWith("/api/status")) throw new Error("network down");
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    return jsonReply({});
+  };
+  await applyHash("#/station");
+  await flush();
+  await flush();
+  const panel = $("#panel-station-config");
+  assert.deepEqual(writeControls(panel), [],
+    "no state of this panel offers a field, a picker or a form");
+  const buttons = descendants(panel).filter((n) => n.tagName === "BUTTON");
+  assert.equal(buttons.length, 1, "the only control here is the panel's Retry");
+  assert.equal(buttons[0].className, "panel-retry");
+  assert.equal(buttons[0].textContent, "Retry");
+  // The content region says why there is nothing to read rather than claiming
+  // this build lacks the fields.
+  const body = textOf($("#station-config"));
+  assert.match(body, /not read: the last try failed/);
+  assert.ok(!body.includes(NOT_AVAILABLE));
+
+  const before = calls.filter((u) => u.startsWith("/api/status")).length;
+  await buttons[0].click();
+  await flush();
+  const after = calls.filter((u) => u.startsWith("/api/status")).length;
+  assert.equal(after, before + 1, "Retry re-reads /api/status and nothing else");
+  assert.deepEqual(calls.filter((u) => !u.startsWith("/api/status") &&
+                                       !u.startsWith("/api/station")), [],
+                   "nothing on this panel writes anything");
 });
 
 test("configuration reports profile, manifest and memory from the server's fields",

@@ -209,7 +209,7 @@ button:disabled { opacity:.55; cursor:wait; }
 .pv-card.pv-textcard .tc { font-size:.85rem; white-space:pre-line; line-height:1.35; }
 .pv-stream { height:120px; display:flex; align-items:center; justify-content:center;
   background:var(--surface-3); color:var(--warning); font-weight:700; letter-spacing:.1em; }
-.pv-creative, .pv-factors, .pv-relax, .pv-credits, .pv-freshness {
+.pv-factors, .pv-relax, .pv-credits, .pv-freshness {
   font-size:.7rem; color:var(--muted); margin-top:var(--space-1);
   padding:0 var(--space-2); font-family:var(--font-mono); overflow-wrap:anywhere; }
 

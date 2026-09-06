@@ -2255,7 +2255,11 @@ function inspectorSelection(row) {
     // Contract order, as the server returned it: the first is the first gate
     // that applied, not an alphabetised set.
     reasons.forEach((reason) => {
-      list.append(makeEl("li", "", REASON_TEXT[reason] || String(reason)));
+      // Own keys only: a token named "constructor" must read as that word,
+      // not as whatever Object.prototype happens to carry under it.
+      list.append(makeEl("li", "",
+        Object.prototype.hasOwnProperty.call(REASON_TEXT, reason)
+          ? REASON_TEXT[reason] : String(reason)));
     });
     rows.push(list);
   } else {

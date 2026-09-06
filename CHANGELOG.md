@@ -27,8 +27,9 @@
   version, validity and own counts, under one status badge apiece — an invalid
   file or a `fallback-after-error` source is an Attention, never a silent
   default. It states that configuration is file-owned and edited in those files
-  on the server, and it holds no input, picker, form or button, because the
-  browser never writes YAML or environment.
+  on the server, and it holds no control that can write configuration — no
+  input, picker or form in any state, and the only control it ever offers is
+  the panel's own **Retry** when the status read failed.
 
 **Operator dashboard: a break composer you can review and play**
 - The Composer is now a break composer rather than a pack preview. Labelled

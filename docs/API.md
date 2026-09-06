@@ -618,10 +618,14 @@ closes any modal it had open, and pauses and detaches its media.
   own source and validity), each under one status badge — `valid: false` or
   `source: "fallback-after-error"` is an Attention, never a silent default. It
   states that configuration is file-owned and edited in those files on the
-  server, and it contains no `<input>`, `<select>`, `<textarea>`, `<form>` or
-  button: the browser never writes YAML or environment. A file this build does
-  not report says "Not available in this version."; before `/api/status` has
-  answered, all three say why there is nothing to read yet instead.
+  server, and it carries no control that can write configuration — no
+  `<input>`, `<select>`, `<textarea>` or `<form>` in any state; the only control
+  it ever offers is the panel's own **Retry**, which re-reads `/api/status`
+  when that read failed. The browser never writes YAML or environment. A file
+  this build does not report says "Not available in this version."; before
+  `/api/status` has answered, all three say why there is nothing to read yet
+  instead. A `last read` age is shown because the Station's 20-second clock
+  re-reads `/api/station` only.
 - **Operations** (`#/operations`) — opens with the unauthenticated-API warning,
   then groups every action by what it costs, each group stating its
   requirements before execution: **1 Add material** — the ask bar

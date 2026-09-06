@@ -1040,6 +1040,106 @@ test("a newer ask during an older one's poll leaves the controls usable", async 
                "both asks are still on the jobs list");
 });
 
+test("a POST that lands after the ask was superseded touches neither field nor watch",
+     async (t) => {
+  // The takeover block ran whatever had happened while the POST was in flight:
+  // it cleared the input a newer ask had already been typed into, and stopped
+  // the background watch the re-entered view had just started.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const reads = [];
+  let land = null;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if ((opts && opts.method) === "POST") {
+      return new Promise((resolve) => { land = () => resolve(jsonReply({ job_id: "j1", status: "working" })); });
+    }
+    if (u.startsWith("/api/request/")) { reads.push(u); return jsonReply({ status: "working" }); }
+    if (u.startsWith("/api/jobs")) {
+      return jsonReply({ jobs: [serverJob({ id: "j1", request: "add: harbour cams",
+                                            status: "working", result: "" })], count: 1 });
+    }
+    if (u.startsWith("/api/status")) return jsonReply(OK_STATUS);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    return jsonReply({ count: 0, total: 0, bumpers: [] });
+  };
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "harbour cams";
+  const waiting = submitAsk();
+  await flush();
+
+  await applyHash("#/overview");
+  await flush();
+  await applyHash("#/operations");
+  await flush();
+  assert.equal($("#ask").disabled, false, "the form came back usable");
+  // The operator types again into the form they were handed back.
+  $("#ask").value = "second thoughts";
+
+  land();
+  await flush();
+  assert.equal($("#ask").value, "second thoughts",
+               "a superseded POST may not empty a field it no longer owns");
+
+  const before = reads.length;
+  t.mock.timers.tick(30000);
+  await flush();
+  assert.ok(reads.length > before,
+            "and may not stop the watch the re-entered view started: " +
+            reads.length + " reads after 30s, was " + before);
+  await waiting;
+  app.exitRoute(STATE.route);
+});
+
+test("a background watch settling after a route change lets go of its own entry only",
+     async (t) => {
+  // stopJobWatches takes a watch out of the map while its status read is still
+  // in flight; a re-entry then registers a fresh watch of the same job. An
+  // unguarded delete in the old watch's settle removed the new one, leaving a
+  // poll no teardown could reach.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const reads = [];
+  let land = null;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.startsWith("/api/request/")) {
+      reads.push(u);
+      if (reads.length === 1) {
+        return new Promise((resolve) => { land = () => resolve(jsonReply({ status: "working" })); });
+      }
+      return jsonReply({ status: "working" });
+    }
+    if (u.startsWith("/api/jobs")) {
+      return jsonReply({ jobs: [serverJob({ id: "j1", request: "fetch-queue",
+                                            status: "working", result: "" })], count: 1 });
+    }
+    if (u.startsWith("/api/status")) return jsonReply(OK_STATUS);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    return jsonReply({ count: 0, total: 0, bumpers: [] });
+  };
+  await applyHash("#/operations");
+  await flush();
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(reads.length, 1, "the background watch is reading the job");
+
+  await applyHash("#/overview");
+  await flush();
+  await applyHash("#/operations");
+  await flush();
+  // The abandoned read lands now, after a fresh watch has taken its place.
+  land();
+  await flush();
+
+  app.exitRoute("operations");
+  const settled = reads.length;
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(reads.length, settled,
+               "the re-entry's watch was still in the map for the teardown to stop: " +
+               reads.slice(settled).join(", "));
+});
+
 // ---------------------------------------------------------------------------
 // Station
 // ---------------------------------------------------------------------------

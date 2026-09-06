@@ -4346,7 +4346,12 @@ function watchListedJob(id) {
   };
   JOB_WATCH.set(id, entry);
   const settle = (final) => {
-    JOB_WATCH.delete(id);
+    // Only its own entry, exactly as watchJob's release does: a teardown takes
+    // this watch out of the map while its read is still in flight, and a
+    // re-entry can register a fresh watch of the same job before that read
+    // lands. Deleting by id alone would orphan the newer poll — nothing left
+    // in the map for the next teardown to stop.
+    if (JOB_WATCH.get(id) === entry) JOB_WATCH.delete(id);
     // An abandoned watch writes nothing: the view that owned it is gone.
     if (stopped) return null;
     return applyJobResult(id, final);
@@ -4720,6 +4725,12 @@ async function submitAsk() {
   }
   if (!job.job_id) return finish(job.status === "error" ? "failed" : "healthy", job.result || "done");
   record.id = String(job.job_id);
+  // Superseded while the POST was in flight. The id is recorded, so the row is
+  // the server's row and the jobs list follows it from here — but nothing else
+  // below belongs to this ask any more: clearing the field would take what a
+  // newer ask has already typed into it, and taking the job over would stop the
+  // watch the view it was re-entered on has just started.
+  if (!current()) return null;
   // This surface takes the job over from the background watch, exactly as
   // doAction does: two polls would double the load on the registry and race
   // each other to write the answer.

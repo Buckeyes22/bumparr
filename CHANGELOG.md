@@ -341,16 +341,22 @@
 **Foundations: truthful state, performance and accessibility**
 - One `api()` wrapper normalizes every request: it checks the response,
   parses JSON safely, extracts the server's `error`, and throws a bounded
-  single-line message with a status. Ordinary reads time out after 15 s; job
-  POSTs opt out, because the job id returns immediately and polling owns the
-  long wait.
+  single-line message with a status. Ordinary reads time out after 15 s — the
+  deadline and the caller's own cancel cover reading the body as well as
+  reaching the server, so a reply whose body stops arriving fails in 15 s
+  instead of leaving a panel loading for ever; job POSTs opt out, because the
+  job id returns immediately and polling owns the long wait.
 - A lost status read is never reported as a failed job: polling keeps
   `status unknown`, backs off to 10 s and keeps asking; only a 404 ends it,
   and no five-minute success is invented. The ask bar and the Actions panel
   share one poller, and both hand their controls back as soon as a read
   cannot reach the server, offering **Check now** and **Stop checking** while
   checking continues in the background. A superseded job stops being polled
-  and cannot overwrite newer feedback.
+  and cannot overwrite newer feedback. The ask bar's controls are held in
+  state rather than in the elements, so leaving Operations mid-ingest hands
+  them back: returning shows a usable form, and the result line reports what
+  the jobs registry now says about the ingest — which is still running — in
+  place of an ending nobody watched.
 - Library search is debounced 250 ms, superseded reads are aborted, and
   answers older than the current filter generation are discarded.
 - Client state is one explicit object divided by concern; rendering is safe

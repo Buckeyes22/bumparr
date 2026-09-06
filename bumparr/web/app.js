@@ -138,7 +138,11 @@ function initialState() {
     // went, which channel preview is open, which actions are running (so only
     // the duplicate is disabled), a per-job doubt note, and the browser's
     // one-time answer about native HLS.
-    ops: { copied: null, preview: null, running: {}, jobNotes: {}, hls: null },
+    // `ask` is the ask form itself: whether its controls are held, the job it
+    // was started for, and its own last word. The controls are never a fact
+    // about the elements — leaving the view and coming back re-derives them.
+    ops: { copied: null, preview: null, running: {}, jobNotes: {}, hls: null,
+           ask: { busy: false, job: null, level: "", message: "" } },
     notices: [],
   };
 }
@@ -362,6 +366,15 @@ async function readBody(response) {
   return { ok: true, body: null };
 }
 
+// Never resolves; rejects the moment the signal is aborted. Raced against the
+// body read so the deadline and the caller's cancel reach a stream that stopped
+// arriving — which the `signal` handed to fetch() cannot promise on its own.
+const whenAborted = (signal) => new Promise((resolve, reject) => {
+  const fire = () => reject(apiError(0, "Request cancelled.", "AbortError"));
+  if (signal.aborted) fire();
+  else signal.addEventListener("abort", fire);
+});
+
 // The single door to the API. `options.timeout` is milliseconds; 0 disables the
 // clock, which is what job POSTs want — they return a job id immediately and
 // polling owns the long wait.
@@ -383,22 +396,40 @@ async function api(path, options) {
   if (timeout > 0) {
     timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeout);
   }
+  // The clock and the relay come down once, when the answer is whole — headers
+  // AND body. Cleared any earlier, a response whose body never arrives has
+  // nothing left to cut it off, and the caller waits for ever with `loading`
+  // still on and its poll still pending.
+  const clear = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (callerSignal) callerSignal.removeEventListener("abort", relay);
+  };
+  // Why the request ended, wherever it ended: a deadline is a failure, the
+  // caller's own cancel is not, anything else is an unreachable server.
+  const lost = () => {
+    if (timedOut) return apiError(0, "The server did not answer in time.");
+    if (callerSignal && callerSignal.aborted) {
+      return apiError(0, "Request cancelled.", "AbortError");
+    }
+    return apiError(0, "Bumparr could not be reached.");
+  };
 
   let response;
   try {
     response = await fetch(path, opts);
   } catch (e) {
-    if (timedOut) throw apiError(0, "The server did not answer in time.");
-    if (callerSignal && callerSignal.aborted) {
-      throw apiError(0, "Request cancelled.", "AbortError");
-    }
-    throw apiError(0, "Bumparr could not be reached.");
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (callerSignal) callerSignal.removeEventListener("abort", relay);
+    clear();
+    throw lost();
   }
 
-  const parsed = await readBody(response);
+  let parsed;
+  try {
+    parsed = await Promise.race([readBody(response), whenAborted(controller.signal)]);
+  } catch (e) {
+    throw lost();
+  } finally {
+    clear();
+  }
   if (!response.ok) {
     const served = parsed.body && typeof parsed.body === "object" ? parsed.body.error : "";
     throw apiError(response.status, humanMessage(served, httpMessage(response.status)));
@@ -726,13 +757,22 @@ function exitStation() { return closeStationPreview(); }
 
 function enterOperations() {
   renderActionLocks();
+  // Drawn from STATE like every other region: an ask left behind by a route
+  // change must not come back as a form nothing can type into. Drawn again
+  // once the registry has answered, because the line an unwatched ask shows is
+  // read off the job's own row and there is nothing to read before then.
+  renderAsk();
   renderJobs();
-  return Promise.all([ensureStatus(), loadJobs()]);
+  return Promise.all([ensureStatus(), loadJobs()])
+    .then((read) => { renderAsk(); return read; });
 }
 
 // Job polls are torn down by exitRoute for every view, not just this one: a
 // conform started on the Station is the same kind of timer as one started here.
-function exitOperations() { return null; }
+// The ask's controls go back with them — its poll has just been stopped, so
+// nothing is left to hand them over — while the ingest carries on server-side
+// and is followed from the jobs list.
+function exitOperations() { return releaseAsk(""); }
 
 // ==== 5. Shared components: badges, panel states, notices, cards ====
 
@@ -4583,8 +4623,64 @@ async function doAction(url, label, opts) {
   if (STATE.route === "operations") loadJobs();
 }
 
-async function submitAsk() {
+// --- the ask form -------------------------------------------------------------
+// Its controls live in STATE, not in the DOM. A disabled input remembered only
+// by the element cannot survive a route change: the teardown that supersedes
+// the ask used to return before re-enabling anything, and Operations reopened
+// with a form nobody could type into and no way back short of a reload.
+
+const ASK_WORKING = "downloads and captures can take a bit";
+const ASK_RUNNING = "still running — follow it in Recent jobs";
+const ASK_OUTCOMES = { done: "healthy", error: "failed", unknown: "attention" };
+
+// What the line says when the ask has no last word of its own — after a route
+// change, above all. The registry is running the work, so it is asked.
+function askRegistryLine(job) {
+  if (!job) return null;
+  const row = jobsList().find((r) => String(r.id) === String(job.id));
+  if (!row) return null;
+  if (row.status === "working") return { level: "working", message: ASK_RUNNING };
+  // The server's own words, bounded to one line like every other server string
+  // this page shows, and its status word where it had nothing to say.
+  return { level: own(ASK_OUTCOMES, row.status) || "attention",
+           message: humanMessage(row.result, row.status) };
+}
+
+function renderAsk() {
   const inp = $("#ask"), btn = $("#ask-go"), out = $("#ask-result");
+  const ask = STATE.ops.ask;
+  if (btn) btn.disabled = ask.busy;
+  if (inp) inp.disabled = ask.busy;
+  // A live ask writes its own line — the seconds it has been running, and
+  // escapes that are callbacks rather than state. Only a line nobody is
+  // writing is re-derived here.
+  if (!out || ask.busy) return out || null;
+  const line = ask.level ? ask : askRegistryLine(ask.job);
+  out.replaceChildren(...(line ? [statusBadge(line.level, line.message)] : []));
+  return out;
+}
+
+// Holds the controls and opens the line; from here the poll writes the line.
+function holdAsk(record) {
+  STATE.ops.ask = { busy: true, job: record, level: "working", message: ASK_WORKING };
+  const out = $("#ask-result");
+  if (out) out.replaceChildren(statusBadge("working", ASK_WORKING));
+  return renderAsk();
+}
+
+// Hands the controls back. `level` empty means this surface has nothing to say
+// — it was left behind — so the line falls back to the job's own row rather
+// than inventing an ending for work that is still going.
+function releaseAsk(level, message) {
+  const ask = STATE.ops.ask;
+  ask.busy = false;
+  ask.level = level || "";
+  ask.message = message || "";
+  return renderAsk();
+}
+
+async function submitAsk() {
+  const inp = $("#ask"), out = $("#ask-result");
   const text = inp.value.trim();
   if (!text) return;
   // A poll that hands the controls back can be overtaken by a second ask; only
@@ -4594,15 +4690,16 @@ async function submitAsk() {
   // Never retried from the jobs list: repeating an ingest of arbitrary text
   // pulls the material a second time.
   const record = recordJob("add: " + text.slice(0, 60), null);
-  btn.disabled = true; inp.disabled = true;
-  out.replaceChildren(statusBadge("working", "downloads and captures can take a bit"));
+  holdAsk(record);
   const finish = (level, msg) => {
     finishJob(record, level === "healthy" ? "done"
       : (level === "attention" ? "unknown" : "error"), msg);
+    // A superseded ask owns nothing: the controls belong to the ask or the view
+    // that took over, and taking them back here is how they used to be lost.
     if (!current()) return;
-    out.replaceChildren(statusBadge(level, msg));
+    releaseAsk(level, msg);
     announce(msg);
-    btn.disabled = false; inp.disabled = false; inp.focus();
+    if (inp.focus) inp.focus();
     loadStatus(); loadGrid(true);
   };
   let job;
@@ -4632,8 +4729,9 @@ async function submitAsk() {
   // failure invented from a lost read, and never a form left disabled.
   const final = await watchJob(job, {
     superseded: () => !current(),
-    // Controls handed back after a lost poll are never taken away again.
-    release: () => { if (current()) { btn.disabled = false; inp.disabled = false; } },
+    // Controls handed back after a lost poll are never taken away again. The
+    // line itself is left alone — `unknown` writes it, escapes and all.
+    release: () => { if (current()) { STATE.ops.ask.busy = false; renderAsk(); } },
     working: (seconds) => {
       if (current()) renderJobState(out, "working", "working on it… (" + seconds + "s)", []);
     },

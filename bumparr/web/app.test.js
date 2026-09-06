@@ -900,6 +900,146 @@ test("a second ask supersedes the first job's poll and result line", async (t) =
                "a superseded job stops being polled rather than polling forever");
 });
 
+// --- the ask form's controls belong to STATE, not to the elements -------------
+
+// An ingest, answered the way the server answers one: the POST returns a job
+// id, the status read says it is still working, and the registry lists the row
+// only once the POST has been made — before that the job does not exist.
+function stubRunningAsk(row) {
+  const calls = [];
+  let posted = false;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    calls.push({ url: u, method: (opts && opts.method) || "GET" });
+    if ((opts && opts.method) === "POST") {
+      posted = true;
+      return jsonReply({ job_id: "j1", status: "working" });
+    }
+    if (u.startsWith("/api/jobs")) {
+      const jobs = posted ? [row] : [];
+      return jsonReply({ jobs, count: jobs.length });
+    }
+    if (u.startsWith("/api/request/")) return jsonReply({ status: "working" });
+    if (u.startsWith("/api/status")) return jsonReply(OK_STATUS);
+    if (u.startsWith("/api/station")) return jsonReply(OK_STATION);
+    return jsonReply({ count: 0, total: 0, bumpers: [] });
+  };
+  return calls;
+}
+
+test("leaving Operations mid-ingest hands the ask form back, and coming back shows it",
+     async (t) => {
+  // The disabled state used to live in the elements: route teardown superseded
+  // the ask before it could re-enable anything, so Operations reopened with a
+  // form nobody could type into and no way out short of a reload.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  stubRunningAsk(serverJob({ id: "j1", request: "add: harbour cams",
+                             status: "working", result: "" }));
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "harbour cams";
+  const waiting = submitAsk();
+  await flush();
+  assert.equal($("#ask-go").disabled, true, "the form is held while the job starts");
+  assert.equal(STATE.ops.ask.busy, true, "and the hold is a fact in STATE");
+
+  await applyHash("#/overview");
+  await flush();
+  await waiting;
+  await applyHash("#/operations");
+  await flush();
+  assert.equal($("#ask").disabled, false, "the input is usable again on re-entry");
+  assert.equal($("#ask-go").disabled, false, "and so is the button");
+  assert.equal(STATE.ops.ask.busy, false);
+  // The ingest was never cancelled — only this surface stopped watching it.
+  assert.match(textOf($("#ops-jobs-list")), /add: harbour cams/,
+               "the job is still on the list: " + textOf($("#ops-jobs-list")));
+  assert.match(textOf($("#ask-result")), /still running/,
+               "the line reports what the registry says, not a made-up ending");
+  assert.doesNotMatch(textOf($("#ask-result")), /stopped checking/,
+                      "a torn-down poll is not an outcome to show the operator");
+  app.exitRoute(STATE.route);
+});
+
+test("an ask whose job has finished while away reads its outcome off the registry",
+     async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  stubRunningAsk(serverJob({ id: "j1", request: "add: harbour cams",
+                             status: "done", result: "captured 2" }));
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "harbour cams";
+  const waiting = submitAsk();
+  await flush();
+  await applyHash("#/overview");
+  await flush();
+  await waiting;
+  await applyHash("#/operations");
+  await flush();
+  assert.equal($("#ask").disabled, false);
+  assert.match(textOf($("#ask-result")), /captured 2/);
+  assert.match(textOf($("#ask-result")), /Healthy/);
+  app.exitRoute(STATE.route);
+});
+
+test("the re-entry line keeps a hostile job result as one line of text", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const hostile = '<img src=x onerror="globalThis.pwned=1">\nsecond line\n'.repeat(40);
+  stubRunningAsk(serverJob({ id: "j1", request: "add: harbour cams",
+                             status: "error", result: hostile }));
+  await applyHash("#/operations");
+  await flush();
+  $("#ask").value = "harbour cams";
+  const waiting = submitAsk();
+  await flush();
+  await applyHash("#/overview");
+  await flush();
+  await waiting;
+  await applyHash("#/operations");
+  await flush();
+  const line = $("#ask-result");
+  assert.ok(textOf(line).includes("<img src=x"), "shown as the text it is");
+  assert.equal(descendants(line).filter((n) => n.tagName === "IMG").length, 0);
+  assert.equal(globalThis.pwned, undefined);
+  const detail = descendants(line).find((n) => n.className === "badge-detail");
+  assert.ok(detail.textContent.length <= 300, "bounded like every other server string");
+  assert.ok(!detail.textContent.includes("\n"), "and kept to one line");
+  assert.match(textOf(line), /Failed/, "an icon and a word, never colour alone");
+  app.exitRoute(STATE.route);
+});
+
+test("a newer ask during an older one's poll leaves the controls usable", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let posts = 0;
+  global.fetch = async (url, opts) => {
+    if ((opts && opts.method) === "POST") {
+      posts++;
+      return jsonReply({ job_id: "j" + posts, status: "working" });
+    }
+    if (String(url).includes("j2")) return jsonReply({ status: "done", result: "second landed" });
+    return jsonReply({ status: "working" });
+  };
+  $("#ask").value = "one";
+  const first = submitAsk();
+  await flush();
+  $("#ask").value = "two";
+  const second = submitAsk();
+  await flush();
+  assert.equal($("#ask-go").disabled, true, "the newer ask holds the controls");
+
+  t.mock.timers.tick(3000);
+  await flush();
+  await first;
+  await second;
+  assert.equal($("#ask").disabled, false, "and hands them back when it ends");
+  assert.equal($("#ask-go").disabled, false);
+  assert.match(textOf($("#ask-result")), /second landed/);
+  assert.doesNotMatch(textOf($("#ask-result")), /stopped checking/,
+                      "the superseded ask may not write over the newer one's answer");
+  assert.equal(STATE.jobs.items.filter((r) => r.label.startsWith("add: ")).length, 2,
+               "both asks are still on the jobs list");
+});
+
 // ---------------------------------------------------------------------------
 // Station
 // ---------------------------------------------------------------------------
@@ -1102,6 +1242,56 @@ test("api reports an unreachable server without leaking the exception object", a
     assert.ok(!err.message.includes("TypeError"));
     return true;
   });
+});
+
+// A server that answers with headers and then stops sending. The 15s clock used
+// to be cleared before the body was read, so this shape hung for ever: the
+// panel kept saying loading and the poll never came back.
+const stalledBody = () => ({ ok: true, status: 200, text: () => new Promise(() => {}) });
+
+test("api's deadline covers a body that never arrives", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  global.fetch = async () => stalledBody();
+  const pending = api("/api/status");
+  await flush();
+  t.mock.timers.tick(API_TIMEOUT_MS);
+  await assert.rejects(pending, (err) => {
+    assert.match(err.message, /did not answer in time/);
+    assert.equal(isApiAbort(err), false, "a timeout is a failure, not a cancellation");
+    return true;
+  });
+});
+
+test("api reports a caller's abort during the body as a cancellation", async () => {
+  const controller = new AbortController();
+  global.fetch = async () => stalledBody();
+  const pending = api("/api/bumpers", { signal: controller.signal });
+  await flush();
+  controller.abort();
+  await assert.rejects(pending, (err) => {
+    assert.equal(isApiAbort(err), true, "a route change is a cancellation, not a failure");
+    assert.match(err.message, /cancelled/i);
+    return true;
+  });
+});
+
+test("a body that arrives in time leaves no timer behind", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const signals = [];
+  global.fetch = async (url, opts) => { signals.push(opts.signal); return jsonReply({ ok: 1 }); };
+  assert.deepEqual(await api("/api/status"), { ok: 1 });
+  t.mock.timers.tick(API_TIMEOUT_MS * 4);
+  await flush();
+  assert.equal(signals[0].aborted, false,
+               "the deadline came down with the answer, not minutes later");
+});
+
+test("the body reader still tolerates an empty body and a json()-only response",
+     async () => {
+  global.fetch = async () => ({ ok: true, status: 200, text: async () => "" });
+  assert.equal(await api("/api/x"), null, "a 200 with no body is still a 200");
+  global.fetch = async () => ({ ok: true, status: 200, json: async () => ({ a: 1 }) });
+  assert.deepEqual(await api("/api/y"), { a: 1 });
 });
 
 // ---------------------------------------------------------------------------

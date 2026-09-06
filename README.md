@@ -101,6 +101,21 @@ Plus `GET /api/status`, `GET /api/bumpers`, `POST /api/render/cards`, and
 `POST /api/generate/<kind>` / `POST /api/sources/<action>` to drive it from the
 dashboard or scripts.
 
+`/` is the operator console over that API: five hash-routed views — **Overview**
+(triage: what needs attention, then the pool, station and job detail),
+**Library** (filter the pool, inspect a row, disable or delete it),
+**Composer** (ask the server for a break and play it back locally),
+**Station** (each channel's condition in words, the handoff URLs, conform) and
+**Operations** (everything that starts a job, grouped by what it costs). It is a
+thin client — anything it can do, `curl` can do — with no build step, no
+framework and no remote fonts or scripts: one HTML file, one stylesheet and one
+script, served same-origin and gzipped. Every read is a read: opening a view
+never advances a station timeline or writes play history, and the one control
+that makes the page a real playlist client says so before it is pressed. It
+works by keyboard, at 320px, at 200% zoom and with reduced motion, and every
+region says which of loading / populated / empty / failed / stale it is showing
+rather than going blank. See [docs/API.md](docs/API.md#dashboard).
+
 > [!CAUTION]
 > Bumparr ships with no auth — the dashboard and every POST/DELETE endpoint are
 > open to whoever can reach the port, so keep it off the open internet.

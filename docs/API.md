@@ -452,6 +452,11 @@ here when the cam isn't CORS-direct.
 | `/web/…` | dashboard assets |
 | `/` | the dashboard itself |
 
+Responses over 1000 bytes are gzipped when the client sends
+`Accept-Encoding: gzip` (`GZipMiddleware`), which covers the dashboard's script
+and stylesheet and the larger JSON listings. Smaller answers, and media the
+container format has already compressed, are served as they are.
+
 ## Dashboard
 
 `/` is a single-page dashboard over the API above. Its structure, panel states,
@@ -470,7 +475,11 @@ entry and written back (with `location.replace`, so filtering costs no history
 entries) on every change; `state` and `type` are checked against the values
 `GET /api/bumpers` accepts and an unknown one is dropped rather than forwarded.
 Leaving a view stops its refresh clock, aborts the reads it left in flight,
-closes any modal it had open, and pauses and detaches its media.
+stops every job poll whichever surface started it, closes any modal it had open
+(handing focus to `<main>` rather than letting it fall to `<body>`), clears the
+live region, and pauses and detaches its media. Below 760px the view list is a
+scrolling tab row, so a route change also scrolls the current tab into view —
+once per change, never on a refresh.
 
 - **Overview** (`#/overview`) — triage. Reads `GET /api/status`,
   `GET /api/station` and `GET /api/jobs`, and nothing else; all three are pure,
@@ -500,11 +509,17 @@ closes any modal it had open, and pauses and detaches its media.
   **family** and **audio** chips from the resolved `creative` (a row the server
   resolved neither for says "Not available in this version." rather than
   showing nothing), and an always-visible **Inspect** button —
-  the card's only action control. Video is `preload="metadata"`, muted and
-  controlled; only one preview plays at a time; a live stream is a badge and a
-  **Play live stream** button that builds the player only when pressed, under a
-  note that doing so makes the page a real client of the station. Grid/list
-  layout is the one thing kept in `localStorage`.
+  the card's only action control. Each card is an `<article>` named after its
+  row, so a grid is not a run of unnamed regions. Video is `preload="metadata"`,
+  muted and controlled; only one preview plays at a time; hovering a card
+  previews it unless the browser reports `prefers-reduced-motion: reduce`, since
+  on a touch screen that hover is a tap. A row the pool marked **dead** gets a
+  sentence rather than an element pointed at media the pool could not read. A
+  live stream is a badge and a **Play live stream** button that builds the
+  player only when pressed, under a note that doing so makes the page a real
+  client of the station. Grid/list layout is the one thing kept in
+  `localStorage`. An empty pool says so and offers **Open operations**, which is
+  where material is added — nothing on this view generates anything.
 - **Item inspector** — an always-available **Inspect** on every card opens a
   modal (native `<dialog>`, with a `role="dialog"` fallback panel where
   `HTMLDialogElement` is undefined) and reads
@@ -538,7 +553,9 @@ closes any modal it had open, and pauses and detaches its media.
   never resets filters, page offset or scroll, and any `warning` the server
   answers with is rendered inside the dialog as well as announced. Focus goes to
   the heading on open and back to the Inspect button on close; Escape closes it;
-  Tab is trapped while it is modal. The inspector is opened from any surface
+  Tab is trapped while it is modal and reaches everything the browser would —
+  the media preview included, so the item under review can be played and
+  scrubbed by keyboard. The inspector is opened from any surface
   that draws a card, so a route change — from the Composer as much as the
   Library — closes it and aborts its read.
 - **Deletion** — permanent deletion exists only in the inspector's danger zone
@@ -551,12 +568,16 @@ closes any modal it had open, and pauses and detaches its media.
   (`DELETE /api/pool/kind/{kind}`) additionally requires typing the kind name
   exactly before its confirm button works. A `cleanup_failed` response keeps
   the inspector open carrying that news, because it is the only surface that
-  said so. A row that records no source, no background attribution and no music
+  said so. A deletion that empties the listing says the listing is empty, and
+  focus lands on the counts line above the grid rather than on the control that
+  has just been removed with its row. A row that records no source, no background attribution and no music
   credits says **"No provenance recorded"** under an Attention badge and adds
   that this is a note, not a block: every curation control above it stays
   enabled, because provenance is editorial news and not authorization.
 - **Composer** (`#/composer`) — review a break as an editorial unit. Labelled
-  controls (15/30/60/90-second presets, a custom duration `0 < s <= 86400`,
+  controls (15/30/60/90-second presets, a custom duration `0.1 <= s <= 86400` —
+  the endpoint accepts anything above zero, and 0.1 is the smallest value the
+  control's own step can express, so the two agree,
   tolerance `0..3600` defaulting to 1.5, maximum items `1..40` defaulting to 8,
   placement any/open/inside/close, and optional video/card/image/stream
   checkboxes — ticking none asks for every type) build one request:
@@ -575,7 +596,10 @@ closes any modal it had open, and pauses and detaches its media.
   Stop** preview the break locally: one medium at a time, advancing on the
   medium's `ended` and on the declared duration for a payload-only card, with
   the item index and elapsed/remaining shown; a live stream keeps its own Play
-  button so the sequence never opens one. Playback stops and resets on a new
+  button so the sequence never opens one. A medium the browser cannot decode
+  says so and the sequence moves on rather than sitting on it for ever; one that
+  stalls says the wait is the network's and leaves **Next** to the operator.
+  From stopped, **Next** starts at the top and **Previous** at the end. Playback stops and resets on a new
   composition and on leaving the view. After a disable, enable, render or delete
   through the inspector the break is marked **Stale — recompose to reflect
   changes** and Play is disabled: no item is ever substituted client-side. The
@@ -627,7 +651,7 @@ closes any modal it had open, and pauses and detaches its media.
   instead. A `last read` age is shown because the Station's 20-second clock
   re-reads `/api/station` only.
 - **Operations** (`#/operations`) — opens with the unauthenticated-API warning,
-  then groups every action by what it costs, each group stating its
+  then groups every action by what it costs, each group a heading stating its
   requirements before execution: **1 Add material** — the ask bar
   (`POST /api/request` with polling) and the starter seeds; **2 Generate cards**
   — every kind `POST /api/generate/{kind}` accepts, badged grounded, model or
@@ -675,18 +699,32 @@ closes any modal it had open, and pauses and detaches its media.
   failure; a `404` ends the poll as expired and is never reported as success;
   no five-minute cap is imposed. Reaching a terminal state refreshes the pool
   counts, the station and the library listing. A poll never outlives the view
-  that started it, and a surface that starts a job takes it over from the
-  background watch rather than polling it twice.
+  that started it — every watch is registered by job id and the shared route
+  teardown ends all of them, whether the Station, Operations or the inspector
+  started the work — and a surface that starts a job takes it over from the
+  background watch rather than polling it twice. Work abandoned this way keeps
+  running on the server and is picked up again by the background watch the next
+  time Operations is opened, which is where it can be seen.
 - **Shell** — the header carries the service status pill, compact profile
   validity, the number of jobs this page is still waiting on, and how old the
   last read is; the footer carries the version (or "version not reported" — the
   server ships no version string), the *unprotected operator API* notice and a
   link to `/docs`.
-- **States** — short results are announced in an `aria-live` region; every
-  region renders one explicit state: loading, populated, useful empty, error
-  with Retry, or last-known content marked stale with its update time. A failed
-  read never clears known-good content. Overview and Station refresh every 20 s
-  while the tab is visible, and at once when it becomes visible again.
+- **States** — short results are announced in an `aria-live` region, which is
+  cleared on a route change so a message about one view is never read as news
+  about another; every region renders one explicit state: loading, populated,
+  useful empty, error with Retry, or last-known content marked stale with its
+  update time. A **Retry** says it is retrying while its read is in flight, so a
+  live control cannot be mistaken for a dead one. A failed read never clears
+  known-good content. Overview and Station refresh every 20 s while the tab is
+  visible, and at once when it becomes visible again.
+- **Accessibility** — one `<h1>` and ordered headings with no skipped levels, a
+  skip link, a visible label on every control, `:focus-visible` everywhere,
+  44x44 primary and destructive targets, `aria-current` on the view in the list,
+  and decorative glyphs hidden from assistive technology. Every text/surface
+  pairing in the palette clears WCAG AA, and interactive borders are drawn in
+  `--muted` rather than `--border` so a control's boundary clears 1.4.11. There
+  is no horizontal page scrolling at 320px or at 200% zoom on any view.
 
 The jobs list says which registries it could read: before `GET /api/jobs`
 answers it reports only what this page started and says so, and once it has

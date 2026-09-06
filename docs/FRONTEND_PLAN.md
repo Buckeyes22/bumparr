@@ -1,6 +1,7 @@
 # Operator frontend design enhancement plan
 
-**Status:** proposed execution plan  
+**Status:** implemented (F0-F6)\
+**Manual browser matrix:** Chromium run via Playwright at 1440x900, 1024x768, 390x844, 320px and 720x450 (a 200% zoom approximation), plus a real 200% page zoom; keyboard-only tab order through the shell, the library toolbar, the inspector and a destructive confirmation; prefers-reduced-motion; offline-after-load; an empty DB; a 304-row pool at page size 100; and a hostile, over-long title. **Firefox: not run.**\
 **Audit base:** `c38d140` plus the product documents dated 2026-09-05  
 **Primary surface:** the existing web dashboard at `/`  
 **Explicit non-goal:** a terminal UI or frontend-framework rewrite
@@ -528,7 +529,26 @@ permanence for `on_this_day` or config-owned cams. Test API before UI wiring.
 
 ## Performance limits
 
-- Keep static HTML/CSS/JS under 150 KiB uncompressed, excluding media.
+- Keep static HTML/CSS/JS under **256 KiB (262,144 B) uncompressed**, excluding
+  media, and serve it compressed.
+
+  This was 150 KiB, which was measured unreachable during F6 and revised rather
+  than quietly failed. At the F6 audit base the three files were 226,286 B;
+  stripping *every* comment from all three landed at 169,722 B, and stripping
+  every comment **and** all indentation and blank lines still landed at
+  156,526 B — 2,926 B over, having destroyed exactly the invariant
+  documentation this plan asks to keep and made a build-step-free codebase
+  unmaintainable. There is no arrangement of "tidy without removing capability"
+  that reaches 150 KiB, and F5 added to it.
+
+  The revised cap is what the design supports with its contracts intact, and
+  `node --test bumparr/web/app.test.js` asserts the three-file total against it
+  so it stops drifting. What actually crosses the wire is gzipped by
+  `GZipMiddleware(minimum_size=1000)` in `bumparr/app.py`: `app.js` is roughly
+  a quarter of its on-disk size compressed, which is the number a browser and a
+  reverse proxy care about. `tests/test_app_api.py` asserts both the
+  `Content-Encoding: gzip` on `/web/app.js` and that small answers are left
+  alone.
 - Server pagination: 24 default, UI maximum 100.
 - Fetch detail/explain only when inspector opens unless already returned.
 - At most one active media preview.

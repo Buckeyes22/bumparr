@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+**The dashboard is now an operator console**
+- `/` is five hash-routed views over the existing API — **Overview**, **Library**,
+  **Composer**, **Station** and **Operations** — replacing the single scrolling
+  page. Deep links work (`#/library?state=parked&kind=trivia`), back and forward
+  work, and every view re-renders from state rather than from what the DOM still
+  holds. Still one HTML file, one stylesheet and one script: no framework, no
+  build step, no package manager, no remote fonts or scripts, same-origin only.
+- An operator can now answer, without reading logs: is the service healthy;
+  what material is in the pool and should it stay on air; what will a real break
+  feel like; is the station live or on standby and why; what background work is
+  running or failed; and which creative, profile and provenance rules produced a
+  given result.
+- **Every read is a read.** Opening a view never creates or advances a station
+  timeline and never writes play history. The one control that makes the page a
+  real playlist client — the Station's **Open preview** — says so before it is
+  pressed. No preview autoplays, video is muted with `preload="metadata"`, and
+  catalog HLS is never fetched unasked.
+- **Nothing goes blank.** Every region renders exactly one explicit state:
+  loading, populated, useful empty (with the filters that made it empty and a way
+  to clear them), failed with a Retry that says it is retrying, or last-known
+  content marked stale with its age. A failed read never clears known-good data,
+  and a field this build of the server does not send reads "Not available in this
+  version." rather than as a zero.
+- **Honest jobs.** Every working job is polled to a terminal state, whoever
+  started it; a lost read keeps the row `status unknown` and backs off rather
+  than inventing a failure; a `404` ends the poll as expired and is never
+  reported as success; no five-minute cap is imposed. Starting an action disables
+  only the duplicate of that action. No poll outlives the view that started it —
+  the work carries on server-side and is picked up again when the operator
+  returns to the view that can show it.
+- **Accessible by construction.** One `<h1>` and ordered headings, a skip link,
+  a visible label on every control, native controls throughout, a visible
+  `:focus-visible` ring, 44x44 primary and destructive targets, correct dialog
+  focus and return, `aria-current` / `aria-live` / `aria-busy`, status shown as
+  icon **and** word **and** colour, WCAG AA text contrast on every surface, and
+  no horizontal page scrolling at 320px or 200% zoom. Hover previews are
+  suppressed under `prefers-reduced-motion`, since on a touch screen that hover
+  is a tap. The inspector's Tab cycle reaches its media preview, so the item
+  under review can be played by keyboard.
+- **Deletion is apart, named and reversible-first.** No card carries a delete
+  control. Permanent deletion lives in the inspector's danger zone and the
+  Library's own, both quoting the endpoint's file consequence, offering the
+  `keep_file` it documents, putting Cancel first and focused, and treating any
+  dismissal as a refusal. Bulk kind deletion additionally requires typing the
+  kind name. The reversible action — disable — is always the primary one.
+- Configuration stays file-owned: the dashboard reports what the server loaded
+  from the channel profile, the music manifest and channel memory, with source,
+  version and validity, and holds no control in any state that could write one.
+- API content reaches the DOM only through `textContent`, safe element
+  properties and `URLSearchParams`; there is no `innerHTML` anywhere in the
+  script. A hostile title renders as text in the card, the inspector, the
+  confirmation and every accessible name.
+- Static assets over 1000 bytes are now gzipped (`GZipMiddleware`), which is
+  what the browser downloads; the sources stay readable on disk because there is
+  no build step to make them otherwise.
+
 **Operator dashboard: why an item was picked, and who it belongs to**
 - The inspector's **Selection** block now draws the score as the product it is
   — `base × season × daypart × recency × affinity × fatigue = score` — with
